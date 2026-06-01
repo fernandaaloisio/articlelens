@@ -1,0 +1,7 @@
+*.csv
+*.xlsx
+*.json
+*.pdf
+PDFs_*/
+RESULTADO_FINAL/
+tokens_log.jsonl
