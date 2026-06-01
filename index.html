@@ -405,8 +405,10 @@ function titleFromText(text){
   if(!text) return null;
   // Filtra ruído de cabeçalho/rodapé da revista (PDF.js às vezes entrega antes do título):
   // nome da revista, cidade, ISSN, "v.X n.Y", "p.1-14", DOI, URLs, datas, Lattes, ORCID, nº de página.
-  const noise = /^\s*(revista\b|são josé dos pinhais|iss?n|v\.?\s*\d+\s*,?\s*n\.?\s*\d+|p\.?\s*\d+\s*-\s*\d+|doi\b|https?:\/\/|data de (submiss|public)|lattes\b|orcid|©|\d{1,4})\b/i;
-  const lines = text.split("\n").map(s=>s.trim()).filter(s=>s.length>0 && !noise.test(s));
+  const noise = /^\s*(revista\b|são josé dos pinhais|iss?n|v\.?\s*\d+\s*,?\s*n\.?\s*\d+|p\.?\s*\d+\s*-\s*\d+|doi\b|https?:\/\/|data de (submiss|public)|submitted on|publication date|lattes\b|orcid|©|\d{1,4})\b/i;
+  // Cabeçalho de EVENTO (anais/congresso/simpósio) NÃO é título — remover essas linhas.
+  const evento = /(anais d|congresso brasileiro|simp[óo]sio brasileiro|\(cbie|\(sbie|cbie \d|sbie \d|mostra de pesquisa|semana de ci[êe]ncia|brazilian symposium|proceedings of|workshop de inform)/i;
+  const lines = text.split("\n").map(s=>s.trim()).filter(s=>s.length>0 && !noise.test(s) && !evento.test(s));
   // Para no início do corpo (abstract/resumo/autores com e-mail)
   const stop = /^(abstract|resumo|keywords|palavras[- ]?chave|introdu|1[\.\)]\s)/i;
   const head = [];
@@ -426,7 +428,21 @@ const STOP = new Set(["abstract","introduction","university","table","figure","r
   "received","accepted","published","copyright","doi","email","e-mail","correspondence"]);
 
 function extractEmails(text){
-  const found = (text.match(EMAIL_RE)||[]).map(e=>e.toLowerCase().replace(/[.,;)]+$/,""));
+  // remove caracteres invisíveis (zero-width) que poluem e-mails
+  text = text.replace(/[​‌‍﻿]/g,"");
+  const found = [];
+  // 1) e-mails em CHAVE (estilo SBC): {a,b}@dom -> a@dom, b@dom
+  let m, brace = /\{([^}]+)\}@([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;
+  while((m = brace.exec(text))){
+    const dom = m[2];
+    m[1].split(",").forEach(loc=>{
+      loc = loc.replace(/[^a-zA-Z0-9._%+\-]/g,"");
+      if(loc) found.push((loc+"@"+dom).toLowerCase());
+    });
+  }
+  // 2) e-mails normais (ignorando os que estavam em chave)
+  const plain = text.replace(/\{[^}]+\}@[a-zA-Z0-9.\-]+/g," ");
+  (plain.match(EMAIL_RE)||[]).forEach(e=>found.push(e.toLowerCase().replace(/[.,;)]+$/,"")));
   return [...new Set(found)];
 }
 
