@@ -648,8 +648,22 @@ async function buildAuthors(text, html, title){
   }
   return authors;
 }
+/* Detecta ANAIS (1 PDF = MUITOS trabalhos) — muitos delimitadores de trabalho.
+   NÃO basta citar "Anais/Simpósio" (papers de congresso repetem no cabeçalho). */
+function isProceedings(text){
+  const palavras = (text.match(/palavras[\- ]?chave/gi) || []).length;
+  const resumos  = (text.match(/^\s*resumo\b/gim) || []).length + (text.match(/\bresumo\s*:/gi) || []).length;
+  return { anais: (palavras >= 6 || resumos >= 8), n: Math.max(palavras, resumos) };
+}
 async function extractFromPDF(file){
   const text = await extractTextFromPDF(file);
+  const p = isProceedings(text);
+  if(p.anais){
+    toast("📚 "+file.name+" é um ANAIS com ~"+p.n+" trabalhos. O app extrai 1 artigo por arquivo — "
+          +"use o coletor.py (Python) para separar todos.", "warn");
+    return { title:"⚠️ ANAIS com ~"+p.n+" trabalhos — separe com o coletor.py (Python)",
+             authors:[], source_file:file.name };
+  }
   const title = extractTitle(text, null);
   return { title, authors: await buildAuthors(text, null, title), source_file: file.name };
 }
