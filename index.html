@@ -733,6 +733,8 @@ function parseWork(lines){
   const seen=new Set(); names=names.filter(n=>{const k=n.toLowerCase(); if(seen.has(k))return false; seen.add(k); return true;});
   if(!(title.length>10 && names.length)) return null;
   const authors=pairWork(names, emails); fixSwapsJS(authors);
+  // 1 só e-mail e ninguém pareou (e-mail é apelido, ex.: "petys02") → é do 1º autor (o aluno).
+  if(!authors.some(a=>a.email) && emails.length===1 && authors.length) authors[0].email = emails[0];
   return {title, authors, all_emails:emails, _raw:block};
 }
 /* Detecta as linhas de AFILIAÇÃO que se repetem ~1× por trabalho (âncora robusta).
@@ -1826,9 +1828,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "2.0";
+const VERSION = "2.1";
 const VERSION_DATE = "2026-06-02";
 const CHANGELOG = [
+  ["2.1","2026-06-02","E-mail-apelido recuperado: 1 e-mail sem par vai pro 1º autor (aluno). Recupera trabalhos que sumiam por causa da exclusão."],
   ["2.0","2026-06-02","Selo de versão + novidades. Validador exclui autores sem e-mail. Índice limpa cabeçalho de seção."],
   ["1.9","2026-06-02","Índice (sumário) vira gabarito de títulos — grátis, sem IA. IA só em títulos suspeitos. E-mail só pelo validador. Aprendizado de correções (não repete erro). Removido código morto (aiPlan)."],
   ["1.8","2026-06-02","Custo por trabalho + relatório da IA na aba Custos."],
