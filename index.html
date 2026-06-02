@@ -175,8 +175,34 @@
   <header class="top">
     <div class="logo">Article<span class="lens">Lens</span></div>
     <span class="badge">Extrator de Publicações</span>
-    <div class="tagline">Coleta título, autores e e-mails de artigos acadêmicos (PDF / HTML) — 100% local, sem servidor, sem custo.</div>
+    <div class="tagline">Coleta título, autores e e-mails de artigos acadêmicos (PDF / HTML).</div>
   </header>
+
+  <!-- IA (Render) — no topo -->
+  <details class="aibox" id="aiBox" open>
+    <summary>🧠 IA (Claude via seu Render) <span class="aistate" id="aiState">(desligada)</span></summary>
+    <div class="aibody">
+      <p class="aihelp">A IA orquestra a esteira: decide como cortar cada PDF e confere uma amostra do que foi coletado.
+        A conexão passa pelo seu <b>proxy no Render</b> — a chave da Anthropic fica escondida no servidor.</p>
+      <label class="fld"><input type="checkbox" id="aiEnabled"> Usar IA</label>
+      <label class="fld"><input type="checkbox" id="aiOrch"> 🧠 IA orquestra a esteira (decide o corte 1× por PDF + confere amostra)</label>
+      <div class="btn-bar" style="margin:4px 0">
+        <button class="btn ghost" id="aiPresetRender" type="button">Preencher dados do meu Render</button>
+      </div>
+      <div class="row">
+        <div style="flex:2"><label class="fld">Endpoint (URL do Render + /v1)</label><input type="text" id="aiBase" placeholder="https://articlelens-proxy.onrender.com/v1"></div>
+        <div style="flex:1"><label class="fld">Modelo</label><input type="text" id="aiModel" placeholder="claude-3-5-sonnet-20240620"></div>
+      </div>
+      <label class="fld">Token de acesso (ACCESS_TOKEN do Render)</label>
+      <input type="password" id="aiKey" placeholder="seu ACCESS_TOKEN (não é a chave sk-ant)">
+      <div class="btn-bar">
+        <button class="btn" id="aiSave">Salvar</button>
+        <button class="btn ghost" id="aiTest">Testar conexão</button>
+        <span class="aihelp" id="aiTestMsg" style="align-self:center"></span>
+      </div>
+      <p class="aihelp">🔒 O token fica só no seu navegador. A chave da Anthropic nunca aparece aqui — está só no Render.</p>
+    </div>
+  </details>
 
   <!-- Abas -->
   <div class="tabs" role="tablist">
@@ -261,40 +287,6 @@
       <button class="btn ghost" id="clearAll">Limpar tudo</button>
     </div>
   </div>
-
-  <!-- IA opcional -->
-  <details class="aibox" id="aiBox">
-    <summary>⚙️ IA opcional — pareamento perfeito de e‑mail ↔ autor <span class="aistate" id="aiState">(desligada)</span></summary>
-    <div class="aibody">
-      <p class="aihelp">Por padrão o sistema é 100% local e grátis. Ative a IA só para refinar os casos
-        ambíguos (apelidos como “Chiquinho”=Francisco, e‑mails por profissão). Suporta endpoint
-        <b>compatível com OpenAI</b>:</p>
-      <ul class="aihelp">
-        <li><b>Ollama (local, grátis, privado):</b> Endpoint <code>http://localhost:11434/v1</code>, modelo <code>llama3.1</code>, chave em branco.</li>
-        <li><b>Nuvem (OpenAI/Groq/OpenRouter):</b> Endpoint do serviço + sua chave de API.</li>
-      </ul>
-      <label class="fld"><input type="checkbox" id="aiEnabled"> Usar IA para pareamento ambíguo</label>
-      <label class="fld"><input type="checkbox" id="aiOrch"> 🧠 IA orquestra a esteira (decide o modelo de corte 1× por PDF + confere uma amostra)</label>
-      <div class="btn-bar" style="margin:4px 0">
-        <button class="btn ghost" id="aiPresetRender" type="button">Usar meu proxy (Render)</button>
-        <button class="btn ghost" id="aiPresetAnthropic" type="button">Usar Claude (Anthropic direto)</button>
-        <button class="btn ghost" id="aiPresetClaude" type="button">Usar Claude (OpenRouter)</button>
-        <button class="btn ghost" id="aiPresetOllama" type="button">Usar Ollama local</button>
-      </div>
-      <div class="row">
-        <div style="flex:2"><label class="fld">Endpoint (Base URL)</label><input type="text" id="aiBase" placeholder="https://openrouter.ai/api/v1"></div>
-        <div style="flex:1"><label class="fld">Modelo</label><input type="text" id="aiModel" placeholder="anthropic/claude-3.5-sonnet"></div>
-      </div>
-      <label class="fld">Chave de API (deixe em branco para Ollama local)</label>
-      <input type="password" id="aiKey" placeholder="sk-... (opcional)">
-      <div class="btn-bar">
-        <button class="btn" id="aiSave">Salvar</button>
-        <button class="btn ghost" id="aiTest">Testar conexão</button>
-        <span class="aihelp" id="aiTestMsg" style="align-self:center"></span>
-      </div>
-      <p class="aihelp">🔒 A chave fica só no seu navegador (localStorage) e só é enviada ao endpoint que você configurar.</p>
-    </div>
-  </details>
 
   <!-- Resultados -->
   <section class="results" id="results">
@@ -1420,8 +1412,8 @@ function initAIUI(){
 document.getElementById("aiSave").onclick = ()=>{
   AI.enabled = document.getElementById("aiEnabled").checked;
   AI.orchestrate = document.getElementById("aiOrch").checked;
-  AI.baseURL = document.getElementById("aiBase").value.trim() || "http://localhost:11434/v1";
-  AI.model   = document.getElementById("aiModel").value.trim() || "llama3.1";
+  AI.baseURL = document.getElementById("aiBase").value.trim();
+  AI.model   = document.getElementById("aiModel").value.trim() || "claude-3-5-sonnet-20240620";
   AI.apiKey  = document.getElementById("aiKey").value.trim();
   saveAIConfig(); updateAIState();
   toast(AI.enabled ? "IA ligada e salva." : "Config salva (IA desligada).");
@@ -1433,34 +1425,12 @@ document.getElementById("aiPresetRender").onclick = ()=>{
   document.getElementById("aiEnabled").checked = true;
   document.getElementById("aiOrch").checked = true;
   base.focus();
-  toast("Preset Render: troque SEU-SERVICO pela URL do seu Render, e cole o ACCESS_TOKEN no campo Chave.");
-};
-document.getElementById("aiPresetAnthropic").onclick = ()=>{
-  document.getElementById("aiBase").value  = "https://api.anthropic.com";
-  document.getElementById("aiModel").value = "claude-3-5-sonnet-20241022";
-  document.getElementById("aiEnabled").checked = true;
-  document.getElementById("aiOrch").checked = true;
-  document.getElementById("aiKey").focus();
-  toast("Preset Anthropic direto aplicado. Cole sua chave (sk-ant-…) e clique Salvar.");
-};
-document.getElementById("aiPresetClaude").onclick = ()=>{
-  document.getElementById("aiBase").value  = "https://openrouter.ai/api/v1";
-  document.getElementById("aiModel").value = "anthropic/claude-3.5-sonnet";
-  document.getElementById("aiEnabled").checked = true;
-  document.getElementById("aiOrch").checked = true;
-  document.getElementById("aiKey").focus();
-  toast("Preset Claude/OpenRouter aplicado. Cole sua chave (sk-or-…) e clique Salvar.");
-};
-document.getElementById("aiPresetOllama").onclick = ()=>{
-  document.getElementById("aiBase").value  = "http://localhost:11434/v1";
-  document.getElementById("aiModel").value = "llama3.1";
-  document.getElementById("aiKey").value   = "";
-  toast("Preset Ollama local aplicado. Clique Salvar.");
+  toast("Troque SEU-SERVICO pela URL do seu Render e cole o ACCESS_TOKEN no campo Token.");
 };
 document.getElementById("aiTest").onclick = async ()=>{
   // aplica os campos atuais antes de testar
-  AI.baseURL = document.getElementById("aiBase").value.trim() || "http://localhost:11434/v1";
-  AI.model   = document.getElementById("aiModel").value.trim() || "llama3.1";
+  AI.baseURL = document.getElementById("aiBase").value.trim();
+  AI.model   = document.getElementById("aiModel").value.trim() || "claude-3-5-sonnet-20240620";
   AI.apiKey  = document.getElementById("aiKey").value.trim();
   const msg = document.getElementById("aiTestMsg");
   const diag = "[v3 · chave detectada: "+AI.apiKey.length+" caracteres"
