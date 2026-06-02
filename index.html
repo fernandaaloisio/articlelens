@@ -274,9 +274,14 @@
         <li><b>Nuvem (OpenAI/Groq/OpenRouter):</b> Endpoint do serviço + sua chave de API.</li>
       </ul>
       <label class="fld"><input type="checkbox" id="aiEnabled"> Usar IA para pareamento ambíguo</label>
+      <label class="fld"><input type="checkbox" id="aiOrch"> 🧠 IA orquestra a esteira (decide o modelo de corte 1× por PDF + confere uma amostra)</label>
+      <div class="btn-bar" style="margin:4px 0">
+        <button class="btn ghost" id="aiPresetClaude" type="button">Usar Claude (OpenRouter)</button>
+        <button class="btn ghost" id="aiPresetOllama" type="button">Usar Ollama local</button>
+      </div>
       <div class="row">
-        <div style="flex:2"><label class="fld">Endpoint (Base URL)</label><input type="text" id="aiBase" placeholder="http://localhost:11434/v1"></div>
-        <div style="flex:1"><label class="fld">Modelo</label><input type="text" id="aiModel" placeholder="llama3.1 / gpt-4o-mini"></div>
+        <div style="flex:2"><label class="fld">Endpoint (Base URL)</label><input type="text" id="aiBase" placeholder="https://openrouter.ai/api/v1"></div>
+        <div style="flex:1"><label class="fld">Modelo</label><input type="text" id="aiModel" placeholder="anthropic/claude-3.5-sonnet"></div>
       </div>
       <label class="fld">Chave de API (deixe em branco para Ollama local)</label>
       <input type="password" id="aiKey" placeholder="sk-... (opcional)">
@@ -783,7 +788,7 @@ function isAmbiguous(authors){
    Config salva no localStorage do navegador. A chave nunca sai daqui,
    exceto para o endpoint que VOCÊ configurar.
    ========================================================================= */
-const AI = { enabled:false, baseURL:"http://localhost:11434/v1", model:"llama3.1", apiKey:"" };
+const AI = { enabled:false, orchestrate:false, baseURL:"http://localhost:11434/v1", model:"llama3.1", apiKey:"" };
 function loadAIConfig(){
   try{ Object.assign(AI, JSON.parse(localStorage.getItem("articlelens_ai")||"{}")); }catch(e){}
 }
@@ -800,6 +805,28 @@ async function aiChat(messages){
   if(!r.ok) throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,120));
   const data = await r.json();
   return data.choices?.[0]?.message?.content || "";
+}
+function _aiJson(raw){ const m=raw.match(/\{[\s\S]*\}/); if(!m) throw new Error("resposta sem JSON"); return JSON.parse(m[0]); }
+
+/* IA decide o MODELO de coleta (1× por PDF, sobre uma amostra) */
+async function aiPlan(sampleText){
+  const sys = "Você é engenheiro de extração de dados de PDFs acadêmicos. Responda APENAS JSON.";
+  const user = "Analise o início do texto de um PDF e diga como coletar título/autores/e-mail.\n"
+    + 'Responda: {"cortar":true|false,"modelo":"anais-numerado|anais-aluno-prof|sbc-cbie|artigo-unico","motivo":"curto"}.\n'
+    + "cortar=true se for um ANAIS com VÁRIOS trabalhos no mesmo PDF; false se for um único artigo/paper.\n\nTEXTO:\n"
+    + sampleText.slice(0, 3500);
+  return _aiJson(await aiChat([{role:"system",content:sys},{role:"user",content:user}]));
+}
+
+/* IA confere uma AMOSTRA dos registros coletados e devolve correções */
+async function aiReview(sample){
+  const sys = "Você confere extrações de trabalhos acadêmicos (título, nomes, e-mails). "
+    + "Aponte e corrija quando o título for na verdade um nome de autor, nomes truncados, ou e-mail no autor errado. "
+    + "Responda APENAS JSON.";
+  const user = 'Para cada item, devolva {"i":idx,"ok":bool,"title":"corrigido ou igual",'
+    + '"authors":[{"name":"...","email":"..."}]}. Mantenha e-mails que já batem; não invente e-mail.\n'
+    + 'Formato: {"itens":[...]}.\n\nITENS:\n' + JSON.stringify(sample);
+  return _aiJson(await aiChat([{role:"system",content:sys},{role:"user",content:user}])).itens || [];
 }
 
 async function aiPairAuthorsEmails(names, emails, title){
@@ -1034,7 +1061,15 @@ function sepMode(){ const r=document.querySelector('input[name="sepmode"]:checke
 async function collectFromPDF(file, mode){
   const text = await extractTextFromPDF(file);
   const prc = isProceedings(text);                       // {anais, n}
-  const usar = mode==="sim" || (mode==="auto" && prc.anais);
+  let usar = mode==="sim" || (mode==="auto" && prc.anais);
+  if(AI.enabled && AI.orchestrate && mode==="auto"){      // IA decide o corte (1× por PDF)
+    try{
+      const plan = await aiPlan(text);
+      usar = !!plan.cortar;
+      toast("🧠 IA ("+file.name.slice(0,18)+"…): "+(usar?"cortar anais":"1 artigo")
+            +(plan.modelo?" · "+plan.modelo:""), "");
+    }catch(e){ /* fallback heurístico já está em 'usar' */ }
+  }
   if(usar){
     const works = separarAnais(text);                    // CORTA o anais em N trabalhos
     if(works.length) return works.map(w=>({title:w.title, authors:w.authors,
@@ -1091,8 +1126,27 @@ async function processBatch(){
   await new Promise(r=>setTimeout(r,30));
   const v = validarTudo();
   pipeStep(3,"done");
-  // ETAPA 4 — Conferir (tabela editável)
+  // ETAPA 4 — Conferir (tabela editável) — IA confere uma amostra
   pipeStep(4,"active");
+  if(AI.enabled && AI.orchestrate && allResults.length){
+    setStatus("🧠 IA conferindo amostra…");
+    try{
+      const n = Math.min(8, allResults.length);
+      const sample = allResults.slice(0,n).map((r,i)=>({i, title:r.title,
+        authors:(r.authors||[]).map(a=>({name:a.name, email:a.email||""}))}));
+      const fixes = await aiReview(sample);
+      let nc=0;
+      for(const f of fixes){
+        const r = allResults[f.i]; if(!r) continue;
+        if(f.title && f.title.length>5 && f.title!==r.title){ r.title=f.title; nc++; }
+        if(Array.isArray(f.authors)) f.authors.forEach((a,ai)=>{
+          if(r.authors[ai]){ if(a.name) r.authors[ai].name=a.name;
+                             if(a.email!==undefined) r.authors[ai].email=a.email; }
+        });
+      }
+      toast("🧠 IA conferiu "+n+" trabalhos"+(nc?" · "+nc+" títulos ajustados":"")+".","");
+    }catch(e){ toast("IA conferência pulada ("+e.message+").","warn"); }
+  }
   renderResults();
   const trab = allResults.length, falhas = errorsThisRun.length;
   setStatus("Linha concluída: <b>"+trab+"</b> trabalhos · "+v.corr+" e‑mails corrigidos · "
@@ -1332,6 +1386,7 @@ function updateAIState(){
 function initAIUI(){
   loadAIConfig();
   document.getElementById("aiEnabled").checked = !!AI.enabled;
+  document.getElementById("aiOrch").checked = !!AI.orchestrate;
   document.getElementById("aiBase").value  = AI.baseURL || "";
   document.getElementById("aiModel").value = AI.model || "";
   document.getElementById("aiKey").value   = AI.apiKey || "";
@@ -1339,11 +1394,26 @@ function initAIUI(){
 }
 document.getElementById("aiSave").onclick = ()=>{
   AI.enabled = document.getElementById("aiEnabled").checked;
+  AI.orchestrate = document.getElementById("aiOrch").checked;
   AI.baseURL = document.getElementById("aiBase").value.trim() || "http://localhost:11434/v1";
   AI.model   = document.getElementById("aiModel").value.trim() || "llama3.1";
   AI.apiKey  = document.getElementById("aiKey").value.trim();
   saveAIConfig(); updateAIState();
   toast(AI.enabled ? "IA ligada e salva." : "Config salva (IA desligada).");
+};
+document.getElementById("aiPresetClaude").onclick = ()=>{
+  document.getElementById("aiBase").value  = "https://openrouter.ai/api/v1";
+  document.getElementById("aiModel").value = "anthropic/claude-3.5-sonnet";
+  document.getElementById("aiEnabled").checked = true;
+  document.getElementById("aiOrch").checked = true;
+  document.getElementById("aiKey").focus();
+  toast("Preset Claude/OpenRouter aplicado. Cole sua chave (sk-or-…) e clique Salvar.");
+};
+document.getElementById("aiPresetOllama").onclick = ()=>{
+  document.getElementById("aiBase").value  = "http://localhost:11434/v1";
+  document.getElementById("aiModel").value = "llama3.1";
+  document.getElementById("aiKey").value   = "";
+  toast("Preset Ollama local aplicado. Clique Salvar.");
 };
 document.getElementById("aiTest").onclick = async ()=>{
   // aplica os campos atuais antes de testar
