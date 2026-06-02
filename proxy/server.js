@@ -8,9 +8,17 @@ const app = express();
 app.use(express.json({ limit: "4mb" }));
 
 const ANTHROPIC_KEY     = process.env.ANTHROPIC_API_KEY || "";
-const ACCESS_TOKEN      = process.env.ACCESS_TOKEN || "";          // gate de acesso
+// Senhas: ADMIN_TOKEN (mexe em tudo) e USER_TOKEN (só usa). ACCESS_TOKEN antigo = admin (compat).
+const ADMIN_TOKEN       = process.env.ADMIN_TOKEN || process.env.ACCESS_TOKEN || "";
+const USER_TOKEN        = process.env.USER_TOKEN || "";
 const ALLOW_ORIGIN      = process.env.ALLOW_ORIGIN || "*";          // ex.: https://fernandaaloisio.github.io
 const ANTHROPIC_VERSION = "2023-06-01";
+
+function roleOf(tok){
+  if (ADMIN_TOKEN && tok === ADMIN_TOKEN) return "admin";
+  if (USER_TOKEN  && tok === USER_TOKEN)  return "user";
+  return null;
+}
 
 // CORS
 app.use((req, res, next) => {
@@ -24,11 +32,20 @@ app.use((req, res, next) => {
 app.get("/", (req, res) => res.json({ ok: true, service: "articlelens-proxy" }));
 
 function authOK(req, res) {
-  if (!ACCESS_TOKEN) return true;                       // sem token configurado = aberto
+  if (!ADMIN_TOKEN && !USER_TOKEN) return true;         // nenhuma senha configurada = aberto
   const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "").trim();
-  if (tok !== ACCESS_TOKEN) { res.status(401).json({ error: { message: "Token de acesso inválido." } }); return false; }
+  if (!roleOf(tok)) { res.status(401).json({ error: { message: "Senha inválida." } }); return false; }
   return true;
 }
+
+// Login: confere a senha e devolve o perfil (admin | user)
+app.post("/login", (req, res) => {
+  const pw = ((req.body && req.body.password) || (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "")).trim();
+  if (!ADMIN_TOKEN && !USER_TOKEN) return res.json({ ok: true, role: "admin" });   // sem senha = tudo liberado
+  const role = roleOf(pw);
+  if (!role) return res.status(401).json({ error: { message: "Senha incorreta." } });
+  res.json({ ok: true, role });
+});
 
 // Endpoint compatível com OpenAI
 app.post("/v1/chat/completions", async (req, res) => {

@@ -191,7 +191,8 @@
     <div class="logo">Article<span class="lens">Lens</span></div>
     <span class="badge">Extrator de Publicações</span>
     <div class="tagline">Coleta título, autores e e-mails de artigos acadêmicos (PDF / HTML).</div>
-    <button class="btn ghost" id="logoutBtn" type="button" style="margin-left:auto;flex:0 0 auto">Sair</button>
+    <span class="badge" id="roleBadge" style="margin-left:auto">🔑 Admin</span>
+    <button class="btn ghost" id="logoutBtn" type="button" style="flex:0 0 auto">Sair</button>
   </header>
 
   <!-- IA (Render) — no topo -->
@@ -1484,8 +1485,8 @@ document.getElementById("aiTest").onclick = async ()=>{
 initAIUI();
 renderFileQueue();
 
-/* ===== LOGIN (senha única validada no proxy Render) ===== */
-const AUTH_KEY = "articlelens_auth";
+/* ===== LOGIN com perfis (admin / usuário) validado no proxy Render ===== */
+const AUTH_KEY = "articlelens_auth";   // "admin" | "user"
 function showLogin(){
   const b = document.getElementById("loginBase");
   if(!b.value) b.value = AI.baseURL || "";
@@ -1493,6 +1494,14 @@ function showLogin(){
   setTimeout(()=>document.getElementById("loginPw").focus(), 50);
 }
 function hideLogin(){ document.getElementById("loginOverlay").style.display = "none"; }
+/* Aplica permissões conforme o perfil */
+function applyRole(role){
+  const isUser = role === "user";
+  const box = document.getElementById("aiBox");
+  if(box) box.style.display = isUser ? "none" : "";   // usuário não vê o painel da IA
+  const badge = document.getElementById("roleBadge");
+  if(badge) badge.textContent = isUser ? "👤 Usuário" : "🔑 Admin";
+}
 async function doLogin(){
   const msg  = document.getElementById("loginMsg");
   const base = document.getElementById("loginBase").value.trim().replace(/\/+$/,"");
@@ -1500,18 +1509,31 @@ async function doLogin(){
   if(!base){ msg.innerHTML = '<span style="color:var(--danger)">Informe o endpoint do Render.</span>'; return; }
   if(!pw){   msg.innerHTML = '<span style="color:var(--danger)">Digite a senha.</span>'; return; }
   msg.innerHTML = "<span style='color:var(--muted)'>entrando…</span>";
+  const root = base.replace(/\/v1$/,"");
   try{
-    const url = base.replace(/\/v1$/,"") + "/v1/models";   // exige o token; é grátis
-    const r = await fetch(url, { headers:{ "Authorization":"Bearer "+pw } });
-    if(r.status === 401){ msg.innerHTML = '<span style="color:var(--danger)">Senha incorreta.</span>'; return; }
-    if(!r.ok){ msg.innerHTML = '<span style="color:var(--danger)">Erro '+r.status+' — confira o endpoint.</span>'; return; }
-    // sucesso: configura a IA e libera o app
+    let role = null;
+    // tenta o /login (perfis); se o proxy ainda não tiver, cai no /v1/models como admin
+    let r = await fetch(root + "/login", { method:"POST",
+      headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ password: pw }) });
+    if(r.status === 404){
+      const rm = await fetch(root + "/v1/models", { headers:{ "Authorization":"Bearer "+pw } });
+      if(rm.status === 401){ msg.innerHTML = '<span style="color:var(--danger)">Senha incorreta.</span>'; return; }
+      if(!rm.ok){ msg.innerHTML = '<span style="color:var(--danger)">Erro '+rm.status+' — confira o endpoint.</span>'; return; }
+      role = "admin";
+    } else if(r.status === 401){
+      msg.innerHTML = '<span style="color:var(--danger)">Senha incorreta.</span>'; return;
+    } else if(!r.ok){
+      msg.innerHTML = '<span style="color:var(--danger)">Erro '+r.status+' — confira o endpoint.</span>'; return;
+    } else {
+      role = (await r.json()).role || "user";
+    }
+    // sucesso: configura a IA e libera o app conforme o perfil
     AI.baseURL = base; AI.apiKey = pw; AI.enabled = true; AI.orchestrate = true;
     saveAIConfig();
-    try{ localStorage.setItem(AUTH_KEY, "1"); }catch(_){}
-    initAIUI();
+    try{ localStorage.setItem(AUTH_KEY, role); }catch(_){}
+    initAIUI(); applyRole(role);
     hideLogin();
-    toast("Bem-vindo! IA conectada e pronta.");
+    toast(role==="admin" ? "Bem-vindo, Admin! IA conectada." : "Bem-vindo! É só adicionar os PDFs.");
   }catch(e){ msg.innerHTML = '<span style="color:var(--danger)">Falha de conexão: '+escapeHtml(e.message)+'</span>'; }
 }
 document.getElementById("loginBtn").onclick = doLogin;
@@ -1520,8 +1542,10 @@ document.getElementById("logoutBtn").onclick = ()=>{
   try{ localStorage.removeItem(AUTH_KEY); }catch(_){}
   showLogin();
 };
-// Bloqueia o app até autenticar nesta máquina
-if(localStorage.getItem(AUTH_KEY) === "1") hideLogin(); else showLogin();
+// Bloqueia o app até autenticar; restaura o perfil salvo
+const savedRole = localStorage.getItem(AUTH_KEY);
+if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLogin(); }
+else showLogin();
 </script>
 </body>
 </html>
