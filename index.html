@@ -913,7 +913,12 @@ async function aiPlan(sampleText){
 /* É um caso difícil? título suspeito OU algum autor sem e-mail */
 function tituloSuspeito(t){
   t = (t||"").trim();
-  return t.length < 12 || /^[^A-Za-zÀ-ÿ0-9]/.test(t) || /^[a-zà-ÿ]/.test(t) || /\.{4,}|; *prof/i.test(t);
+  return t.length < 12               // curto demais
+    || /^[^A-Za-zÀ-ÿ0-9]/.test(t)    // começa com pontuação
+    || /^[a-zà-ÿ]/.test(t)           // começa minúsculo (acento inicial perdido)
+    || /\.{4,}/.test(t)              // pontilhado de sumário
+    || /;/.test(t)                   // tem ';' → provavelmente é lista de AUTORES, não título
+    || /\bprof[.ªºa]?\b/i.test(t);   // contém "Prof" → é linha de autor
 }
 function casoDificil(r){
   return tituloSuspeito(r.title) || (r.authors||[]).some(a=>!a.email);
@@ -1240,7 +1245,7 @@ async function processBatch(){
     const alvos = dificeis.slice(0, LIM);
     if(alvos.length){
       setStatus("🧠 IA revisando "+alvos.length+" casos difíceis (e-mail em branco / título suspeito)…");
-      let nEmail=0, nTit=0;
+      let nEmail=0, nTit=0, nFail=0, lastErr="";
       const CHUNK = 5;                                // lotes p/ baratear
       for(let i=0;i<alvos.length;i+=CHUNK){
         const grupo = alvos.slice(i, i+CHUNK);
@@ -1257,10 +1262,14 @@ async function processBatch(){
               if(alvo && !alvo.email){ alvo.email = fa.email.toLowerCase(); nEmail++; }
             }
           }
-        }catch(e){ /* segue para o próximo lote */ }
+        }catch(e){ nFail++; lastErr=e.message; }   // registra falha (não engole mais em silêncio)
         setProgress(Math.min(i+CHUNK,alvos.length), alvos.length, "IA");
       }
-      toast("🧠 IA revisou "+alvos.length+" casos · "+nEmail+" e‑mails recuperados"+(nTit?" · "+nTit+" títulos":"")+".");
+      if(nFail && nFail*CHUNK>=alvos.length)
+        toast("⚠️ IA NÃO funcionou em nenhum lote — erro: "+lastErr+". Verifique login/modelo/Render.","warn");
+      else
+        toast("🧠 IA revisou "+alvos.length+" casos · "+nEmail+" e‑mails recuperados"
+              +(nTit?" · "+nTit+" títulos corrigidos":"")+(nFail?" · "+nFail+" lotes falharam":"")+".");
     }
   }
   renderResults();
