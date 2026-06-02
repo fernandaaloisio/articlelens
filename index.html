@@ -733,8 +733,8 @@ function parseWork(lines){
   const seen=new Set(); names=names.filter(n=>{const k=n.toLowerCase(); if(seen.has(k))return false; seen.add(k); return true;});
   if(!(title.length>10 && names.length)) return null;
   const authors=pairWork(names, emails); fixSwapsJS(authors);
-  // 1 só e-mail e ninguém pareou (e-mail é apelido, ex.: "petys02") → é do 1º autor (o aluno).
-  if(!authors.some(a=>a.email) && emails.length===1 && authors.length) authors[0].email = emails[0];
+  // 1 só e-mail e ninguém pareou (e-mail é apelido, ex.: "petys02") → chuta no 1º autor (o aluno).
+  if(!authors.some(a=>a.email) && emails.length===1 && authors.length){ authors[0].email = emails[0]; authors[0]._guess=true; }
   return {title, authors, all_emails:emails, _raw:block};
 }
 /* Detecta as linhas de AFILIAÇÃO que se repetem ~1× por trabalho (âncora robusta).
@@ -1024,15 +1024,22 @@ function tituloSuspeito(t){
     || /;\s*prof/i.test(t)                                        // "...; Prof" = linha de autor
     || /\bprof[.ªºa]?\s+(dr|dra|m\.?\s?[ea])/i.test(t);           // "Prof. Dr."/"Prof. M.e" = autor
 }
-/* Caso difícil = SÓ título suspeito. E-mail fica por conta do validador (a IA não mexe em e-mail). */
-function casoDificil(r){ return tituloSuspeito(r.title); }
-/* IA corrige SÓ o TÍTULO (mínimo de tokens). Não toca em e-mail nem autores. */
+/* E-mail incerto = há @ no texto E (algum autor sem e-mail OU foi um chute do 1º autor). */
+function _emailIncerto(r){
+  if(!/@/.test(r._raw||"")) return false;            // sem e-mail no texto, IA não tem o que achar
+  return (r.authors||[]).some(a=>!a.email || a._guess);
+}
+/* Caso para a IA = título suspeito OU e-mail incerto (chute / não pareado). */
+function casoDificil(r){ return tituloSuspeito(r.title) || _emailIncerto(r); }
+/* IA corrige TÍTULO e confere o DONO do e-mail, usando o texto cru. NÃO inventa e-mail. */
 async function aiFixHard(grupo){
-  const sys = "Você corrige TÍTULOS de trabalhos acadêmicos a partir do texto cru. "
-    + "Às vezes o título veio trocado pela lista de autores ou truncado. Devolva só o título correto. Responda APENAS JSON.";
-  const itens = grupo.map((r,i)=>({ i, titulo_atual:r.title, texto:(r._raw||"").slice(0,1100) }));
-  const user = 'Para cada item devolva o título correto: {"itens":[{"i":idx,"title":"..."}]}. '
-    + 'Não inclua autores nem e-mail.\n\n' + JSON.stringify(itens);
+  const sys = "Você confere extrações de trabalhos acadêmicos pelo TEXTO CRU. Corrija o título (às vezes "
+    + "veio trocado pela lista de autores ou truncado) e diga de QUEM é cada e-mail (associe ao autor certo pelo nome). "
+    + "REGRA DURA: só use e-mail que aparece no texto; nunca invente. Responda APENAS JSON.";
+  const itens = grupo.map((r,i)=>({ i, titulo_atual:r.title,
+    autores:(r.authors||[]).map(a=>a.name), texto:(r._raw||"").slice(0,1500) }));
+  const user = 'Devolva {"itens":[{"i":idx,"title":"...","authors":[{"name":"...","email":"..."}]}]}. '
+    + 'E-mail vazio "" se o autor não tiver e-mail no texto.\n\n' + JSON.stringify(itens);
   return _aiJson(await aiChat([{role:"system",content:sys},{role:"user",content:user}])).itens || [];
 }
 
@@ -1342,14 +1349,13 @@ async function processBatch(){
   await new Promise(r=>setTimeout(r,30));
   const v = validarTudo();
   pipeStep(3,"done");
-  // ETAPA 4 — Conferir (tabela editável) — IA confere uma amostra
+  // ETAPA 4 — IA só nos casos incertos (título suspeito OU e-mail chutado/não pareado). Mínimo de IA.
   pipeStep(4,"active");
-  // ETAPA 4 — IA só nos TÍTULOS que ainda ficaram suspeitos DEPOIS do índice (mínimo de IA)
   if(AI.enabled && AI.orchestrate && allResults.length){
     const alvos = allResults.filter(casoDificil).slice(0, 400);
     if(alvos.length){
-      setStatus("🧠 IA revisando "+alvos.length+" títulos ainda suspeitos…");
-      let nTit=0, nFail=0, lastErr="";
+      setStatus("🧠 IA conferindo "+alvos.length+" casos (título/dono do e‑mail)…");
+      let nTit=0, nEmail=0, nFail=0, lastErr="";
       const usdBefore = aiUsage.usd;
       const relatorio = [];
       const CHUNK = 6;
@@ -1360,24 +1366,38 @@ async function processBatch(){
         catch(e){ nFail++; lastErr=e.message;
           grupo.forEach(r=>relatorio.push({titulo:(r.title||"").slice(0,70), acao:"falhou", detalhe:e.message})); }
         if(fixes) grupo.forEach((r,gi)=>{
-          const f = fixes.find(x=>x.i===gi); const antesT = r.title;
-          if(f && f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)){
-            r.title=f.title; nTit++; aprender(r); }      // memoriza a correção
+          const f = fixes.find(x=>x.i===gi); const antesT = r.title; const mudouE=[];
+          if(f){
+            if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)){ r.title=f.title; nTit++; }
+            // confere o DONO do e-mail: só aceita e-mail presente no texto cru
+            if(Array.isArray(f.authors)) for(const fa of f.authors){
+              const em=(fa.email||"").trim().toLowerCase();
+              if(!/@/.test(em) || !(r._raw||"").toLowerCase().includes(em)) continue;   // tem de estar no texto
+              const fn=_norm(fa.name||"").split(/\s+/).filter(t=>t.length>=3);
+              const alvo=(r.authors||[]).find(a=>{const an=_norm(a.name); return fn.some(t=>an.includes(t));});
+              if(alvo && (!alvo.email || alvo._guess) && alvo.email!==em){   // corrige vazio ou chute
+                alvo.email=em; alvo._guess=false; nEmail++; mudouE.push(alvo.name.split(" ")[0]+"→"+em); }
+            }
+          }
+          (r.authors||[]).forEach(a=>{ delete a._guess; });   // resolveu o chute
+          aprender(r);
+          const mudou = r.title!==antesT || mudouE.length;
           relatorio.push({ titulo:(r.title||"").slice(0,70),
-            acao: r.title!==antesT ? "corrigido" : "sem mudança",
-            detalhe: r.title!==antesT ? ("título: «"+antesT.slice(0,30)+"» → «"+r.title.slice(0,30)+"»") : "nada a corrigir" });
+            acao: mudou ? "corrigido" : "sem mudança",
+            detalhe: [ r.title!==antesT?("título: «"+antesT.slice(0,28)+"»→«"+r.title.slice(0,28)+"»"):"",
+                       mudouE.length?("e‑mail: "+mudouE.join("; ")):"" ].filter(Boolean).join(" | ") || "ok" });
         });
         setProgress(Math.min(i+CHUNK,alvos.length), alvos.length, "IA");
       }
       const runCost = aiUsage.usd - usdBefore;
       lastRun = { works: allResults.length, cost: runCost,
                   perWork: allResults.length ? runCost/allResults.length : 0,
-                  hard: alvos.length, nEmail:0, nTit, nFail, report: relatorio };
+                  hard: alvos.length, nEmail, nTit, nFail, report: relatorio };
       if(nFail && nFail*CHUNK>=alvos.length)
         toast("⚠️ IA NÃO funcionou — erro: "+lastErr+". Verifique login/modelo/Render.","warn");
       else
-        toast("🧠 IA: "+nTit+" títulos corrigidos em "+alvos.length+" · custo US$ "+runCost.toFixed(4)
-              +" (US$ "+lastRun.perWork.toFixed(4)+"/trabalho)"+(nFail?" · "+nFail+" falhas":"")+".");
+        toast("🧠 IA: "+nTit+" títulos · "+nEmail+" donos de e‑mail conferidos em "+alvos.length+" · US$ "
+              +runCost.toFixed(4)+" (US$ "+lastRun.perWork.toFixed(4)+"/trab)"+(nFail?" · "+nFail+" falhas":"")+".");
     } else lastRun = { works: allResults.length, cost:0, perWork:0, hard:0, nEmail:0, nTit:0, nFail:0, report:[] };
   }
   const ex = excluirSemEmail();          // ETAPA final do validador: remove autores sem e-mail
@@ -1828,9 +1848,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "2.1";
+const VERSION = "2.2";
 const VERSION_DATE = "2026-06-02";
 const CHANGELOG = [
+  ["2.2","2026-06-02","IA confere o DONO do e-mail nos casos incertos (chute do 1º autor ou e-mail não pareado), só usando e-mail presente no texto. Mais segurança sem gastar muito."],
   ["2.1","2026-06-02","E-mail-apelido recuperado: 1 e-mail sem par vai pro 1º autor (aluno). Recupera trabalhos que sumiam por causa da exclusão."],
   ["2.0","2026-06-02","Selo de versão + novidades. Validador exclui autores sem e-mail. Índice limpa cabeçalho de seção."],
   ["1.9","2026-06-02","Índice (sumário) vira gabarito de títulos — grátis, sem IA. IA só em títulos suspeitos. E-mail só pelo validador. Aprendizado de correções (não repete erro). Removido código morto (aiPlan)."],
