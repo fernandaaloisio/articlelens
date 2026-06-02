@@ -782,8 +782,8 @@ function separarAnais(text){
 /* ÍNDICE/SUMÁRIO como gabarito de TÍTULOS (grátis, sem IA).
    O sumário lista "Título … Autores …… página". Reconstruímos os títulos completos
    (juntando as linhas entre os pontilhados) e casamos cada trabalho pelo 1º autor. */
-const _IDX_NOISE=/^(xv semana|anais d|sum[áa]rio|resumos|p[ôo]steres|\d+$|[ivx]{1,4}$|comit[êe]|express|apresenta)/i;
-const _IDX_SECT=/^(ci[êe]ncias?( (agr[áa]rias|da sa[úu]de|humanas|exatas|sociais|biol[óo]gicas))?|engenharias?|artigos completos|p[ôo]steres)\b[:\s]*/i;
+const _IDX_NOISE=/^(xv semana|anais d|sum[áa]rio|resumos|p[ôo]steres|\d+$|[ivx]{1,4}$|comit[êe]|express|apresenta|aplicadas\b|e da terra\b|da terra\b)/i;
+const _IDX_SECT=/^(ci[êe]ncias?( (agr[áa]rias|da sa[úu]de|humanas|exatas|sociais|biol[óo]gicas|aplicadas|e da terra))?|aplicadas|e da terra|engenharias?|artigos completos|p[ôo]steres)\b[:\s]*/i;
 function _idxTok(s){ return new Set(_norm(s).replace(/\b(prof|dra?|me?|profa|esp|dr|junior)\b/g,"").split(/[^a-z]+/).filter(t=>t.length>=4)); }
 function parseIndice(text){
   const lines=text.split(/\n|\f/).map(l=>l.trim()).filter(Boolean);
@@ -1285,6 +1285,19 @@ function validarTudo(){               // ETAPA 3 — corrige e-mails (validador)
   }
   return {corr, inv};
 }
+/* No fim do validador: descarta autores SEM e-mail (sem utilidade) e trabalhos que ficaram vazios. */
+function excluirSemEmail(){
+  let autRem=0, trabRem=0;
+  for(const r of allResults){
+    const antes=(r.authors||[]).length;
+    r.authors=(r.authors||[]).filter(a=>a.email && a.email.trim() && !a._inv);
+    autRem += antes - r.authors.length;
+  }
+  const fica = allResults.filter(r=>(r.authors||[]).length);
+  trabRem = allResults.length - fica.length;
+  allResults.length=0; allResults.push(...fica);
+  return {autRem, trabRem};
+}
 
 async function processBatch(){
   if(!fileQueue.length){ toast("Nenhum arquivo na fila.", "warn"); return; }
@@ -1358,11 +1371,13 @@ async function processBatch(){
               +" (US$ "+lastRun.perWork.toFixed(4)+"/trabalho)"+(nFail?" · "+nFail+" falhas":"")+".");
     } else lastRun = { works: allResults.length, cost:0, perWork:0, hard:0, nEmail:0, nTit:0, nFail:0, report:[] };
   }
+  const ex = excluirSemEmail();          // ETAPA final do validador: remove autores sem e-mail
   renderResults();
-  const trab = allResults.length, falhas = errorsThisRun.length;
-  setStatus("Linha concluída: <b>"+trab+"</b> trabalhos · "+v.corr+" e‑mails corrigidos · "
-            +v.inv+" inválidos. Confira e edite abaixo, depois gere o Excel.");
-  toast("Pronto: "+trab+" trabalhos. "+v.corr+" e‑mails corrigidos.");
+  const trab = allResults.length;
+  const idxMsg = lastIndice ? " · índice esperava "+lastIndice.total : "";
+  setStatus("Linha concluída: <b>"+trab+"</b> trabalhos"+idxMsg+" · "+v.corr+" e‑mails corrigidos · "
+            +ex.autRem+" autores sem e‑mail removidos. Confira e edite abaixo, depois gere o Excel.");
+  toast("Pronto: "+trab+" trabalhos · "+ex.autRem+" autores sem e‑mail removidos.");
 }
 
 /* =========================================================================
