@@ -276,6 +276,7 @@
       <label class="fld"><input type="checkbox" id="aiEnabled"> Usar IA para pareamento ambíguo</label>
       <label class="fld"><input type="checkbox" id="aiOrch"> 🧠 IA orquestra a esteira (decide o modelo de corte 1× por PDF + confere uma amostra)</label>
       <div class="btn-bar" style="margin:4px 0">
+        <button class="btn ghost" id="aiPresetRender" type="button">Usar meu proxy (Render)</button>
         <button class="btn ghost" id="aiPresetAnthropic" type="button">Usar Claude (Anthropic direto)</button>
         <button class="btn ghost" id="aiPresetClaude" type="button">Usar Claude (OpenRouter)</button>
         <button class="btn ghost" id="aiPresetOllama" type="button">Usar Ollama local</button>
@@ -1425,6 +1426,15 @@ document.getElementById("aiSave").onclick = ()=>{
   saveAIConfig(); updateAIState();
   toast(AI.enabled ? "IA ligada e salva." : "Config salva (IA desligada).");
 };
+document.getElementById("aiPresetRender").onclick = ()=>{
+  const base = document.getElementById("aiBase");
+  if(!/onrender\.com/.test(base.value)) base.value = "https://SEU-SERVICO.onrender.com/v1";
+  document.getElementById("aiModel").value = "claude-3-5-sonnet-20240620";
+  document.getElementById("aiEnabled").checked = true;
+  document.getElementById("aiOrch").checked = true;
+  base.focus();
+  toast("Preset Render: troque SEU-SERVICO pela URL do seu Render, e cole o ACCESS_TOKEN no campo Chave.");
+};
 document.getElementById("aiPresetAnthropic").onclick = ()=>{
   document.getElementById("aiBase").value  = "https://api.anthropic.com";
   document.getElementById("aiModel").value = "claude-3-5-sonnet-20241022";
@@ -1463,7 +1473,7 @@ document.getElementById("aiTest").onclick = async ()=>{
   }catch(e){
     let extra = "";
     // Se o modelo não existe na conta, lista os modelos disponíveis da Anthropic
-    if(/not_found|model:/i.test(e.message) && /api\.anthropic\.com/.test(AI.baseURL)){
+    if(/not_found|model:/i.test(e.message) && /api\.anthropic\.com|onrender\.com/.test(AI.baseURL)){
       try{
         const u = AI.baseURL.replace(/\/+$/,"").replace(/\/v1$/,"")+"/v1/models";
         const rr = await fetch(u, { headers:{ "x-api-key":AI.apiKey,
