@@ -276,6 +276,7 @@
       <label class="fld"><input type="checkbox" id="aiEnabled"> Usar IA para pareamento ambíguo</label>
       <label class="fld"><input type="checkbox" id="aiOrch"> 🧠 IA orquestra a esteira (decide o modelo de corte 1× por PDF + confere uma amostra)</label>
       <div class="btn-bar" style="margin:4px 0">
+        <button class="btn ghost" id="aiPresetAnthropic" type="button">Usar Claude (Anthropic direto)</button>
         <button class="btn ghost" id="aiPresetClaude" type="button">Usar Claude (OpenRouter)</button>
         <button class="btn ghost" id="aiPresetOllama" type="button">Usar Ollama local</button>
       </div>
@@ -795,10 +796,11 @@ function loadAIConfig(){
 function saveAIConfig(){ localStorage.setItem("articlelens_ai", JSON.stringify(AI)); }
 
 async function aiChat(messages){
+  if(/api\.anthropic\.com/.test(AI.baseURL)) return aiChatAnthropic(messages);
   const url = AI.baseURL.replace(/\/+$/,"") + "/chat/completions";
   const isLocal = /localhost|127\.0\.0\.1/.test(AI.baseURL);
   if(!isLocal && !AI.apiKey)
-    throw new Error("Campo Chave vazio — cole sua chave (sk-or-…) no campo Chave e clique Salvar.");
+    throw new Error("Campo Chave vazio — cole sua chave no campo Chave e clique Salvar.");
   const r = await fetch(url, {
     method:"POST",
     headers:{ "Content-Type":"application/json",
@@ -808,6 +810,25 @@ async function aiChat(messages){
   if(!r.ok) throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,120));
   const data = await r.json();
   return data.choices?.[0]?.message?.content || "";
+}
+/* API nativa da Anthropic (api.anthropic.com) — formato diferente do OpenAI */
+async function aiChatAnthropic(messages){
+  if(!AI.apiKey) throw new Error("Campo Chave vazio — cole sua chave (sk-ant-…) e clique Salvar.");
+  const sys  = messages.filter(m=>m.role==="system").map(m=>m.content).join("\n");
+  const msgs = messages.filter(m=>m.role!=="system").map(m=>({role:m.role, content:m.content}));
+  const url  = AI.baseURL.replace(/\/+$/,"").replace(/\/v1$/,"") + "/v1/messages";
+  const r = await fetch(url, {
+    method:"POST",
+    headers:{ "Content-Type":"application/json",
+              "x-api-key": AI.apiKey,
+              "anthropic-version":"2023-06-01",
+              "anthropic-dangerous-direct-browser-access":"true" },
+    body: JSON.stringify({ model: AI.model, max_tokens: 2048, temperature: 0,
+                           ...(sys?{system:sys}:{}), messages: msgs })
+  });
+  if(!r.ok) throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,160));
+  const data = await r.json();
+  return (data.content||[]).map(c=>c.text||"").join("") || "";
 }
 function _aiJson(raw){ const m=raw.match(/\{[\s\S]*\}/); if(!m) throw new Error("resposta sem JSON"); return JSON.parse(m[0]); }
 
@@ -1403,6 +1424,14 @@ document.getElementById("aiSave").onclick = ()=>{
   AI.apiKey  = document.getElementById("aiKey").value.trim();
   saveAIConfig(); updateAIState();
   toast(AI.enabled ? "IA ligada e salva." : "Config salva (IA desligada).");
+};
+document.getElementById("aiPresetAnthropic").onclick = ()=>{
+  document.getElementById("aiBase").value  = "https://api.anthropic.com";
+  document.getElementById("aiModel").value = "claude-3-5-sonnet-latest";
+  document.getElementById("aiEnabled").checked = true;
+  document.getElementById("aiOrch").checked = true;
+  document.getElementById("aiKey").focus();
+  toast("Preset Anthropic direto aplicado. Cole sua chave (sk-ant-…) e clique Salvar.");
 };
 document.getElementById("aiPresetClaude").onclick = ()=>{
   document.getElementById("aiBase").value  = "https://openrouter.ai/api/v1";
