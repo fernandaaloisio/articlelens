@@ -823,7 +823,7 @@ async function aiChatAnthropic(messages){
               "x-api-key": AI.apiKey,
               "anthropic-version":"2023-06-01",
               "anthropic-dangerous-direct-browser-access":"true" },
-    body: JSON.stringify({ model: AI.model, max_tokens: 2048, temperature: 0,
+    body: JSON.stringify({ model: AI.model, max_tokens: 2048,
                            ...(sys?{system:sys}:{}), messages: msgs })
   });
   if(!r.ok) throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,160));
