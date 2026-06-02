@@ -102,6 +102,24 @@
   .status-msg{color:var(--muted);font-size:14px;min-height:20px}
   .status-msg b{color:var(--accent)}
 
+  /* ---- Linha de produção (stepper) ---- */
+  .pipe{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+  .step{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);padding:6px 11px;border:1px solid var(--border);border-radius:999px;background:var(--bg-soft);transition:.2s}
+  .step .dot{display:inline-flex;width:20px;height:20px;border-radius:50%;background:var(--border);color:var(--text);align-items:center;justify-content:center;font-size:12px;font-weight:700}
+  .step.active{color:var(--text);border-color:var(--accent)}
+  .step.active .dot{background:var(--accent);color:#04130d}
+  .step.done{color:var(--accent);border-color:var(--accent-dim)}
+  .step.done .dot{background:var(--accent-dim);color:#04130d}
+  .seta{color:var(--border);font-size:14px}
+  .sepbox{background:var(--bg-soft);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+  .sepbox .seplbl{color:var(--text);font-weight:500;width:100%}
+  .sepbox .opt{color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:5px}
+  .sepbox .opt input{accent-color:var(--accent)}
+  td[contenteditable]{outline:none}
+  td[contenteditable]:focus{background:rgba(0,229,160,.08);box-shadow:inset 0 0 0 1px var(--accent)}
+  .badge-corr{background:rgba(0,229,160,.13);color:var(--accent);font-size:10px;padding:1px 6px;border-radius:999px;margin-left:6px}
+  .badge-inv{background:rgba(255,93,108,.15);color:var(--danger);font-size:10px;padding:1px 6px;border-radius:999px;margin-left:6px}
+
   /* ---- IA opcional ---- */
   .aibox{margin:18px 0;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:4px 18px;box-shadow:var(--shadow)}
   .aibox summary{cursor:pointer;padding:12px 0;font-weight:600;list-style:none}
@@ -215,12 +233,31 @@
     </div>
   </section>
 
-  <!-- Ação -->
+  <!-- LINHA DE PRODUÇÃO -->
   <div class="action">
-    <div class="status-msg" id="statusMsg">Pronto. Selecione arquivos ou cole um HTML para começar.</div>
+    <div class="pipe" id="pipe">
+      <div class="step" data-s="1"><span class="dot">1</span> Cortar</div>
+      <div class="seta">→</div>
+      <div class="step" data-s="2"><span class="dot">2</span> Coletar</div>
+      <div class="seta">→</div>
+      <div class="step" data-s="3"><span class="dot">3</span> Validar e‑mail</div>
+      <div class="seta">→</div>
+      <div class="step" data-s="4"><span class="dot">4</span> Conferir</div>
+      <div class="seta">→</div>
+      <div class="step" data-s="5"><span class="dot">5</span> Excel</div>
+    </div>
+
+    <div class="sepbox">
+      <span class="seplbl">✂️ Passar pelo separador (anais com vários trabalhos por PDF)?</span>
+      <label class="opt"><input type="radio" name="sepmode" value="auto" checked> Automático</label>
+      <label class="opt"><input type="radio" name="sepmode" value="sim"> Sempre cortar</label>
+      <label class="opt"><input type="radio" name="sepmode" value="nao"> Nunca (1 artigo por PDF)</label>
+    </div>
+
+    <div class="status-msg" id="statusMsg">Pronto. Selecione arquivos e inicie a linha.</div>
     <div class="meter"><span id="progMeter"></span></div>
     <div class="btn-bar">
-      <button class="btn primary" id="extractBtn">Extrair Dados →</button>
+      <button class="btn primary" id="extractBtn">▶ Iniciar linha de produção</button>
       <button class="btn ghost" id="clearAll">Limpar tudo</button>
     </div>
   </div>
@@ -262,7 +299,7 @@
 
     <div class="table-wrap">
       <table>
-        <thead><tr><th>#</th><th>Título do Artigo</th><th>Nome do Autor</th><th>E-mail</th><th>Fonte</th></tr></thead>
+        <thead><tr><th>#</th><th>Título do Trabalho</th><th>Nome Completo</th><th>E-mail (editável)</th><th>Status</th></tr></thead>
         <tbody id="resultBody"></tbody>
       </table>
       <div class="pager">
@@ -350,7 +387,7 @@ async function extractTextFromPDF(file){
     const lines = rows.map(r =>
       r.items.sort((a,b) => a.x - b.x).map(i => i.s).join(" ").trim()
     );
-    out += lines.join("\n") + "\n";
+    out += lines.join("\n") + "\n\f\n";     // \f = marca de fim de página (p/ o separador de anais)
   }
   const clean = out.normalize("NFC")        // acentos compostos (ç, ã) p/ os regexes baterem
                    .replace(/[ \t]+/g," ").replace(/\n{3,}/g,"\n\n").trim();
@@ -444,6 +481,174 @@ function extractEmails(text){
   const plain = text.replace(/\{[^}]+\}@[a-zA-Z0-9.\-]+/g," ");
   (plain.match(EMAIL_RE)||[]).forEach(e=>found.push(e.toLowerCase().replace(/[.,;)]+$/,"")));
   return [...new Set(found)];
+}
+
+/* =========================================================================
+   VALIDADOR DE E-MAIL (porta do validador_emails.py) — corrige typos/domínios.
+   Retorna {corrigido, acao:'OK'|'CORRIGIDO'|'INVALIDO'|'VAZIO', obs}.
+   ========================================================================= */
+const PROVIDER_TYPOS = {
+  "gmial.com":"gmail.com","gmai.com":"gmail.com","gmal.com":"gmail.com","gnail.com":"gmail.com",
+  "gmail.co":"gmail.com","gmaill.com":"gmail.com","gmail.cm":"gmail.com","gmail.con":"gmail.com",
+  "gmaiil.com":"gmail.com","gmail.com.br":"gmail.com","gmali.com":"gmail.com","gmsil.com":"gmail.com",
+  "hotmial.com":"hotmail.com","hotmai.com":"hotmail.com","hotmal.com":"hotmail.com","hotmil.com":"hotmail.com",
+  "hotmaill.com":"hotmail.com","hotmail.co":"hotmail.com","hotmail.con":"hotmail.com","hotnail.com":"hotmail.com",
+  "yaho.com":"yahoo.com","yahooo.com":"yahoo.com","yahoo.co":"yahoo.com","yhaoo.com":"yahoo.com",
+  "outloo.com":"outlook.com","outlok.com":"outlook.com","outlook.co":"outlook.com","outllok.com":"outlook.com",
+  "bol.com":"bol.com.br","uol.com":"uol.com.br","ig.com":"ig.com.br","icould.com":"icloud.com"
+};
+const DOTLESS = {"gmailcom":"gmail.com","hotmailcom":"hotmail.com","yahoocom":"yahoo.com","outlookcom":"outlook.com"};
+const EMAIL_FULL_RE = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
+const TEM_ACENTO = /[áàâãäéèêëíìîïóòôõöúùûüçñ]/i;
+
+function validarEmail(raw){
+  let s = (raw==null?"":String(raw)).trim();
+  if(!s || /^(nan|none)$/i.test(s)) return {corrigido:"", acao:"VAZIO", obs:"vazio"};
+  const orig = s; const notas = [];
+  if(/\s/.test(s)){ s = s.replace(/\s+/g,""); notas.push("espaços removidos"); }
+  if(s.includes("@@")){ s = s.replace(/@@/g,"@"); notas.push("'@@'→'@'"); }
+  const at = (s.match(/@/g)||[]).length;
+  if(at !== 1) return {corrigido:"", acao:"INVALIDO", obs:(at===0?"sem @":"vários @")};
+  let [local, dom] = s.split("@");
+  if(TEM_ACENTO.test(local)) return {corrigido:"", acao:"INVALIDO", obs:"acento antes do @"};
+  let dl = dom.toLowerCase();
+  if(DOTLESS[dl]){ dom = DOTLESS[dl]; notas.push("ponto no provedor"); }
+  const limpo = dom.replace(/[.,;:)( -]+$/,""); if(limpo!==dom){ dom=limpo; notas.push("pontuação final"); }
+  let m = dom.match(/^(.*\.[a-z]{2,})\d+$/i); if(m){ dom=m[1]; notas.push("dígitos no fim"); }
+  dl = dom.toLowerCase();
+  if(PROVIDER_TYPOS[dl]){ dom = PROVIDER_TYPOS[dl]; notas.push("provedor corrigido"); }
+  // TLD institucional truncado: .gov.b -> .gov.br etc.
+  m = dom.toLowerCase().match(/\.(gov|edu|org|com|net|mil)\.b$/); if(m){ dom=dom+"r"; notas.push("TLD .b→.br"); }
+  else if(/\.b$/i.test(dom)){ dom=dom+"r"; notas.push("TLD .b→.br"); }
+  const corrigido = local + "@" + dom;
+  if(!EMAIL_FULL_RE.test(corrigido)) return {corrigido:"", acao:"INVALIDO", obs:"formato inválido ("+_join(notas)+")"};
+  if(corrigido === orig) return {corrigido, acao:"OK", obs:"válido"};
+  return {corrigido, acao:"CORRIGIDO", obs:_join(notas)};
+}
+function _join(a){ a=a.filter(Boolean); return a.length?a.join("; "):"—"; }
+
+/* =========================================================================
+   SEPARADOR DE ANAIS (porta do separador.py) — 1 PDF com N trabalhos.
+   separarAnais(text) -> [{title, authors:[{name,email}], all_emails}]
+   ========================================================================= */
+const NUM_NAME_JS = /([A-ZÀ-Ý][a-zà-ÿ]+(?:[,.]?\s+(?:[A-ZÀ-Ý][\wÀ-ÿ.]*|[a-zà-ÿ]{2,}|de|da|do|dos|das|e)){0,4})\s*(\d{1,2})(?![@\d.])/g;
+const CONN_JS = new Set(["de","da","do","dos","das","e","del","della","van","von","el","al","bin"]);
+const INST_JS = /(centro universit|curso de|universidade|faculdade|instituto|uniarax|unipam|campus|departamento)/i;
+const TLINE_NOISE_JS = /^(ci[êe]ncias\b|engenhari|artigos completos|resumos\b|p[ôo]steres|apoio\b|bolsista\b|ap[êe]ndice|refer[êe]ncias|introdu|abstract\b|keywords|palavras|xv semana|anais d|mostra de pesquisa|semana de ci|sum[áa]rio|comit[êe]|\d{4}\b|.*\bet al\b|.*\bv\.\s*\d+|.*\bp\.\s*\d+\s*-)/i;
+const EVENT_JS = /(anais d|congresso brasileiro|simp[óo]sio brasileiro|\(cbie|\(sbie|cbie \d|sbie \d|mostra de pesquisa|semana de ci[êe]ncia|brazilian symposium|proceedings of|seminário|seminario|expediente|sum[áa]rio|comit[êe])/i;
+const LOC_JS = /^(acre|rio|branco|sul|norte|brasil|s[ãa]o|floresta|campus|cruzeiro|m[âa]ncio|outras|caixa|postal)\b/i;
+const PROFPRE_JS = /^\s*(prof[ªaº]?\.?|dr[ªaº]?\.?|m\.?\s?[eaª]\.?|me\.?|m\.?sc\.?|ph\.?d\.?|esp\.?|bel\.?|orientador[a]?:?)\s+/i;
+const DEGREE_J = /\b(doutor\w*|doutorand[oa]|p[óo]s[\- ]?doutor\w*|mestr[aeio]\w*|mestrand[oa]|especialista|p[óo]s[\- ]?graduand[oa]|graduand[oa]|graduad[oa]|bacharel\w*|licenciad[oa]|disc[ei]\w*|docente|professor\w*|acad[êe]mic[oa]|enfermeir[oa]|m[ée]dic[oa]|advogad[oa]|engenheir[oa]|psic[óo]log[oa])\b/i;
+
+function _norm(s){ return s.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase(); }
+function cleanAuthor(s){
+  s = s.replace(/[\d*†‡§]/g,""); let p=null;
+  while(p!==s){ p=s; s=s.replace(PROFPRE_JS,"").trim(); }
+  return s.replace(/\s+/g," ").trim().replace(/^[ ,;.\-]+|[ ,;.\-]+$/g,"");
+}
+function validPname(n){
+  if(!(n.length>=5 && n.length<=60 && n.includes(" ") && /^[A-ZÀ-Ý]/.test(n) && !INST_JS.test(n))) return false;
+  if(LOC_JS.test(n)) return false;
+  return n.split(/\s+/).filter(w=>/^[A-ZÀ-Ý]/.test(w)).length >= 2;
+}
+function splitAuthorsSeg(seg){
+  seg = seg.split(INST_JS)[0];
+  return seg.split(/;|,|\s+e\s+|\s+E\s+|&/).map(p=>cleanAuthor(p)).filter(validPname);
+}
+function stripTitle(s){
+  s = s.replace(/\s+/g," ").trim(); let m;
+  while((m=EVENT_JS.exec(s))){ s=s.slice(m.index+m[0].length); EVENT_JS.lastIndex=0; }
+  return s.replace(/^(CENTRO|N[ÚU]CLEO|INSTITUTO|DEPARTAMENTO)\b.*?[–\-]\s*[A-ZÀ-Ý]{2,8}\s+/,"").replace(/^\W+/,"").trim().replace(/^[ .,;\-]+|[ .,;\-]+$/g,"");
+}
+function fixTitle(t){
+  if(t.length<=180) return t;
+  const toks=t.split(/\s+/), run=[];
+  for(let i=toks.length-1;i>=0;i--){ const b=toks[i].replace(/[^\wÀ-ÿ]/g,""); if(!b||b===b.toUpperCase()||/^[–\-&]$/.test(toks[i])) run.unshift(toks[i]); else break; }
+  const c=run.join(" ").replace(/\s+/g," ").trim().replace(/^[ \-–&]+/,"");
+  return c.length>=15?c:t.slice(-160).trim();
+}
+function titleNear(lines, ai, prefix){
+  let pre=stripTitle(prefix||"");
+  if(pre.length>=12 && !TLINE_NOISE_JS.test(pre)) return fixTitle(pre);
+  for(let j=ai-1;j>=0;j--){ const s=lines[j].trim(); if(s.length>=12 && !TLINE_NOISE_JS.test(s)) return fixTitle(stripTitle(s)); }
+  return fixTitle(pre);
+}
+function fixSwapsJS(authors){
+  const sc=(n,e)=>{ const lp=_norm(e).split("@")[0].replace(/[^a-z]/g,""); const tk=_norm(n).split(/\s+/).map(t=>t.replace(/[^a-z]/g,"")).filter(t=>t.length>=3); const ini=tk.map(t=>t[0]).join(""); let s=tk.filter(t=>lp.includes(t)).length; if(ini.length>=3&&lp.includes(ini))s+=2; return s; };
+  for(const a of authors){ if(!a.email) continue; const sa=sc(a.name,a.email);
+    let best=a, bs=sa; for(const b of authors){ const s=sc(b.name,a.email); if(s>bs){bs=s;best=b;} }
+    if(best!==a && bs>sa){ if(!best.email) best.email=a.email; a.email=""; } }
+}
+function pairWork(names, emails){
+  const authors = names.map(n=>({name:n,email:""}));
+  // casa por token do nome (heurística)
+  const used=new Set(); const cand=[];
+  authors.forEach((a,i)=>{ const tk=_norm(a.name).split(/\s+/).filter(t=>t.length>=3); const ini=_norm(a.name).split(/\s+/).filter(t=>t.length>=2).map(t=>t[0]).join("");
+    emails.forEach(e=>{ const lp=_norm(e).split("@")[0].replace(/[^a-z]/g,""); let s=tk.reduce((x,t)=>x+(lp.includes(t)?(t.length>=4?2:1):0),0); if(ini.length>=3&&lp.includes(ini))s+=4; if(s>0)cand.push([s,i,e]); }); });
+  cand.sort((a,b)=>b[0]-a[0]);
+  for(const [s,i,e] of cand){ if(!authors[i].email && !used.has(e)){ authors[i].email=e; used.add(e); } }
+  return authors;
+}
+function parseWork(lines){
+  const block = lines.join(" ").replace(/\s+/g," ").trim();
+  const emails = extractEmails(block);
+  // numerado (UFAC): autor¹ + rodapé¹ email
+  if(/\b\d\s*(bolsista|universidade|instituto|outras|pibic|centro|faculdade)/i.test(block)){
+    const nm=[...block.matchAll(NUM_NAME_JS)];
+    if(nm.length){
+      const first=nm[0][0]; let ti=0, pref=block.slice(0,nm[0].index);
+      for(let k=0;k<lines.length;k++){ if(lines[k].includes(first)){ ti=k; pref=lines[k].split(first)[0]; break; } }
+      const title=titleNear(lines,ti,pref);
+      const numEmail={}; let mm; const re=/(\d{1,2})\D{0,140}?([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;
+      while((mm=re.exec(block))){ if(!(mm[1] in numEmail)) numEmail[+mm[1]]=mm[2].toLowerCase(); }
+      const seen=new Set(), authors=[];
+      for(const m of nm){ const n=cleanAuthor(m[1]); if(validPname(n)&&!seen.has(n.toLowerCase())){ seen.add(n.toLowerCase()); authors.push({name:n,email:numEmail[+m[2]]||""}); } }
+      if(authors.length && title.length>10){ fixSwapsJS(authors); return {title, authors, all_emails:emails}; }
+    }
+  }
+  // estudante; prof
+  let ai=-1; for(let i=lines.length-1;i>=0;i--){ if(/;|\bprof|institui[çc]|curso de|universidade|@/i.test(lines[i])){ ai=i; break; } }
+  if(ai<0) return null;
+  const aline=lines[ai]; let names=[], pref=aline;
+  const am=aline.match(/(prof|institui|centro universit|curso de|universidade)/i);
+  if(am){
+    let head=aline.slice(0,am.index).replace(/[ ;,.]+$/,""); const tail=aline.slice(am.index);
+    const toks=head.split(/\s+/); let nt=[], used=0;
+    for(let i=toks.length-1;i>=0;i--){ const tt=toks[i].replace(/[.,;:]/g,""); if(!tt){used++;continue;} if(/^[A-ZÀ-Ý][a-zà-ÿ]/.test(tt)||CONN_JS.has(tt.toLowerCase())){ nt.unshift(tt); used++; if(nt.length>=6)break; } else break; }
+    while(nt.length&&CONN_JS.has(nt[0].toLowerCase()))nt.shift();
+    while(nt.length&&CONN_JS.has(nt[nt.length-1].toLowerCase()))nt.pop();
+    const student=cleanAuthor(nt.join(" "));
+    pref=used?toks.slice(0,toks.length-used).join(" "):head;
+    names=(validPname(student)?[student]:[]).concat(splitAuthorsSeg(tail));
+  } else names=splitAuthorsSeg(aline);
+  const title=titleNear(lines,ai,pref);
+  const seen=new Set(); names=names.filter(n=>{const k=n.toLowerCase(); if(seen.has(k))return false; seen.add(k); return true;});
+  if(!(title.length>10 && names.length)) return null;
+  const authors=pairWork(names, emails); fixSwapsJS(authors);
+  return {title, authors, all_emails:emails};
+}
+function separarAnais(text){
+  const pages = text.split("\f");
+  let works = [];
+  const AUTHOR_SIG=/;|\bprof|institui[çc]|@|universidade|centro universit|\b\d\s*(bolsista|universidade)/i;
+  const RES=/\bresumo\b|\babstract\b|\bresumen\b/i;
+  if(pages.length>=5){
+    for(const pg of pages){
+      const lines=pg.split("\n").map(l=>l.trim()).filter(Boolean);
+      const head=lines.slice(0,22);
+      let ri=head.findIndex(l=>RES.test(l));
+      if(ri<=0) continue;
+      const pre=head.slice(0,ri);
+      if(pre.some(l=>AUTHOR_SIG.test(l))) works.push(pre);
+    }
+  }
+  const recs=[]; const seenT=new Set();
+  for(const lines of works){
+    const r=parseWork(lines); if(!r) continue;
+    const k=_norm(r.title).slice(0,60); if(seenT.has(k)) continue; seenT.add(k);
+    recs.push(r);
+  }
+  return recs;
 }
 
 /* Extrai SÓ os nomes dos autores (3 prioridades) */
@@ -700,21 +905,21 @@ function exportCSV(records){
 
 function exportXLSX(records){
   if(!window.XLSX){ toast("Biblioteca Excel não carregou (offline?).", "err"); return; }
-  const aoa = [['Título','Nome do Autor','E-mail','Fonte'], ...flattenRows(records)];
+  // Excel LIMPO de 3 colunas: Título do Trabalho · Nome Completo · E-mail (1 linha por autor)
+  const aoa = [['Título do Trabalho','Nome Completo','E-mail']];
+  for(const r of records){
+    const auths = (r.authors&&r.authors.length)?r.authors:[{name:"",email:""}];
+    for(const a of auths) aoa.push([r.title||"(sem título)", a.name||"", a.email||""]);
+  }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{wch:50},{wch:28},{wch:30},{wch:22}];
-  // cabeçalho: negrito, fundo azul, texto branco
-  ['A1','B1','C1','D1'].forEach(c=>{
-    if(ws[c]) ws[c].s = {
-      font:{bold:true,color:{rgb:"FFFFFF"}},
-      fill:{fgColor:{rgb:"1A56A4"}},
-      alignment:{horizontal:"left"}
-    };
-  });
+  ws['!cols'] = [{wch:58},{wch:32},{wch:32}];
+  ['A1','B1','C1'].forEach(c=>{ if(ws[c]) ws[c].s = {
+    font:{bold:true,color:{rgb:"FFFFFF"}}, fill:{fgColor:{rgb:"1A56A4"}}, alignment:{horizontal:"left"} }; });
+  ws['!autofilter'] = {ref:"A1:C"+aoa.length};
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Publicações");
-  XLSX.writeFile(wb, "publicacoes.xlsx");
-  toast("Excel exportado.");
+  XLSX.utils.book_append_sheet(wb, ws, "Coleta");
+  XLSX.writeFile(wb, "coleta_articlelens.xlsx");
+  toast("Excel gerado (Título · Nome · E‑mail).");
 }
 
 function exportJSON(records){
@@ -791,40 +996,82 @@ function renderFileQueue(){
   });
 }
 
+function pipeStep(n, state){          // state: 'active' | 'done'
+  document.querySelectorAll("#pipe .step").forEach(el=>{
+    const s = +el.dataset.s;
+    el.classList.toggle("active", s===n && state==="active");
+    el.classList.toggle("done", s<n || (s===n && state==="done"));
+  });
+}
+function sepMode(){ const r=document.querySelector('input[name="sepmode"]:checked'); return r?r.value:"auto"; }
+
+async function collectFromPDF(file, mode){
+  const text = await extractTextFromPDF(file);
+  const prc = isProceedings(text);                       // {anais, n}
+  const usar = mode==="sim" || (mode==="auto" && prc.anais);
+  if(usar){
+    const works = separarAnais(text);                    // CORTA o anais em N trabalhos
+    if(works.length) return works.map(w=>({title:w.title, authors:w.authors,
+                                           all_emails:w.all_emails, source_file:file.name}));
+  }
+  const title = extractTitle(text, null);                // 1 PDF = 1 artigo
+  return [{ title, authors: await buildAuthors(text, null, title), source_file:file.name }];
+}
+
+function validarTudo(){               // ETAPA 3 — corrige e-mails (validador)
+  let corr=0, inv=0;
+  for(const r of allResults){
+    for(const a of (r.authors||[])){
+      a._corr=false; a._inv=false;
+      if(!a.email) continue;
+      const v = validarEmail(a.email);
+      if(v.acao==="CORRIGIDO"){ a.email=v.corrigido; a._corr=true; corr++; }
+      else if(v.acao==="INVALIDO"){ a._inv=true; inv++; }
+    }
+  }
+  return {corr, inv};
+}
+
 async function processBatch(){
   if(!fileQueue.length){ toast("Nenhum arquivo na fila.", "warn"); return; }
-  const total = fileQueue.length;
-  let done = 0;
+  const total = fileQueue.length; let done = 0;
   errorsThisRun = [];
-  setProgress(0, total, "Iniciando...");
-
+  const modo = sepMode();
+  // ETAPA 1+2 — Cortar (separador) + Coletar
+  pipeStep(1,"active");
   for(const item of fileQueue){
     item.status = "processando"; renderFileQueue();
     setProgress(done, total, item.file.name);
     try{
-      let rec;
+      let recs;
       if(fileExt(item.file.name)==="pdf"){
-        rec = await extractFromPDF(item.file);
+        recs = await collectFromPDF(item.file, modo);
       }else{
         const txt = await item.file.text();
-        rec = await extractFromHTML(txt, item.file.name);
+        recs = [await extractFromHTML(txt, item.file.name)];
       }
-      item.result = rec;
-      allResults.push(rec);
+      item.result = recs; allResults.push(...recs);
       item.status = "concluido";
     }catch(err){
-      item.status = "erro";
-      item.error = err.message;
+      item.status = "erro"; item.error = err.message;
       errorsThisRun.push({name:item.file.name, reason:err.message});
     }
-    done++;
-    setProgress(done, total, "");
-    renderFileQueue();
-    await new Promise(r=>setTimeout(r,0)); // libera a UI
+    done++; setProgress(done, total, ""); renderFileQueue();
+    await new Promise(r=>setTimeout(r,0));
   }
-  setStatus("Lote concluído: <b>"+(total-errorsThisRun.length)+"</b> de "+total+" processados.");
+  pipeStep(2,"done");
+  // ETAPA 3 — Validar e-mail
+  pipeStep(3,"active"); setStatus("Validando e‑mails…");
+  await new Promise(r=>setTimeout(r,30));
+  const v = validarTudo();
+  pipeStep(3,"done");
+  // ETAPA 4 — Conferir (tabela editável)
+  pipeStep(4,"active");
   renderResults();
-  toast("Lote concluído: "+(total-errorsThisRun.length)+"/"+total+" arquivos.");
+  const trab = allResults.length, falhas = errorsThisRun.length;
+  setStatus("Linha concluída: <b>"+trab+"</b> trabalhos · "+v.corr+" e‑mails corrigidos · "
+            +v.inv+" inválidos. Confira e edite abaixo, depois gere o Excel.");
+  toast("Pronto: "+trab+" trabalhos. "+v.corr+" e‑mails corrigidos.");
 }
 
 /* =========================================================================
@@ -875,29 +1122,37 @@ function renderResults(){
   document.getElementById("sAuthors").textContent = nAuthors;
   document.getElementById("sEmails").textContent = nEmails;
 
-  const rows = flattenRows(allResults);
-  const pages = Math.max(1, Math.ceil(rows.length/PAGE_SIZE));
+  // lista achatada COM mapeamento (ri=registro, ai=autor) p/ edição na etapa Conferir
+  const flat = [];
+  allResults.forEach((r,ri)=>{
+    const auths = (r.authors&&r.authors.length)?r.authors:[{name:"",email:""}];
+    auths.forEach((a,ai)=>flat.push({ri,ai,hasA:!!(r.authors&&r.authors.length),
+      title:r.title||"(sem título)", name:a.name||"", email:a.email||"",
+      src:r.source_file||"", corr:a._corr, inv:a._inv}));
+  });
+  const pages = Math.max(1, Math.ceil(flat.length/PAGE_SIZE));
   if(curPage>=pages) curPage = pages-1;
-  const slice = rows.slice(curPage*PAGE_SIZE, curPage*PAGE_SIZE+PAGE_SIZE);
+  const slice = flat.slice(curPage*PAGE_SIZE, curPage*PAGE_SIZE+PAGE_SIZE);
 
   const body = document.getElementById("resultBody");
   body.innerHTML = "";
   slice.forEach((r,i)=>{
-    const [title,name,email,src] = r;
+    const badge = r.corr ? '<span class="badge-corr" title="corrigido pelo validador">corrigido</span>'
+                 : r.inv ? '<span class="badge-inv" title="formato inválido — revise">inválido</span>' : '';
+    const cls = r.inv ? 'email einv' : (r.corr ? 'email ecorr' : 'email');
+    const editAttr = r.hasA ? ' contenteditable="true" data-ri="'+r.ri+'" data-ai="'+r.ai+'"' : '';
     const tr = document.createElement("tr");
     tr.innerHTML =
       '<td class="idx">'+(curPage*PAGE_SIZE+i+1)+'</td>'+
-      '<td>'+escapeHtml(title)+'</td>'+
-      '<td>'+escapeHtml(name||"—")+'</td>'+
-      '<td class="email">'+(email
-          ? '<a href="mailto:'+escapeHtml(email)+'">'+escapeHtml(email)+'</a>'
-          : '<span class="nd">n/d</span>')+'</td>'+
-      '<td>'+escapeHtml(src)+'</td>';
+      '<td>'+escapeHtml(r.title)+'</td>'+
+      '<td>'+escapeHtml(r.name||"—")+'</td>'+
+      '<td class="'+cls+'"'+editAttr+'>'+escapeHtml(r.email)+'</td>'+
+      '<td>'+badge+'</td>';
     body.appendChild(tr);
   });
 
   document.getElementById("pageInfo").textContent =
-    "Página "+(curPage+1)+" de "+pages+" — "+rows.length+" linhas";
+    "Página "+(curPage+1)+" de "+pages+" — "+flat.length+" linhas (e‑mail editável)";
   document.getElementById("prevPage").disabled = curPage<=0;
   document.getElementById("nextPage").disabled = curPage>=pages-1;
 
@@ -1025,9 +1280,20 @@ document.getElementById("clearResults").onclick = ()=>{
   setStatus("Resultados limpos.");
 };
 
-document.getElementById("expCsv").onclick  = ()=>allResults.length?exportCSV(allResults):toast("Nada para exportar.","warn");
-document.getElementById("expXlsx").onclick = ()=>allResults.length?exportXLSX(allResults):toast("Nada para exportar.","warn");
-document.getElementById("expJson").onclick = ()=>allResults.length?exportJSON(allResults):toast("Nada para exportar.","warn");
+function _exp(fn){ if(!allResults.length){ toast("Nada para exportar.","warn"); return; } pipeStep(5,"done"); fn(allResults); }
+document.getElementById("expCsv").onclick  = ()=>_exp(exportCSV);
+document.getElementById("expXlsx").onclick = ()=>_exp(exportXLSX);
+document.getElementById("expJson").onclick = ()=>_exp(exportJSON);
+
+/* Conferir: edição do e-mail na tabela atualiza o dado subjacente */
+document.getElementById("resultBody").addEventListener("input", e=>{
+  const td = e.target.closest('td[contenteditable]'); if(!td) return;
+  const ri=+td.dataset.ri, ai=+td.dataset.ai;
+  if(allResults[ri] && allResults[ri].authors[ai]){
+    allResults[ri].authors[ai].email = td.textContent.trim();
+    td.classList.remove("einv","ecorr");
+  }
+});
 
 /* =========================================================================
    Controles da IA opcional
