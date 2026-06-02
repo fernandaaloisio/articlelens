@@ -779,6 +779,68 @@ function separarAnais(text){
   return recs;
 }
 
+/* ÍNDICE/SUMÁRIO como gabarito de TÍTULOS (grátis, sem IA).
+   O sumário lista "Título … Autores …… página". Reconstruímos os títulos completos
+   (juntando as linhas entre os pontilhados) e casamos cada trabalho pelo 1º autor. */
+const _IDX_NOISE=/^(xv semana|anais d|sum[áa]rio|resumos|p[ôo]steres|\d+$|[ivx]{1,4}$|comit[êe]|express|apresenta)/i;
+const _IDX_SECT=/^(ci[êe]ncias?( (agr[áa]rias|da sa[úu]de|humanas|exatas|sociais|biol[óo]gicas))?|engenharias?|artigos completos|p[ôo]steres)\b[:\s]*/i;
+function _idxTok(s){ return new Set(_norm(s).replace(/\b(prof|dra?|me?|profa|esp|dr|junior)\b/g,"").split(/[^a-z]+/).filter(t=>t.length>=4)); }
+function parseIndice(text){
+  const lines=text.split(/\n|\f/).map(l=>l.trim()).filter(Boolean);
+  const E=[]; let buf=[];
+  for(const l of lines){
+    if(/\.{4,}/.test(l)){
+      const aut=l.replace(/\.{2,}.*$/,"").trim();
+      let title=buf.join(" ").replace(/\.{2,}.*$/,"").replace(_IDX_SECT,"").trim();
+      if(title.length>=10 && !_IDX_NOISE.test(title)) E.push({title, fname:_idxTok((aut.split(/;|,| e /)[0]||""))});
+      buf=[];
+    } else if(_IDX_NOISE.test(l)) buf=[]; else buf.push(l.replace(_IDX_SECT,""));
+  }
+  return E;
+}
+/* casa cada trabalho a uma entrada do índice (1‑para‑1, pelo 1º autor) e adota o título oficial */
+function aplicarIndice(works, text){
+  const idx=parseIndice(text);
+  if(idx.length<5) return {total:0, fixed:0};
+  const used=new Array(idx.length).fill(false); let fixed=0;
+  for(const w of works){
+    const wf=(w.authors&&w.authors[0])?_idxTok(w.authors[0].name):new Set();
+    if(!wf.size) continue;
+    let best=-1,bs=0;
+    idx.forEach((e,i)=>{ if(used[i])return; let sh=0; e.fname.forEach(t=>{if(wf.has(t))sh++;}); if(sh>bs){bs=sh;best=i;} });
+    if(best>=0 && bs>=2){ used[best]=true;
+      if(_norm(idx[best].title).slice(0,18)!==_norm(w.title||"").slice(0,18)){ w.title=idx[best].title; w._fromIndex=true; fixed++; } }
+  }
+  return {total:idx.length, fixed};
+}
+let lastIndice = null;   // {total, fixed} da última coleta de anais
+
+/* APRENDIZADO: lembra correções (título/e-mail) por trabalho p/ NÃO repetir o erro em re-execuções.
+   Guarda no navegador (localStorage). Alimentado pelas correções da IA e pelas edições manuais. */
+let _learn = {};
+try{ _learn = JSON.parse(localStorage.getItem("articlelens_learn")||"{}"); }catch(e){}
+function _saveLearn(){ try{ localStorage.setItem("articlelens_learn", JSON.stringify(_learn)); }catch(e){} }
+function _workKey(r){
+  const a=(r.authors&&r.authors[0]&&r.authors[0].name)||"";
+  return _norm((r.source_file||"")+"|"+a).slice(0,90);
+}
+function aprender(r){
+  const k=_workKey(r); if(k.length<3) return;
+  const e=_learn[k]||{};
+  if(r.title) e.title=r.title;
+  e.emails=e.emails||{}; (r.authors||[]).forEach(a=>{ if(a.email) e.emails[_norm(a.name)]=a.email; });
+  _learn[k]=e; _saveLearn();
+}
+function aplicarAprendizado(records){
+  let n=0;
+  for(const r of records){
+    const e=_learn[_workKey(r)]; if(!e) continue;
+    if(e.title && tituloSuspeito(r.title) && !tituloSuspeito(e.title)){ r.title=e.title; r._fromLearn=true; n++; }
+    if(e.emails) (r.authors||[]).forEach(a=>{ if(!a.email && e.emails[_norm(a.name)]) a.email=e.emails[_norm(a.name)]; });
+  }
+  return n;
+}
+
 /* Extrai SÓ os nomes dos autores (3 prioridades) */
 function extractAuthorNames(text, html){
   let names = [];
@@ -942,43 +1004,26 @@ async function aiChatAnthropic(messages){
 }
 function _aiJson(raw){ const m=raw.match(/\{[\s\S]*\}/); if(!m) throw new Error("resposta sem JSON"); return JSON.parse(m[0]); }
 
-/* IA decide o MODELO de coleta (1× por PDF, sobre uma amostra) */
-async function aiPlan(sampleText){
-  const sys = "Você é engenheiro de extração de dados de PDFs acadêmicos. Responda APENAS JSON.";
-  const user = "Analise o início do texto de um PDF e diga como coletar título/autores/e-mail.\n"
-    + 'Responda: {"cortar":true|false,"modelo":"anais-numerado|anais-aluno-prof|sbc-cbie|artigo-unico","motivo":"curto"}.\n'
-    + "cortar=true se for um ANAIS com VÁRIOS trabalhos no mesmo PDF; false se for um único artigo/paper.\n\nTEXTO:\n"
-    + sampleText.slice(0, 3500);
-  return _aiJson(await aiChat([{role:"system",content:sys},{role:"user",content:user}]));
-}
-
-/* É um caso difícil? título suspeito OU algum autor sem e-mail */
+/* Título suspeito = parece lista de autores / truncado / acento inicial perdido */
 function tituloSuspeito(t){
   t = (t||"").trim();
-  return t.length < 12               // curto demais
-    || /^[^A-Za-zÀ-ÿ0-9]/.test(t)    // começa com pontuação
-    || /^[a-zà-ÿ]/.test(t)           // começa minúsculo (acento inicial perdido)
-    || /\.{4,}/.test(t)              // pontilhado de sumário
-    || /;/.test(t)                   // tem ';' → provavelmente é lista de AUTORES, não título
-    || /\bprof[.ªºa]?\b/i.test(t);   // contém "Prof" → é linha de autor
+  return t.length < 12                                            // curto demais
+    || /^[^A-Za-zÀ-ÿ0-9]/.test(t)                                 // começa com pontuação
+    || /^[a-zà-ÿ]/.test(t)                                        // começa minúsculo (acento inicial perdido)
+    || /\.{4,}/.test(t)                                           // pontilhado de sumário
+    || /^[A-ZÀ-Ý][a-zà-ÿ]+(\s+[A-ZÀ-Ýa-zà-ÿ.]+){1,4}\s*;/.test(t) // começa "Nome Sobrenome;" = lista de autores
+    || /;\s*prof/i.test(t)                                        // "...; Prof" = linha de autor
+    || /\bprof[.ªºa]?\s+(dr|dra|m\.?\s?[ea])/i.test(t);           // "Prof. Dr."/"Prof. M.e" = autor
 }
-function casoDificil(r){
-  return tituloSuspeito(r.title) || (r.authors||[]).some(a=>!a.email);
-}
-/* IA corrige UM LOTE de casos difíceis usando o texto cru de cada trabalho.
-   Regra dura: NÃO inventar e-mail — só usar o que estiver no texto. */
+/* Caso difícil = SÓ título suspeito. E-mail fica por conta do validador (a IA não mexe em e-mail). */
+function casoDificil(r){ return tituloSuspeito(r.title); }
+/* IA corrige SÓ o TÍTULO (mínimo de tokens). Não toca em e-mail nem autores. */
 async function aiFixHard(grupo){
-  const sys = "Você corrige a extração de trabalhos acadêmicos a partir do TEXTO CRU de cada um. "
-    + "Para cada item devolva o título correto e cada autor com o e-mail que pertence a ELE. "
-    + "REGRA: nunca invente e-mail; se o texto não traz e-mail para um autor, deixe \"\". Responda APENAS JSON.";
-  const itens = grupo.map((r,i)=>({ i,
-    titulo_atual: r.title,
-    autores: (r.authors||[]).map(a=>a.name),
-    texto: (r._raw||"").slice(0,1800) }));
-  const user = 'Corrija cada item. Devolva {"itens":[{"i":idx,"title":"...",'
-    + '"authors":[{"name":"...","email":"..."}]}]}.\n'
-    + 'Associe e-mail ao autor certo pelo nome (não por ordem). Só e-mail presente no texto.\n\n'
-    + JSON.stringify(itens);
+  const sys = "Você corrige TÍTULOS de trabalhos acadêmicos a partir do texto cru. "
+    + "Às vezes o título veio trocado pela lista de autores ou truncado. Devolva só o título correto. Responda APENAS JSON.";
+  const itens = grupo.map((r,i)=>({ i, titulo_atual:r.title, texto:(r._raw||"").slice(0,1100) }));
+  const user = 'Para cada item devolva o título correto: {"itens":[{"i":idx,"title":"..."}]}. '
+    + 'Não inclua autores nem e-mail.\n\n' + JSON.stringify(itens);
   return _aiJson(await aiChat([{role:"system",content:sys},{role:"user",content:user}])).itens || [];
 }
 
@@ -1213,20 +1258,15 @@ function sepMode(){ const r=document.querySelector('input[name="sepmode"]:checke
 
 async function collectFromPDF(file, mode){
   const text = await extractTextFromPDF(file);
-  const prc = isProceedings(text);                       // {anais, n}
-  let usar = mode==="sim" || (mode==="auto" && prc.anais);
-  if(AI.enabled && AI.orchestrate && mode==="auto"){      // IA decide o corte (1× por PDF)
-    try{
-      const plan = await aiPlan(text);
-      usar = !!plan.cortar;
-      toast("🧠 IA ("+file.name.slice(0,18)+"…): "+(usar?"cortar anais":"1 artigo")
-            +(plan.modelo?" · "+plan.modelo:""), "");
-    }catch(e){ /* fallback heurístico já está em 'usar' */ }
-  }
+  const prc = isProceedings(text);                       // {anais, n} — decisão do corte (grátis)
+  const usar = mode==="sim" || (mode==="auto" && prc.anais);
   if(usar){
     const works = separarAnais(text);                    // CORTA o anais em N trabalhos
-    if(works.length) return works.map(w=>({title:w.title, authors:w.authors,
-                                           all_emails:w.all_emails, _raw:w._raw, source_file:file.name}));
+    if(works.length){
+      lastIndice = aplicarIndice(works, text);     // títulos oficiais do sumário (grátis)
+      return works.map(w=>({title:w.title, authors:w.authors, all_emails:w.all_emails,
+                            _raw:w._raw, _fromIndex:w._fromIndex, source_file:file.name}));
+    }
   }
   const title = extractTitle(text, null);                // 1 PDF = 1 artigo
   return [{ title, authors: await buildAuthors(text, null, title), source_file:file.name }];
@@ -1274,6 +1314,7 @@ async function processBatch(){
     await new Promise(r=>setTimeout(r,0));
   }
   pipeStep(2,"done");
+  aplicarAprendizado(allResults);          // reaplica correções já aprendidas (grátis, sempre)
   // ETAPA 3 — Validar e-mail
   pipeStep(3,"active"); setStatus("Validando e‑mails…");
   await new Promise(r=>setTimeout(r,30));
@@ -1281,54 +1322,41 @@ async function processBatch(){
   pipeStep(3,"done");
   // ETAPA 4 — Conferir (tabela editável) — IA confere uma amostra
   pipeStep(4,"active");
+  // ETAPA 4 — IA só nos TÍTULOS que ainda ficaram suspeitos DEPOIS do índice (mínimo de IA)
   if(AI.enabled && AI.orchestrate && allResults.length){
-    const dificeis = allResults.filter(casoDificil);
-    const LIM = 400;                                  // teto alto só anti-acidente (sem teto prático)
-    const alvos = dificeis.slice(0, LIM);
+    const alvos = allResults.filter(casoDificil).slice(0, 400);
     if(alvos.length){
-      setStatus("🧠 IA revisando "+alvos.length+" casos difíceis (e-mail em branco / título suspeito)…");
-      let nEmail=0, nTit=0, nFail=0, lastErr="";
+      setStatus("🧠 IA revisando "+alvos.length+" títulos ainda suspeitos…");
+      let nTit=0, nFail=0, lastErr="";
       const usdBefore = aiUsage.usd;
       const relatorio = [];
-      const CHUNK = 5;                                // lotes p/ baratear
+      const CHUNK = 6;
       for(let i=0;i<alvos.length;i+=CHUNK){
         const grupo = alvos.slice(i, i+CHUNK);
         let fixes = null;
         try{ fixes = await aiFixHard(grupo); }
         catch(e){ nFail++; lastErr=e.message;
           grupo.forEach(r=>relatorio.push({titulo:(r.title||"").slice(0,70), acao:"falhou", detalhe:e.message})); }
-        if(fixes){
-          grupo.forEach((r,gi)=>{
-            const f = fixes.find(x=>x.i===gi);
-            const antesT = r.title; const addEmails = [];
-            if(f){
-              if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)){ r.title=f.title; nTit++; }
-              if(Array.isArray(f.authors)) for(const fa of f.authors){
-                if(!fa.email || !/@/.test(fa.email)) continue;
-                const fn = _norm(fa.name||"").split(/\s+/).filter(Boolean);
-                const alvo = (r.authors||[]).find(a=>{ const an=_norm(a.name); return fn.some(t=>t.length>=3 && an.includes(t)); });
-                if(alvo && !alvo.email){ alvo.email = fa.email.toLowerCase(); nEmail++; addEmails.push(alvo.name+" → "+alvo.email); }
-              }
-            }
-            const mudouT = r.title !== antesT;
-            relatorio.push({ titulo:(r.title||"").slice(0,70),
-              acao: (mudouT||addEmails.length) ? "corrigido" : "sem mudança",
-              detalhe: [ mudouT?("título: «"+antesT.slice(0,30)+"» → «"+r.title.slice(0,30)+"»"):"",
-                         addEmails.length?("e‑mail: "+addEmails.join("; ")):"" ].filter(Boolean).join(" | ") || "nada a corrigir no texto" });
-          });
-        }
+        if(fixes) grupo.forEach((r,gi)=>{
+          const f = fixes.find(x=>x.i===gi); const antesT = r.title;
+          if(f && f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)){
+            r.title=f.title; nTit++; aprender(r); }      // memoriza a correção
+          relatorio.push({ titulo:(r.title||"").slice(0,70),
+            acao: r.title!==antesT ? "corrigido" : "sem mudança",
+            detalhe: r.title!==antesT ? ("título: «"+antesT.slice(0,30)+"» → «"+r.title.slice(0,30)+"»") : "nada a corrigir" });
+        });
         setProgress(Math.min(i+CHUNK,alvos.length), alvos.length, "IA");
       }
       const runCost = aiUsage.usd - usdBefore;
       lastRun = { works: allResults.length, cost: runCost,
                   perWork: allResults.length ? runCost/allResults.length : 0,
-                  hard: alvos.length, nEmail, nTit, nFail, report: relatorio };
+                  hard: alvos.length, nEmail:0, nTit, nFail, report: relatorio };
       if(nFail && nFail*CHUNK>=alvos.length)
-        toast("⚠️ IA NÃO funcionou em nenhum lote — erro: "+lastErr+". Verifique login/modelo/Render.","warn");
+        toast("⚠️ IA NÃO funcionou — erro: "+lastErr+". Verifique login/modelo/Render.","warn");
       else
-        toast("🧠 IA revisou "+alvos.length+" casos · "+nEmail+" e‑mails · "+nTit+" títulos · custo US$ "
-              +runCost.toFixed(4)+" (US$ "+lastRun.perWork.toFixed(4)+"/trabalho)"+(nFail?" · "+nFail+" lotes falharam":"")+".");
-    }
+        toast("🧠 IA: "+nTit+" títulos corrigidos em "+alvos.length+" · custo US$ "+runCost.toFixed(4)
+              +" (US$ "+lastRun.perWork.toFixed(4)+"/trabalho)"+(nFail?" · "+nFail+" falhas":"")+".");
+    } else lastRun = { works: allResults.length, cost:0, perWork:0, hard:0, nEmail:0, nTit:0, nFail:0, report:[] };
   }
   renderResults();
   const trab = allResults.length, falhas = errorsThisRun.length;
@@ -1622,6 +1650,7 @@ document.getElementById("resultBody").addEventListener("input", e=>{
   if(allResults[ri] && allResults[ri].authors[ai]){
     allResults[ri].authors[ai].email = td.textContent.trim();
     td.classList.remove("einv","ecorr");
+    aprender(allResults[ri]);              // edição manual vira aprendizado (não repete o erro)
   }
 });
 
