@@ -190,10 +190,17 @@
   <header class="top">
     <div class="logo">Article<span class="lens">Lens</span></div>
     <span class="badge">Extrator de Publicações</span>
+    <span class="badge" id="verBadge" title="Clique para ver as novidades" style="cursor:pointer;border-color:var(--accent);color:var(--accent)">v—</span>
     <div class="tagline">Coleta título, autores e e-mails de artigos acadêmicos (PDF / HTML).</div>
     <span class="badge" id="roleBadge" style="margin-left:auto">🔑 Admin</span>
     <button class="btn ghost" id="logoutBtn" type="button" style="flex:0 0 auto">Sair</button>
   </header>
+
+  <!-- Novidades / evolução -->
+  <details class="aibox" id="changelogBox">
+    <summary>📋 Novidades & versões <span class="aistate" id="verState"></span></summary>
+    <div class="aibody"><div id="changelogList" style="font-size:13px;line-height:1.6"></div></div>
+  </details>
 
   <!-- IA (Render) — no topo -->
   <details class="aibox" id="aiBox" open>
@@ -1817,6 +1824,32 @@ document.getElementById("logoutBtn").onclick = ()=>{
 const savedRole = localStorage.getItem(AUTH_KEY);
 if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLogin(); }
 else showLogin();
+
+/* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
+const VERSION = "2.0";
+const VERSION_DATE = "2026-06-02";
+const CHANGELOG = [
+  ["2.0","2026-06-02","Selo de versão + novidades. Validador exclui autores sem e-mail. Índice limpa cabeçalho de seção."],
+  ["1.9","2026-06-02","Índice (sumário) vira gabarito de títulos — grátis, sem IA. IA só em títulos suspeitos. E-mail só pelo validador. Aprendizado de correções (não repete erro). Removido código morto (aiPlan)."],
+  ["1.8","2026-06-02","Custo por trabalho + relatório da IA na aba Custos."],
+  ["1.7","2026-06-02","Corte junta bloco de autores multi-linha (título×autor) + ignora sumário."],
+  ["1.6","2026-06-02","IA cirúrgica: só casos difíceis, em lotes, casa e-mail por nome, não inventa."],
+  ["1.5","2026-06-02","Separador ancora na afiliação repetida + une com RESUMO (mais trabalhos)."],
+  ["1.4","2026-06-02","Fix anais: não confundir linha do e-mail com a dos autores."],
+  ["1.3","2026-06-02","Login admin/usuário + aba Custos (limite US$) — só admin."],
+  ["1.2","2026-06-02","Proxy no Render (chave Anthropic escondida) + login por token."],
+  ["1.1","2026-06-02","IA orquestra a esteira (Claude via OpenRouter/Anthropic)."],
+  ["1.0","2026-06-02","Linha de produção: cortar → coletar → validar → conferir → Excel."],
+];
+(function initVersion(){
+  const vb=document.getElementById("verBadge"); if(vb) vb.textContent="v"+VERSION;
+  const vs=document.getElementById("verState"); if(vs) vs.textContent="(atual: v"+VERSION+" · "+VERSION_DATE+")";
+  const list=document.getElementById("changelogList");
+  if(list) list.innerHTML = CHANGELOG.map((c,i)=>
+    "<div style='margin-bottom:6px'><b style='color:var(--accent)'>v"+c[0]+"</b> "
+    +"<span style='color:var(--muted)'>· "+c[1]+(i===0?" · <b>VOCÊ ESTÁ AQUI</b>":"")+"</span><br>"+escapeHtml(c[2])+"</div>").join("");
+  if(vb) vb.onclick=()=>{ const cl=document.getElementById("changelogBox"); if(cl){ cl.open=true; cl.scrollIntoView({behavior:"smooth",block:"center"}); } };
+})();
 </script>
 </body>
 </html>
