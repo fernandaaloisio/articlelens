@@ -671,7 +671,7 @@ function parseWork(lines){
       while((mm=re.exec(block))){ if(!(mm[1] in numEmail)) numEmail[+mm[1]]=mm[2].toLowerCase(); }
       const seen=new Set(), authors=[];
       for(const m of nm){ const n=cleanAuthor(m[1]); if(validPname(n)&&!seen.has(n.toLowerCase())){ seen.add(n.toLowerCase()); authors.push({name:n,email:numEmail[+m[2]]||""}); } }
-      if(authors.length && title.length>10){ fixSwapsJS(authors); return {title, authors, all_emails:emails}; }
+      if(authors.length && title.length>10){ fixSwapsJS(authors); return {title, authors, all_emails:emails, _raw:block}; }
     }
   }
   // estudante; prof — acha a linha dos AUTORES por sinal forte (;/Prof), NÃO a do e-mail.
@@ -698,7 +698,7 @@ function parseWork(lines){
   const seen=new Set(); names=names.filter(n=>{const k=n.toLowerCase(); if(seen.has(k))return false; seen.add(k); return true;});
   if(!(title.length>10 && names.length)) return null;
   const authors=pairWork(names, emails); fixSwapsJS(authors);
-  return {title, authors, all_emails:emails};
+  return {title, authors, all_emails:emails, _raw:block};
 }
 /* Detecta as linhas de AFILIAÇÃO que se repetem ~1× por trabalho (âncora robusta).
    Em muitos anais cada trabalho repete a mesma instituição do evento; isso delimita
@@ -910,14 +910,28 @@ async function aiPlan(sampleText){
   return _aiJson(await aiChat([{role:"system",content:sys},{role:"user",content:user}]));
 }
 
-/* IA confere uma AMOSTRA dos registros coletados e devolve correções */
-async function aiReview(sample){
-  const sys = "Você confere extrações de trabalhos acadêmicos (título, nomes, e-mails). "
-    + "Aponte e corrija quando o título for na verdade um nome de autor, nomes truncados, ou e-mail no autor errado. "
-    + "Responda APENAS JSON.";
-  const user = 'Para cada item, devolva {"i":idx,"ok":bool,"title":"corrigido ou igual",'
-    + '"authors":[{"name":"...","email":"..."}]}. Mantenha e-mails que já batem; não invente e-mail.\n'
-    + 'Formato: {"itens":[...]}.\n\nITENS:\n' + JSON.stringify(sample);
+/* É um caso difícil? título suspeito OU algum autor sem e-mail */
+function tituloSuspeito(t){
+  t = (t||"").trim();
+  return t.length < 12 || /^[^A-Za-zÀ-ÿ0-9]/.test(t) || /^[a-zà-ÿ]/.test(t) || /\.{4,}|; *prof/i.test(t);
+}
+function casoDificil(r){
+  return tituloSuspeito(r.title) || (r.authors||[]).some(a=>!a.email);
+}
+/* IA corrige UM LOTE de casos difíceis usando o texto cru de cada trabalho.
+   Regra dura: NÃO inventar e-mail — só usar o que estiver no texto. */
+async function aiFixHard(grupo){
+  const sys = "Você corrige a extração de trabalhos acadêmicos a partir do TEXTO CRU de cada um. "
+    + "Para cada item devolva o título correto e cada autor com o e-mail que pertence a ELE. "
+    + "REGRA: nunca invente e-mail; se o texto não traz e-mail para um autor, deixe \"\". Responda APENAS JSON.";
+  const itens = grupo.map((r,i)=>({ i,
+    titulo_atual: r.title,
+    autores: (r.authors||[]).map(a=>a.name),
+    texto: (r._raw||"").slice(0,1400) }));
+  const user = 'Corrija cada item. Devolva {"itens":[{"i":idx,"title":"...",'
+    + '"authors":[{"name":"...","email":"..."}]}]}.\n'
+    + 'Associe e-mail ao autor certo pelo nome (não por ordem). Só e-mail presente no texto.\n\n'
+    + JSON.stringify(itens);
   return _aiJson(await aiChat([{role:"system",content:sys},{role:"user",content:user}])).itens || [];
 }
 
@@ -1165,7 +1179,7 @@ async function collectFromPDF(file, mode){
   if(usar){
     const works = separarAnais(text);                    // CORTA o anais em N trabalhos
     if(works.length) return works.map(w=>({title:w.title, authors:w.authors,
-                                           all_emails:w.all_emails, source_file:file.name}));
+                                           all_emails:w.all_emails, _raw:w._raw, source_file:file.name}));
   }
   const title = extractTitle(text, null);                // 1 PDF = 1 artigo
   return [{ title, authors: await buildAuthors(text, null, title), source_file:file.name }];
@@ -1221,23 +1235,33 @@ async function processBatch(){
   // ETAPA 4 — Conferir (tabela editável) — IA confere uma amostra
   pipeStep(4,"active");
   if(AI.enabled && AI.orchestrate && allResults.length){
-    setStatus("🧠 IA conferindo amostra…");
-    try{
-      const n = Math.min(8, allResults.length);
-      const sample = allResults.slice(0,n).map((r,i)=>({i, title:r.title,
-        authors:(r.authors||[]).map(a=>({name:a.name, email:a.email||""}))}));
-      const fixes = await aiReview(sample);
-      let nc=0;
-      for(const f of fixes){
-        const r = allResults[f.i]; if(!r) continue;
-        if(f.title && f.title.length>5 && f.title!==r.title){ r.title=f.title; nc++; }
-        if(Array.isArray(f.authors)) f.authors.forEach((a,ai)=>{
-          if(r.authors[ai]){ if(a.name) r.authors[ai].name=a.name;
-                             if(a.email!==undefined) r.authors[ai].email=a.email; }
-        });
+    const dificeis = allResults.filter(casoDificil);
+    const LIM = 60;                                   // teto de segurança de custo
+    const alvos = dificeis.slice(0, LIM);
+    if(alvos.length){
+      setStatus("🧠 IA revisando "+alvos.length+" casos difíceis (e-mail em branco / título suspeito)…");
+      let nEmail=0, nTit=0;
+      const CHUNK = 5;                                // lotes p/ baratear
+      for(let i=0;i<alvos.length;i+=CHUNK){
+        const grupo = alvos.slice(i, i+CHUNK);
+        try{
+          const fixes = await aiFixHard(grupo);
+          for(const f of fixes){
+            const r = grupo[f.i]; if(!r) continue;
+            if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)){ r.title=f.title; nTit++; }
+            if(Array.isArray(f.authors)) for(const fa of f.authors){
+              if(!fa.email || !/@/.test(fa.email)) continue;
+              const fn = _norm(fa.name||"").split(/\s+/).filter(Boolean);
+              const alvo = (r.authors||[]).find(a=>{
+                const an=_norm(a.name); return fn.some(t=>t.length>=3 && an.includes(t)); });
+              if(alvo && !alvo.email){ alvo.email = fa.email.toLowerCase(); nEmail++; }
+            }
+          }
+        }catch(e){ /* segue para o próximo lote */ }
+        setProgress(Math.min(i+CHUNK,alvos.length), alvos.length, "IA");
       }
-      toast("🧠 IA conferiu "+n+" trabalhos"+(nc?" · "+nc+" títulos ajustados":"")+".","");
-    }catch(e){ toast("IA conferência pulada ("+e.message+").","warn"); }
+      toast("🧠 IA revisou "+alvos.length+" casos · "+nEmail+" e‑mails recuperados"+(nTit?" · "+nTit+" títulos":"")+".");
+    }
   }
   renderResults();
   const trab = allResults.length, falhas = errorsThisRun.length;
