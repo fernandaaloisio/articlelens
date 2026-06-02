@@ -1461,8 +1461,27 @@ document.getElementById("aiTest").onclick = async ()=>{
     msg.innerHTML = '<span style="color:var(--accent)">✓ conectado</span> — resposta: '+escapeHtml((out||"").slice(0,40))
                   + " <small style='color:var(--muted)'>"+diag+"</small>";
   }catch(e){
+    let extra = "";
+    // Se o modelo não existe na conta, lista os modelos disponíveis da Anthropic
+    if(/not_found|model:/i.test(e.message) && /api\.anthropic\.com/.test(AI.baseURL)){
+      try{
+        const u = AI.baseURL.replace(/\/+$/,"").replace(/\/v1$/,"")+"/v1/models";
+        const rr = await fetch(u, { headers:{ "x-api-key":AI.apiKey,
+          "anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true" }});
+        const dd = await rr.json();
+        const ids = (dd.data||[]).map(m=>m.id);
+        if(ids.length){
+          extra = "<br><b>Modelos disponíveis na sua conta:</b><br>"
+                + ids.map(id=>'<code style="cursor:pointer;text-decoration:underline" '
+                    +'onclick="document.getElementById(\'aiModel\').value=this.textContent;'
+                    +'document.getElementById(\'aiSave\').click();document.getElementById(\'aiTest\').click();">'
+                    +escapeHtml(id)+'</code>').join("<br>")
+                + "<br><small>(clique em um nome para usá-lo e testar)</small>";
+        }
+      }catch(_){}
+    }
     msg.innerHTML = '<span style="color:var(--danger)">✗ falhou</span>: '+escapeHtml(e.message)
-                  + " <small style='color:var(--muted)'>"+diag+"</small>";
+                  + " <small style='color:var(--muted)'>"+diag+"</small>" + extra;
   }
 };
 
