@@ -374,6 +374,14 @@
       <div class="stat"><div class="num" id="sEmails">0</div><div class="lbl">E-mails encontrados</div></div>
     </div>
 
+    <details id="coberturaBox" style="display:none;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:14px">
+      <summary style="cursor:pointer;font-weight:600">📊 Cobertura <span id="coberturaResumo" style="color:var(--muted);font-weight:400"></span></summary>
+      <div id="coberturaBody" style="margin-top:10px;font-size:13px"></div>
+      <div class="btn-bar" style="margin-top:8px">
+        <button class="btn ghost" id="coberturaDl">⬇️ Baixar removidos sem e‑mail (.csv)</button>
+      </div>
+    </details>
+
     <div class="table-wrap">
       <table>
         <thead><tr><th>#</th><th>Título do Trabalho</th><th>Nome Completo</th><th>E-mail (editável)</th><th>Status</th></tr></thead>
@@ -1305,18 +1313,20 @@ function validarTudo(){               // ETAPA 3 — corrige e-mails (validador)
   }
   return {corr, inv};
 }
+let lastRemovidos = [];   // trabalhos removidos por não ter e-mail (transparência)
 /* No fim do validador: descarta autores SEM e-mail (sem utilidade) e trabalhos que ficaram vazios. */
 function excluirSemEmail(){
-  let autRem=0, trabRem=0;
+  let autRem=0;
   for(const r of allResults){
     const antes=(r.authors||[]).length;
     r.authors=(r.authors||[]).filter(a=>a.email && a.email.trim() && !a._inv);
     autRem += antes - r.authors.length;
   }
   const fica = allResults.filter(r=>(r.authors||[]).length);
-  trabRem = allResults.length - fica.length;
+  lastRemovidos = allResults.filter(r=>!(r.authors||[]).length)
+                            .map(r=>({title:r.title||"(sem título)", source:r.source_file||""}));
   allResults.length=0; allResults.push(...fica);
-  return {autRem, trabRem};
+  return {autRem, trabRem: lastRemovidos.length};
 }
 
 async function processBatch(){
@@ -1407,11 +1417,13 @@ async function processBatch(){
   }
   const ex = excluirSemEmail();          // ETAPA final do validador: remove autores sem e-mail
   renderResults();
+  renderCobertura(ex);                   // transparência: o que entrou e o que saiu (e por quê)
   const trab = allResults.length;
   const idxMsg = lastIndice ? " · índice esperava "+lastIndice.total : "";
-  setStatus("Linha concluída: <b>"+trab+"</b> trabalhos"+idxMsg+" · "+v.corr+" e‑mails corrigidos · "
-            +ex.autRem+" autores sem e‑mail removidos. Confira e edite abaixo, depois gere o Excel.");
-  toast("Pronto: "+trab+" trabalhos · "+ex.autRem+" autores sem e‑mail removidos.");
+  setStatus("Linha concluída: <b>"+trab+"</b> trabalhos com e‑mail"+idxMsg+" · "+ex.trabRem
+            +" trabalhos removidos (sem e‑mail) · "+ex.autRem+" autores sem e‑mail removidos. "
+            +"Veja a <b>Cobertura</b> abaixo. Depois gere o Excel.");
+  toast("Pronto: "+trab+" trabalhos · "+ex.trabRem+" removidos sem e‑mail (veja Cobertura).");
 }
 
 /* =========================================================================
@@ -1582,6 +1594,32 @@ function renderResults(){
 }
 document.getElementById("prevPage").onclick = ()=>{ if(curPage>0){curPage--;renderResults();} };
 document.getElementById("nextPage").onclick = ()=>{ curPage++; renderResults(); };
+
+/* Painel de Cobertura — o que entrou e o que saiu (e por quê) */
+function renderCobertura(ex){
+  const box=document.getElementById("coberturaBox"); if(!box) return;
+  box.style.display="";
+  const idxN = lastIndice ? lastIndice.total : null;
+  document.getElementById("coberturaResumo").textContent =
+    "· "+allResults.length+" com e‑mail · "+ex.trabRem+" removidos (sem e‑mail)"
+    + (idxN!=null ? " · índice lista "+idxN : "");
+  let html = "<b>"+allResults.length+"</b> trabalhos coletados (todos com pelo menos 1 e‑mail).";
+  if(idxN!=null) html += " O sumário do PDF lista <b>"+idxN+"</b> trabalhos.";
+  if(ex.trabRem){
+    html += "<br><br><b style='color:var(--warn)'>"+ex.trabRem+" trabalhos removidos por NÃO ter e‑mail</b> "
+         + "(conforme sua regra). Eles existem no PDF, mas nenhum autor tinha e‑mail no texto:<ul style='margin:6px 0 0 18px'>"
+         + lastRemovidos.slice(0,40).map(r=>"<li>"+escapeHtml(r.title.slice(0,80))+"</li>").join("")
+         + (lastRemovidos.length>40?"<li>…+"+(lastRemovidos.length-40)+"</li>":"") + "</ul>";
+  } else html += "<br>Nenhum trabalho removido por falta de e‑mail.";
+  document.getElementById("coberturaBody").innerHTML = html;
+}
+document.getElementById("coberturaDl").onclick = ()=>{
+  if(!lastRemovidos.length){ toast("Nenhum trabalho removido nesta coleta.","warn"); return; }
+  const esc=s=>'"'+String(s==null?"":s).replace(/"/g,'""')+'"';
+  const csv="﻿"+["Titulo removido (sem e-mail)","Fonte"].map(esc).join(",")+"\n"
+    +lastRemovidos.map(r=>[r.title,r.source].map(esc).join(",")).join("\n");
+  download(new Blob([csv],{type:"text/csv;charset=utf-8;"}), "removidos_sem_email.csv");
+};
 
 /* =========================================================================
    Aba Manual
@@ -1860,9 +1898,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "2.3";
+const VERSION = "2.4";
 const VERSION_DATE = "2026-06-02";
 const CHANGELOG = [
+  ["2.4","2026-06-02","Painel de COBERTURA: mostra quantos foram coletados, quantos o índice lista e a LISTA dos trabalhos removidos por não ter e-mail (com download). Fim da dúvida de «faltam artigos»."],
   ["2.3","2026-06-02","Custos salvos no navegador (não zeram ao fechar). IA só nos artigos SEM e-mail coletado (menos gasto). Título limpa lixo no fim (ex.: «...convencionais a a»)."],
   ["2.2","2026-06-02","IA confere o DONO do e-mail nos casos incertos (chute do 1º autor ou e-mail não pareado), só usando e-mail presente no texto. Mais segurança sem gastar muito."],
   ["2.1","2026-06-02","E-mail-apelido recuperado: 1 e-mail sem par vai pro 1º autor (aluno). Recupera trabalhos que sumiam por causa da exclusão."],
