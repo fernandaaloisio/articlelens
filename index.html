@@ -674,10 +674,13 @@ function parseWork(lines){
       if(authors.length && title.length>10){ fixSwapsJS(authors); return {title, authors, all_emails:emails}; }
     }
   }
-  // estudante; prof — prioriza linha com sinal FORTE de autor (;/Prof/@), não a da instituição
+  // estudante; prof — acha a linha dos AUTORES por sinal forte (;/Prof), NÃO a do e-mail.
+  // O @ não entra aqui senão a linha do e-mail (que fica sozinha abaixo dos autores) era
+  // confundida com a linha de autores → trabalho quebrava e o e-mail se perdia.
   let ai=-1;
-  for(let i=lines.length-1;i>=0;i--){ if(/;|\bprof\b|@/i.test(lines[i])){ ai=i; break; } }
+  for(let i=lines.length-1;i>=0;i--){ if(/;|\bprof\b/i.test(lines[i])){ ai=i; break; } }
   if(ai<0) for(let i=lines.length-1;i>=0;i--){ if(/institui[çc]|curso de|universidade/i.test(lines[i])){ ai=i; break; } }
+  if(ai<0) for(let i=lines.length-1;i>=0;i--){ if(/@/.test(lines[i])){ ai=i; break; } }  // layout "Nome E-mail:" (último recurso)
   if(ai<0) return null;
   const aline=lines[ai]; let names=[], pref=aline;
   const am=aline.match(/(prof|institui|centro universit|curso de|universidade)/i);
