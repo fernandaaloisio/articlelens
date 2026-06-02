@@ -700,26 +700,53 @@ function parseWork(lines){
   const authors=pairWork(names, emails); fixSwapsJS(authors);
   return {title, authors, all_emails:emails};
 }
+/* Detecta as linhas de AFILIAÇÃO que se repetem ~1× por trabalho (âncora robusta).
+   Em muitos anais cada trabalho repete a mesma instituição do evento; isso delimita
+   os trabalhos mesmo quando a palavra "RESUMO" não aparece. */
+function detectAffiliations(lines){
+  const INST=/(universit|institut|faculdade|centro de ensino|funda[çc][ãa]o)/i;
+  const HDRNOISE=/anais|semana de|mostra de pesquisa|\b\d{4}\b|sum[áa]rio|congresso|simp[óo]sio|revista|peri[óo]dico/i;
+  const freq={};
+  for(const l of lines){
+    const n=_norm(l).replace(/[\s.,\-]+$/,"");
+    if(n.length<12 || n.length>90) continue;
+    if(!INST.test(l) || HDRNOISE.test(l)) continue;
+    freq[n]=(freq[n]||0)+1;
+  }
+  return new Set(Object.keys(freq).filter(k=>freq[k]>=4));   // repete ≥4× = afiliação do evento
+}
 function separarAnais(text){
+  const recs=[]; const seenT=new Set();
+  const add=r=>{ if(!r) return; const k=_norm(r.title).slice(0,60);
+    if(k.length<8 || seenT.has(k)) return; seenT.add(k); recs.push(r); };
+  const lines=text.split(/\n|\f/).map(l=>l.trim()).filter(Boolean);
+
+  // 1) Ancorado na afiliação repetida (pega trabalhos sem "RESUMO")
+  const affs=detectAffiliations(lines);
+  if(affs.size){
+    for(let i=1;i<lines.length;i++){
+      const n=_norm(lines[i]).replace(/[\s.,\-]+$/,"");
+      if(!affs.has(n)) continue;
+      let hasAuthor=false;                       // exige linha de autores logo acima
+      for(let k=1;k<=2;k++){ if(lines[i-k] && /;|\bprof/i.test(lines[i-k])){ hasAuthor=true; break; } }
+      if(!hasAuthor) continue;
+      add(parseWork(lines.slice(Math.max(0,i-5), i+3)));
+    }
+  }
+
+  // 2) Método por página/RESUMO (une, pegando o que faltar)
   const pages = text.split("\f");
-  let works = [];
   const AUTHOR_SIG=/;|\bprof|institui[çc]|@|universidade|centro universit|\b\d\s*(bolsista|universidade)/i;
   const RES=/\bresumo\b|\babstract\b|\bresumen\b/i;
   if(pages.length>=5){
     for(const pg of pages){
-      const lines=pg.split("\n").map(l=>l.trim()).filter(Boolean);
-      const head=lines.slice(0,22);
-      let ri=head.findIndex(l=>RES.test(l));
+      const plines=pg.split("\n").map(l=>l.trim()).filter(Boolean);
+      const head=plines.slice(0,22);
+      const ri=head.findIndex(l=>RES.test(l));
       if(ri<=0) continue;
       const pre=head.slice(0,ri);
-      if(pre.some(l=>AUTHOR_SIG.test(l))) works.push(pre);
+      if(pre.some(l=>AUTHOR_SIG.test(l))) add(parseWork(pre));
     }
-  }
-  const recs=[]; const seenT=new Set();
-  for(const lines of works){
-    const r=parseWork(lines); if(!r) continue;
-    const k=_norm(r.title).slice(0,60); if(seenT.has(k)) continue; seenT.add(k);
-    recs.push(r);
   }
   return recs;
 }
