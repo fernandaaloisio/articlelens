@@ -685,6 +685,7 @@ function pairWork(names, emails){
 }
 function parseWork(lines){
   const block = lines.join(" ").replace(/\s+/g," ").trim();
+  if(lines.some(l=>/\.{4,}/.test(l))) return null;   // pontilhado = janela do SUMÁRIO (índice), não é trabalho
   const emails = extractEmails(block);
   // numerado (UFAC): autor¹ + rodapé¹ email
   if(/\b\d\s*(bolsista|universidade|instituto|outras|pibic|centro|faculdade)/i.test(block)){
@@ -708,19 +709,20 @@ function parseWork(lines){
   if(ai<0) for(let i=lines.length-1;i>=0;i--){ if(/institui[çc]|curso de|universidade/i.test(lines[i])){ ai=i; break; } }
   if(ai<0) for(let i=lines.length-1;i>=0;i--){ if(/@/.test(lines[i])){ ai=i; break; } }  // layout "Nome E-mail:" (último recurso)
   if(ai<0) return null;
-  const aline=lines[ai]; let names=[], pref=aline;
-  const am=aline.match(/(prof|institui|centro universit|curso de|universidade)/i);
-  if(am){
-    let head=aline.slice(0,am.index).replace(/[ ;,.]+$/,""); const tail=aline.slice(am.index);
-    const toks=head.split(/\s+/); let nt=[], used=0;
-    for(let i=toks.length-1;i>=0;i--){ const tt=toks[i].replace(/[.,;:]/g,""); if(!tt){used++;continue;} if(/^[A-ZÀ-Ý][a-zà-ÿ]/.test(tt)||CONN_JS.has(tt.toLowerCase())){ nt.unshift(tt); used++; if(nt.length>=6)break; } else break; }
-    while(nt.length&&CONN_JS.has(nt[0].toLowerCase()))nt.shift();
-    while(nt.length&&CONN_JS.has(nt[nt.length-1].toLowerCase()))nt.pop();
-    const student=cleanAuthor(nt.join(" "));
-    pref=used?toks.slice(0,toks.length-used).join(" "):head;
-    names=(validPname(student)?[student]:[]).concat(splitAuthorsSeg(tail));
-  } else names=splitAuthorsSeg(aline);
-  const title=titleNear(lines,ai,pref);
+  // a lista de autores costuma QUEBRAR em várias linhas (alunos numa linha, orientador na
+  // outra). Estende o bloco para CIMA enquanto a linha parecer de autores (;/Prof), para não
+  // confundir a linha dos alunos com o título.
+  const ehAutorLine = s => {
+    s=(s||"").trim(); if(!s) return false;
+    if(/(centro universit|universidade|faculdade|instituto federal|instituto de)/i.test(s)) return false;
+    if(TLINE_NOISE_JS.test(s)) return false;
+    return (/;/.test(s) || /\bprof[.ªºa]?\b/i.test(s)) && splitAuthorsSeg(s).length>=1;
+  };
+  let topA = ai;
+  while(topA-1>=0 && ehAutorLine(lines[topA-1])) topA--;
+  let names=[];
+  for(let i=topA;i<=ai;i++) names = names.concat(splitAuthorsSeg(lines[i]));
+  const title=titleNear(lines, topA, "");          // título fica ACIMA do bloco de autores
   const seen=new Set(); names=names.filter(n=>{const k=n.toLowerCase(); if(seen.has(k))return false; seen.add(k); return true;});
   if(!(title.length>10 && names.length)) return null;
   const authors=pairWork(names, emails); fixSwapsJS(authors);
@@ -972,7 +974,7 @@ async function aiFixHard(grupo){
   const itens = grupo.map((r,i)=>({ i,
     titulo_atual: r.title,
     autores: (r.authors||[]).map(a=>a.name),
-    texto: (r._raw||"").slice(0,1400) }));
+    texto: (r._raw||"").slice(0,1800) }));
   const user = 'Corrija cada item. Devolva {"itens":[{"i":idx,"title":"...",'
     + '"authors":[{"name":"...","email":"..."}]}]}.\n'
     + 'Associe e-mail ao autor certo pelo nome (não por ordem). Só e-mail presente no texto.\n\n'
@@ -1281,7 +1283,7 @@ async function processBatch(){
   pipeStep(4,"active");
   if(AI.enabled && AI.orchestrate && allResults.length){
     const dificeis = allResults.filter(casoDificil);
-    const LIM = 60;                                   // teto de segurança de custo
+    const LIM = 400;                                  // teto alto só anti-acidente (sem teto prático)
     const alvos = dificeis.slice(0, LIM);
     if(alvos.length){
       setStatus("🧠 IA revisando "+alvos.length+" casos difíceis (e-mail em branco / título suspeito)…");
