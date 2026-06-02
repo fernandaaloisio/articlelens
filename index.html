@@ -652,6 +652,8 @@ function stripTitle(s){
   return s.replace(/^(CENTRO|N[ÚU]CLEO|INSTITUTO|DEPARTAMENTO)\b.*?[–\-]\s*[A-ZÀ-Ý]{2,8}\s+/,"").replace(/^\W+/,"").trim().replace(/^[ .,;\-]+|[ .,;\-]+$/g,"");
 }
 function fixTitle(t){
+  // remove "lixo" no fim: letras soltas (ex.: "...convencionais a a") deixadas pelo leitor de PDF
+  t = t.replace(/(?:\s+[a-zà-ÿ](?=\s|$)){1,4}\s*$/i, "").trim();
   if(t.length<=180) return t;
   const toks=t.split(/\s+/), run=[];
   for(let i=toks.length-1;i>=0;i--){ const b=toks[i].replace(/[^\wÀ-ÿ]/g,""); if(!b||b===b.toUpperCase()||/^[–\-&]$/.test(toks[i])) run.unshift(toks[i]); else break; }
@@ -960,15 +962,17 @@ const AI = { enabled:false, orchestrate:false, baseURL:"", model:"claude-3-5-son
 /* Rastreio de custo no próprio app (a partir dos tokens devolvidos pela Claude) */
 const AIPRICES = { "claude-3-5-sonnet":[3,15],"claude-3-7-sonnet":[3,15],"claude-3-5-haiku":[0.8,4],"claude-3-opus":[15,75],"claude-3-haiku":[0.25,1.25] };
 function aiPriceFor(m){ const k=Object.keys(AIPRICES).find(k=>(m||"").includes(k)); return AIPRICES[k]||AIPRICES["claude-3-5-sonnet"]; }
-let aiUsage = { in:0, out:0, usd:0, calls:0 };
+let aiUsage = (()=>{ try{ return JSON.parse(localStorage.getItem("articlelens_usage")) || {in:0,out:0,usd:0,calls:0}; }catch(e){ return {in:0,out:0,usd:0,calls:0}; } })();
 function trackAIUsage(data){
   const u=data&&data.usage||{};
   const i=(u.input_tokens!=null?u.input_tokens:u.prompt_tokens)||0;
   const o=(u.output_tokens!=null?u.output_tokens:u.completion_tokens)||0;
   const [pin,pout]=aiPriceFor(AI.model);
   aiUsage.in+=i; aiUsage.out+=o; aiUsage.usd+= i/1e6*pin + o/1e6*pout; aiUsage.calls++;
+  try{ localStorage.setItem("articlelens_usage", JSON.stringify(aiUsage)); }catch(e){}   // salva (persiste ao fechar)
 }
-let lastRun = null;     // {works, cost, perWork, report:[...]}
+let lastRun = (()=>{ try{ return JSON.parse(localStorage.getItem("articlelens_lastrun")) || null; }catch(e){ return null; } })();
+function _saveRun(){ try{ localStorage.setItem("articlelens_lastrun", JSON.stringify(lastRun)); }catch(e){} }
 function loadAIConfig(){
   try{ Object.assign(AI, JSON.parse(localStorage.getItem("articlelens_ai")||"{}")); }catch(e){}
 }
@@ -1024,13 +1028,13 @@ function tituloSuspeito(t){
     || /;\s*prof/i.test(t)                                        // "...; Prof" = linha de autor
     || /\bprof[.ªºa]?\s+(dr|dra|m\.?\s?[ea])/i.test(t);           // "Prof. Dr."/"Prof. M.e" = autor
 }
-/* E-mail incerto = há @ no texto E (algum autor sem e-mail OU foi um chute do 1º autor). */
-function _emailIncerto(r){
-  if(!/@/.test(r._raw||"")) return false;            // sem e-mail no texto, IA não tem o que achar
-  return (r.authors||[]).some(a=>!a.email || a._guess);
+/* E-mail NÃO coletado = NENHUM autor tem e-mail, mas há @ no texto (existe, só não pareou).
+   Só esses vão pra IA (não os chutes que já têm e-mail) — economiza muito. */
+function _semEmailColetado(r){
+  return /@/.test(r._raw||"") && !(r.authors||[]).some(a=>a.email);
 }
-/* Caso para a IA = título suspeito OU e-mail incerto (chute / não pareado). */
-function casoDificil(r){ return tituloSuspeito(r.title) || _emailIncerto(r); }
+/* Caso para a IA = título suspeito OU artigo sem e-mail coletado (mas com @ no texto). */
+function casoDificil(r){ return tituloSuspeito(r.title) || _semEmailColetado(r); }
 /* IA corrige TÍTULO e confere o DONO do e-mail, usando o texto cru. NÃO inventa e-mail. */
 async function aiFixHard(grupo){
   const sys = "Você confere extrações de trabalhos acadêmicos pelo TEXTO CRU. Corrija o título (às vezes "
@@ -1399,6 +1403,7 @@ async function processBatch(){
         toast("🧠 IA: "+nTit+" títulos · "+nEmail+" donos de e‑mail conferidos em "+alvos.length+" · US$ "
               +runCost.toFixed(4)+" (US$ "+lastRun.perWork.toFixed(4)+"/trab)"+(nFail?" · "+nFail+" falhas":"")+".");
     } else lastRun = { works: allResults.length, cost:0, perWork:0, hard:0, nEmail:0, nTit:0, nFail:0, report:[] };
+    _saveRun();
   }
   const ex = excluirSemEmail();          // ETAPA final do validador: remove autores sem e-mail
   renderResults();
@@ -1463,7 +1468,14 @@ async function loadUsage(){
     det.innerHTML = (u.calls||0)+" chamadas · "+(u.in||0).toLocaleString()+" tokens entrada · "
                   +(u.out||0).toLocaleString()+" tokens saída"
                   + (u.since? " · desde "+escapeHtml(String(u.since).slice(0,10)) : "");
-  }catch(e){ det.textContent = "Erro ao carregar total do servidor ("+e.message+"). O custo por trabalho abaixo usa a contagem local."; }
+  }catch(e){
+    // servidor indisponível → mostra o acumulado LOCAL salvo (persiste ao fechar a web)
+    document.getElementById("costSpent").textContent = "US$ "+(aiUsage.usd||0).toFixed(2);
+    document.getElementById("costLimit").textContent = "—";
+    document.getElementById("costLeft").textContent  = "—";
+    det.textContent = "Total do servidor indisponível ("+e.message+"). Mostrando acumulado LOCAL salvo neste navegador: "
+      +(aiUsage.calls||0)+" chamadas · "+(aiUsage.in||0).toLocaleString()+" tokens entrada · "+(aiUsage.out||0).toLocaleString()+" saída.";
+  }
   renderRun();
 }
 /* Custo por trabalho + relatório da IA (da última coleta) */
@@ -1848,9 +1860,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "2.2";
+const VERSION = "2.3";
 const VERSION_DATE = "2026-06-02";
 const CHANGELOG = [
+  ["2.3","2026-06-02","Custos salvos no navegador (não zeram ao fechar). IA só nos artigos SEM e-mail coletado (menos gasto). Título limpa lixo no fim (ex.: «...convencionais a a»)."],
   ["2.2","2026-06-02","IA confere o DONO do e-mail nos casos incertos (chute do 1º autor ou e-mail não pareado), só usando e-mail presente no texto. Mais segurança sem gastar muito."],
   ["2.1","2026-06-02","E-mail-apelido recuperado: 1 e-mail sem par vai pro 1º autor (aluno). Recupera trabalhos que sumiam por causa da exclusão."],
   ["2.0","2026-06-02","Selo de versão + novidades. Validador exclui autores sem e-mail. Índice limpa cabeçalho de seção."],
