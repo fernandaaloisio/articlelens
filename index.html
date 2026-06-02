@@ -857,7 +857,7 @@ function isAmbiguous(authors){
    Config salva no localStorage do navegador. A chave nunca sai daqui,
    exceto para o endpoint que VOCÊ configurar.
    ========================================================================= */
-const AI = { enabled:false, orchestrate:false, baseURL:"http://localhost:11434/v1", model:"llama3.1", apiKey:"" };
+const AI = { enabled:false, orchestrate:false, baseURL:"", model:"claude-3-5-sonnet-20240620", apiKey:"" };
 function loadAIConfig(){
   try{ Object.assign(AI, JSON.parse(localStorage.getItem("articlelens_ai")||"{}")); }catch(e){}
 }
@@ -1657,6 +1657,7 @@ async function doLogin(){
     }
     // sucesso: configura a IA e libera o app conforme o perfil
     AI.baseURL = base; AI.apiKey = pw; AI.enabled = true; AI.orchestrate = true;
+    if(!/claude/i.test(AI.model||"")) AI.model = "claude-3-5-sonnet-20240620";  // corrige resíduo (ex.: llama3.1)
     saveAIConfig();
     try{ localStorage.setItem(AUTH_KEY, role); }catch(_){}
     initAIUI(); applyRole(role);
