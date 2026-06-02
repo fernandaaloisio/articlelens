@@ -13,11 +13,38 @@ const ADMIN_TOKEN       = process.env.ADMIN_TOKEN || process.env.ACCESS_TOKEN ||
 const USER_TOKEN        = process.env.USER_TOKEN || "";
 const ALLOW_ORIGIN      = process.env.ALLOW_ORIGIN || "*";          // ex.: https://fernandaaloisio.github.io
 const ANTHROPIC_VERSION = "2023-06-01";
+const MAX_USD           = parseFloat(process.env.MAX_USD || "100"); // limite de gastos (0 = sem limite)
 
 function roleOf(tok){
   if (ADMIN_TOKEN && tok === ADMIN_TOKEN) return "admin";
   if (USER_TOKEN  && tok === USER_TOKEN)  return "user";
   return null;
+}
+
+/* ----- Rastreio de custo ----- */
+const fs = require("fs");
+const USAGE_FILE = "/tmp/articlelens_usage.json";
+// Preços USD por 1 milhão de tokens [entrada, saída] (ajuste se a Anthropic mudar)
+const PRICES = {
+  "claude-3-5-sonnet": [3, 15],
+  "claude-3-7-sonnet": [3, 15],
+  "claude-3-5-haiku":  [0.8, 4],
+  "claude-3-opus":     [15, 75],
+  "claude-3-haiku":    [0.25, 1.25],
+};
+function priceFor(model){
+  const k = Object.keys(PRICES).find(k => (model || "").includes(k));
+  return PRICES[k] || PRICES["claude-3-5-sonnet"];
+}
+let usage = { in: 0, out: 0, usd: 0, calls: 0, since: new Date().toISOString() };
+try { if (fs.existsSync(USAGE_FILE)) usage = JSON.parse(fs.readFileSync(USAGE_FILE, "utf8")); } catch (_) {}
+function saveUsage(){ try { fs.writeFileSync(USAGE_FILE, JSON.stringify(usage)); } catch (_) {} }
+function addUsage(model, u){
+  const [pin, pout] = priceFor(model);
+  const ti = (u && u.input_tokens) || 0, to = (u && u.output_tokens) || 0;
+  usage.in += ti; usage.out += to;
+  usage.usd += ti / 1e6 * pin + to / 1e6 * pout;
+  usage.calls++; saveUsage();
 }
 
 // CORS
@@ -51,20 +78,38 @@ app.post("/login", (req, res) => {
 app.post("/v1/chat/completions", async (req, res) => {
   if (!authOK(req, res)) return;
   if (!ANTHROPIC_KEY) return res.status(500).json({ error: { message: "ANTHROPIC_API_KEY não configurada no servidor (Render → Environment)." } });
+  if (MAX_USD > 0 && usage.usd >= MAX_USD)
+    return res.status(429).json({ error: { message: "Limite de gastos atingido (US$ " + MAX_USD.toFixed(2) + "). Admin: aumente MAX_USD no Render ou zere em /usage/reset." } });
   try {
     const { model, messages = [], max_tokens } = req.body || {};
     const sys  = messages.filter(m => m.role === "system").map(m => m.content).join("\n");
     const msgs = messages.filter(m => m.role !== "system").map(m => ({ role: m.role, content: m.content }));
+    const mdl  = model || "claude-3-5-sonnet-20240620";
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": ANTHROPIC_VERSION },
-      body: JSON.stringify({ model: model || "claude-3-5-sonnet-20240620", max_tokens: max_tokens || 2048, ...(sys ? { system: sys } : {}), messages: msgs })
+      body: JSON.stringify({ model: mdl, max_tokens: max_tokens || 2048, ...(sys ? { system: sys } : {}), messages: msgs })
     });
     const data = await r.json();
     if (!r.ok) return res.status(r.status).json({ error: { message: (data.error && data.error.message) || JSON.stringify(data).slice(0, 200) } });
+    addUsage(mdl, data.usage);   // contabiliza o custo
     const text = (data.content || []).map(c => c.text || "").join("");
     res.json({ choices: [{ message: { role: "assistant", content: text } }], usage: data.usage });
   } catch (e) { res.status(500).json({ error: { message: e.message } }); }
+});
+
+// Painel de custos
+app.get("/usage", (req, res) => {
+  if (!authOK(req, res)) return;
+  res.json({ ...usage, limit: MAX_USD, remaining: MAX_USD > 0 ? Math.max(0, MAX_USD - usage.usd) : null });
+});
+// Zerar contador (só admin)
+app.post("/usage/reset", (req, res) => {
+  const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "").trim();
+  if (roleOf(tok) !== "admin") return res.status(403).json({ error: { message: "Apenas admin pode zerar." } });
+  usage = { in: 0, out: 0, usd: 0, calls: 0, since: new Date().toISOString() };
+  saveUsage();
+  res.json({ ok: true });
 });
 
 // Lista de modelos disponíveis na conta (útil pra escolher o nome certo)

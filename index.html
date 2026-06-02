@@ -226,6 +226,7 @@
     <div class="tab active" data-tab="pdf"  role="tab"><span class="ico">📄</span>PDF</div>
     <div class="tab"        data-tab="html" role="tab"><span class="ico">🌐</span>HTML / URL</div>
     <div class="tab"        data-tab="manual" role="tab"><span class="ico">✍️</span>Manual</div>
+    <div class="tab"        data-tab="cost" data-admin="1" role="tab"><span class="ico">💰</span>Custos</div>
   </div>
 
   <!-- Aba PDF -->
@@ -274,6 +275,33 @@
       <button class="btn ghost" id="addAuthor">+ Adicionar autor</button>
       <button class="btn primary" id="addManual">Adicionar registro →</button>
     </div>
+  </section>
+
+  <!-- Aba Custos (admin) -->
+  <section class="panel" id="panel-cost">
+    <h3 style="margin:0 0 4px">💰 Gastos com a IA (Claude)</h3>
+    <p class="aihelp" style="margin:0 0 16px">Soma estimada do que foi gasto pelo proxy. Limite configurado no Render.</p>
+    <div class="row" style="gap:14px;flex-wrap:wrap">
+      <div style="flex:1;min-width:140px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:16px">
+        <div style="font-size:12px;color:var(--muted)">Gasto até agora</div>
+        <div id="costSpent" style="font-size:26px;font-weight:800;color:var(--accent)">—</div>
+      </div>
+      <div style="flex:1;min-width:140px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:16px">
+        <div style="font-size:12px;color:var(--muted)">Limite</div>
+        <div id="costLimit" style="font-size:26px;font-weight:800">—</div>
+      </div>
+      <div style="flex:1;min-width:140px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:16px">
+        <div style="font-size:12px;color:var(--muted)">Restante</div>
+        <div id="costLeft" style="font-size:26px;font-weight:800">—</div>
+      </div>
+    </div>
+    <div class="meter" style="margin:16px 0 6px"><span id="costMeter"></span></div>
+    <div class="meter-label" id="costDetail">—</div>
+    <div class="btn-bar" style="margin-top:16px">
+      <button class="btn ghost" id="costRefresh">↻ Atualizar</button>
+      <button class="btn ghost" id="costReset">Zerar contador</button>
+    </div>
+    <p class="aihelp" style="margin-top:10px">⚠️ Valor estimado (preços padrão da tabela). O limite oficial e inquebrável você define no painel da Anthropic (Billing → Limits).</p>
   </section>
 
   <!-- LINHA DE PRODUÇÃO -->
@@ -1217,8 +1245,44 @@ document.querySelectorAll(".tab").forEach(tab=>{
     document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
     tab.classList.add("active");
     document.getElementById("panel-"+tab.dataset.tab).classList.add("active");
+    if(tab.dataset.tab === "cost") loadUsage();
   };
 });
+
+/* ===== Painel de custos (admin) ===== */
+async function loadUsage(){
+  const root = (AI.baseURL||"").replace(/\/+$/,"").replace(/\/v1$/,"");
+  const det = document.getElementById("costDetail");
+  if(!root){ det.textContent = "Conecte a IA primeiro (login admin)."; return; }
+  det.textContent = "carregando…";
+  try{
+    const r = await fetch(root+"/usage", { headers:{ "Authorization":"Bearer "+AI.apiKey } });
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const u = await r.json();
+    const fmt = v => "US$ " + (v||0).toFixed(2);
+    document.getElementById("costSpent").textContent = fmt(u.usd);
+    document.getElementById("costLimit").textContent = u.limit ? fmt(u.limit) : "sem limite";
+    document.getElementById("costLeft").textContent  = (u.remaining==null) ? "—" : fmt(u.remaining);
+    const pct = (u.limit>0) ? Math.min(100, u.usd/u.limit*100) : 0;
+    const bar = document.getElementById("costMeter");
+    bar.style.width = pct.toFixed(1)+"%";
+    bar.style.background = pct>=90 ? "var(--danger)" : (pct>=70 ? "var(--warn)" : "");
+    det.innerHTML = (u.calls||0)+" chamadas · "+(u.in||0).toLocaleString()+" tokens entrada · "
+                  +(u.out||0).toLocaleString()+" tokens saída"
+                  + (u.since? " · desde "+escapeHtml(String(u.since).slice(0,10)) : "");
+  }catch(e){ det.textContent = "Erro ao carregar: "+e.message; }
+}
+document.getElementById("costRefresh").onclick = loadUsage;
+document.getElementById("costReset").onclick = async ()=>{
+  if(!confirm("Zerar o contador de gastos? (o limite continua o mesmo)")) return;
+  const root = (AI.baseURL||"").replace(/\/+$/,"").replace(/\/v1$/,"");
+  try{
+    const r = await fetch(root+"/usage/reset", { method:"POST", headers:{ "Authorization":"Bearer "+AI.apiKey } });
+    if(r.status===403){ toast("Apenas admin pode zerar.","warn"); return; }
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    toast("Contador zerado."); loadUsage();
+  }catch(e){ toast("Falha ao zerar: "+e.message,"warn"); }
+};
 
 /* =========================================================================
    Tabela de resultados + paginação + estatísticas
@@ -1499,6 +1563,16 @@ function applyRole(role){
   const isUser = role === "user";
   const box = document.getElementById("aiBox");
   if(box) box.style.display = isUser ? "none" : "";   // usuário não vê o painel da IA
+  // usuário não vê a aba/painel de Custos
+  document.querySelectorAll('[data-admin="1"]').forEach(el => el.style.display = isUser ? "none" : "");
+  if(isUser){
+    const ct = document.getElementById("panel-cost");
+    if(ct && ct.classList.contains("active")){      // se estava na aba custos, volta pro PDF
+      ct.classList.remove("active");
+      document.getElementById("panel-pdf").classList.add("active");
+      document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active", t.dataset.tab==="pdf"));
+    }
+  }
   const badge = document.getElementById("roleBadge");
   if(badge) badge.textContent = isUser ? "👤 Usuário" : "🔑 Admin";
 }
