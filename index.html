@@ -381,12 +381,26 @@ async function extractTextFromPDF(file){
       const tol = Math.max(2, (it.height || 10) * 0.5);
       let row = rows.find(r => Math.abs(r.y - y) <= tol);
       if(!row){ row = { y, items: [] }; rows.push(row); }
-      row.items.push({ x, s: it.str });
+      row.items.push({ x, w: it.width || 0, h: it.height || 10, s: it.str });
     }
     rows.sort((a,b) => b.y - a.y);                       // topo → base
-    const lines = rows.map(r =>
-      r.items.sort((a,b) => a.x - b.x).map(i => i.s).join(" ").trim()
-    );
+    // Junta os pedaços da linha COM controle de espaço: o PDF.js quebra palavras
+    // em vários itens (kerning). Só insere espaço quando há LACUNA real entre eles,
+    // senão concatena (evita "Hen rique"→ correto "Henrique", "201 8"→"2018").
+    const lines = rows.map(r => {
+      r.items.sort((a,b) => a.x - b.x);
+      let line = "", prevEnd = null;
+      for(const it of r.items){
+        if(prevEnd !== null){
+          const gap = it.x - prevEnd;
+          const jaTemEspaco = /\s$/.test(line) || /^\s/.test(it.s);
+          if(!jaTemEspaco && gap > Math.max(1, (it.h || 10) * 0.28)) line += " ";
+        }
+        line += it.s;
+        prevEnd = it.x + it.w;
+      }
+      return line.replace(/\s+/g, " ").trim();
+    });
     out += lines.join("\n") + "\n\f\n";     // \f = marca de fim de página (p/ o separador de anais)
   }
   const clean = out.normalize("NFC")        // acentos compostos (ç, ã) p/ os regexes baterem
@@ -569,9 +583,19 @@ function fixTitle(t){
 }
 function titleNear(lines, ai, prefix){
   let pre=stripTitle(prefix||"");
-  if(pre.length>=12 && !TLINE_NOISE_JS.test(pre)) return fixTitle(pre);
-  for(let j=ai-1;j>=0;j--){ const s=lines[j].trim(); if(s.length>=12 && !TLINE_NOISE_JS.test(s)) return fixTitle(stripTitle(s)); }
-  return fixTitle(pre);
+  // título na própria linha (caso numerado): só aceita se não parecer lista de autores
+  if(pre.length>=15 && !TLINE_NOISE_JS.test(pre) && !/;/.test(pre)) return fixTitle(pre);
+  // senão, junta as linhas de TÍTULO logo acima da linha de autores (título quebra em várias linhas)
+  const buf=[];
+  for(let j=ai-1;j>=0;j--){
+    const s=lines[j].trim();
+    if(!s){ if(buf.length) break; else continue; }
+    if(TLINE_NOISE_JS.test(s) || /anais d|semana de ci|uniarax/i.test(s)){ if(buf.length) break; else continue; }
+    buf.unshift(s);
+    if(buf.join(" ").length>220) break;
+  }
+  const t=stripTitle(buf.join(" "));
+  return fixTitle(t.length>=12 ? t : pre);
 }
 function fixSwapsJS(authors){
   const sc=(n,e)=>{ const lp=_norm(e).split("@")[0].replace(/[^a-z]/g,""); const tk=_norm(n).split(/\s+/).map(t=>t.replace(/[^a-z]/g,"")).filter(t=>t.length>=3); const ini=tk.map(t=>t[0]).join(""); let s=tk.filter(t=>lp.includes(t)).length; if(ini.length>=3&&lp.includes(ini))s+=2; return s; };
@@ -606,8 +630,10 @@ function parseWork(lines){
       if(authors.length && title.length>10){ fixSwapsJS(authors); return {title, authors, all_emails:emails}; }
     }
   }
-  // estudante; prof
-  let ai=-1; for(let i=lines.length-1;i>=0;i--){ if(/;|\bprof|institui[çc]|curso de|universidade|@/i.test(lines[i])){ ai=i; break; } }
+  // estudante; prof — prioriza linha com sinal FORTE de autor (;/Prof/@), não a da instituição
+  let ai=-1;
+  for(let i=lines.length-1;i>=0;i--){ if(/;|\bprof\b|@/i.test(lines[i])){ ai=i; break; } }
+  if(ai<0) for(let i=lines.length-1;i>=0;i--){ if(/institui[çc]|curso de|universidade/i.test(lines[i])){ ai=i; break; } }
   if(ai<0) return null;
   const aline=lines[ai]; let names=[], pref=aline;
   const am=aline.match(/(prof|institui|centro universit|curso de|universidade)/i);
