@@ -796,6 +796,9 @@ function saveAIConfig(){ localStorage.setItem("articlelens_ai", JSON.stringify(A
 
 async function aiChat(messages){
   const url = AI.baseURL.replace(/\/+$/,"") + "/chat/completions";
+  const isLocal = /localhost|127\.0\.0\.1/.test(AI.baseURL);
+  if(!isLocal && !AI.apiKey)
+    throw new Error("Campo Chave vazio — cole sua chave (sk-or-…) no campo Chave e clique Salvar.");
   const r = await fetch(url, {
     method:"POST",
     headers:{ "Content-Type":"application/json",
