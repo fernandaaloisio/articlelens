@@ -1424,12 +1424,16 @@ document.getElementById("aiTest").onclick = async ()=>{
   AI.model   = document.getElementById("aiModel").value.trim() || "llama3.1";
   AI.apiKey  = document.getElementById("aiKey").value.trim();
   const msg = document.getElementById("aiTestMsg");
-  msg.textContent = "testando...";
+  const diag = "[v3 · chave detectada: "+AI.apiKey.length+" caracteres"
+             + (AI.apiKey?(" · começa com "+escapeHtml(AI.apiKey.slice(0,5))+"…"):"")+"]";
+  msg.innerHTML = "testando... <small style='color:var(--muted)'>"+diag+"</small>";
   try{
     const out = await aiChat([{role:"user",content:"Responda apenas: OK"}]);
-    msg.innerHTML = '<span style="color:var(--accent)">✓ conectado</span> — resposta: '+escapeHtml((out||"").slice(0,40));
+    msg.innerHTML = '<span style="color:var(--accent)">✓ conectado</span> — resposta: '+escapeHtml((out||"").slice(0,40))
+                  + " <small style='color:var(--muted)'>"+diag+"</small>";
   }catch(e){
-    msg.innerHTML = '<span style="color:var(--danger)">✗ falhou</span>: '+escapeHtml(e.message);
+    msg.innerHTML = '<span style="color:var(--danger)">✗ falhou</span>: '+escapeHtml(e.message)
+                  + " <small style='color:var(--muted)'>"+diag+"</small>";
   }
 };
 
