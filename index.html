@@ -656,6 +656,9 @@ const NUM_NAME_JS = /([A-ZÀ-Ý][a-zà-ÿ]+(?:[,.]?\s+(?:[A-ZÀ-Ý][\wÀ-ÿ.]*|[
 const CONN_JS = new Set(["de","da","do","dos","das","e","del","della","van","von","el","al","bin"]);
 const INST_JS = /(centro universit|curso de|universidade|faculdade|instituto|uniarax|unipam|campus|departamento)/i;
 const AFFIL_RE = /centro universit|universit[áa]ri|universidade|institui[çc][ãa]o|faculdade|instituto federal|centro federal|funda[çc][ãa]o\b/i;
+/* Cabeçalho de SEÇÃO completo (ex.: "ENGENHARIAS", "CIÊNCIAS EXATAS E DA TERRA") — linha inteira.
+   NÃO casa "ENGENHARIA CIVIL DA UFAC" (continuação de TÍTULO). */
+const SECAO_JS = /^(ci[êe]ncias?(\s+(exatas|humanas|sociais|agr[áa]rias|biol[óo]gicas|da\s+sa[úu]de|da\s+terra|aplicadas|e\s+da\s+terra|ling[uü][íi]stica|letras))*|engenharias?|artigos\s+completos?|p[ôo]steres|resumos|sum[áa]rio|anais)\.?$/i;
 const TLINE_NOISE_JS = /^(ci[êe]ncias\b|engenhari|artigos completos|resumos\b|p[ôo]steres|apoio\b|bolsista\b|ap[êe]ndice|refer[êe]ncias|introdu|abstract\b|keywords|palavras|xv semana|anais d|mostra de pesquisa|semana de ci|sum[áa]rio|comit[êe]|\d{4}\b|.*\bet al\b|.*\bv\.\s*\d+|.*\bp\.\s*\d+\s*-)/i;
 const EVENT_JS = /(anais d|congresso brasileiro|simp[óo]sio brasileiro|\(cbie|\(sbie|cbie \d|sbie \d|mostra de pesquisa|semana de ci[êe]ncia|brazilian symposium|proceedings of|seminário|seminario|expediente|sum[áa]rio|comit[êe])/i;
 const LOC_JS = /^(acre|rio|branco|sul|norte|brasil|s[ãa]o|floresta|campus|cruzeiro|m[âa]ncio|outras|caixa|postal)\b/i;
@@ -703,7 +706,7 @@ function titleNear(lines, ai, prefix){
     let _noise = TLINE_NOISE_JS.test(s) || /anais d|semana de ci|mostra de pesquisa/i.test(s);
     // exceção: linha de TÍTULO em caixa MISTA começando com "engenharia/ciência" não é o
     // cabeçalho de seção (que vem em CAIXA ALTA, ex.: "ENGENHARIAS") → mantém no título.
-    if(_noise && /^(ci[êe]ncias?|engenharias?)\b/i.test(s) && s!==s.toUpperCase()) _noise=false;
+    if(_noise && /^(ci[êe]ncias?|engenharias?)\b/i.test(s) && !SECAO_JS.test(s)) _noise=false;
     if(_noise){ if(buf.length) break; else continue; }
     buf.unshift(s);
     if(buf.join(" ").length>220) break;
@@ -2044,9 +2047,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "3.6";
+const VERSION = "3.7";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["3.7","2026-06-03","Título que continua com palavra de seção em CAIXA ALTA («ENGENHARIA CIVIL DA UFAC») não é mais cortado — só corta em cabeçalho de seção COMPLETO (ENGENHARIAS, CIÊNCIAS EXATAS…)."],
   ["3.6","2026-06-03","Lupa de busca no resultado (filtra por título/nome/e-mail) + filtro «só problemas» (mostra nomes/títulos suspeitos ou cortados). Facilita achar artigos com erro."],
   ["3.5","2026-06-03","Conserta acentos «soltos» de PDFs em LaTeX/congresso (SBC): «Elaborac¸ ˜ao»→«Elaboração», «m´etricas»→«métricas», «func¸ ˜ao»→«função». Aplicado na leitura do PDF."],
   ["3.4","2026-06-03","Janela de texto p/ a IA aumentada (2000→4500): artigos cujo e-mail fica logo após o cabeçalho (ex.: SILICON/13283) agora são conferidos. Era por isso que «Tksantos Bbi» escapava."],
