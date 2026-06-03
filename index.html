@@ -1012,7 +1012,7 @@ async function aiChat(messages){
     method:"POST",
     headers:{ "Content-Type":"application/json",
               ...(AI.apiKey ? {"Authorization":"Bearer "+AI.apiKey} : {}) },
-    body: JSON.stringify({ model: AI.model, temperature: 0, messages })
+    body: JSON.stringify({ model: AI.model, temperature: 0, max_tokens: 4096, messages })
   });
   if(!r.ok) throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,120));
   const data = await r.json();
@@ -1031,7 +1031,7 @@ async function aiChatAnthropic(messages){
               "x-api-key": AI.apiKey,
               "anthropic-version":"2023-06-01",
               "anthropic-dangerous-direct-browser-access":"true" },
-    body: JSON.stringify({ model: AI.model, max_tokens: 2048,
+    body: JSON.stringify({ model: AI.model, max_tokens: 4096,
                            ...(sys?{system:sys}:{}), messages: msgs })
   });
   if(!r.ok) throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,160));
@@ -1458,13 +1458,20 @@ async function processBatch(){
       let nTit=0, nEmail=0, nNomes=0, nFail=0, lastErr="";
       const usdBefore = aiUsage.usd;
       const relatorio = [];
-      const CHUNK = 6;
+      const CHUNK = 4;
       for(let i=0;i<alvos.length;i+=CHUNK){
-        const grupo = alvos.slice(i, i+CHUNK);
+        let grupo = alvos.slice(i, i+CHUNK);
         let fixes = null;
         try{ fixes = await aiFixHard(grupo); }
-        catch(e){ nFail++; lastErr=e.message;
-          grupo.forEach(r=>relatorio.push({modelo:r._modelo||"", titulo:(r.title||"").slice(0,60), erro:"IA falhou", acao:"falhou", detalhe:e.message})); }
+        catch(e){
+          // resposta longa cortou o JSON → re-tenta 1 a 1 (respostas curtas não estouram)
+          fixes = [];
+          for(let j=0;j<grupo.length;j++){
+            try{ const um = await aiFixHard([grupo[j]]); if(um[0]){ um[0].i=j; fixes.push(um[0]); } }
+            catch(e2){ nFail++; lastErr=e2.message;
+              relatorio.push({modelo:grupo[j]._modelo||"", titulo:(grupo[j].title||"").slice(0,60), erro:"IA falhou", acao:"falhou", detalhe:e2.message}); }
+          }
+        }
         if(fixes) grupo.forEach((r,gi)=>{
           const f = fixes.find(x=>x.i===gi); const antesT = r.title; const mudouE=[]; let nomesCorr=false;
           const tinhaNomeQuebrado = temNomeQuebrado(r);
@@ -2003,9 +2010,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "3.2";
+const VERSION = "3.3";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["3.3","2026-06-03","Corrige falha «JSON cortado» da IA em artigos com MUITOS autores: resposta maior (4096 tokens), lote menor (4) e re-tentativa 1 a 1 quando o lote estoura. Os artigos que falhavam (A VIRUS, EDUCAÇÃO INCLUSIVA, SELETIVIDADE) agora são corrigidos pela IA."],
   ["3.2","2026-06-03","Detector de nome quebrado mais forte: pega cargo/titulação no lugar do nome («Residente em Neonatologia»), nome derivado de e-mail mesmo com 2 palavras («Tksantos Bbi» ← tksantos.bbi@) e sobrenome solto. Esses agora vão pra IA corrigir (precisa estar LIGADA)."],
   ["3.1","2026-06-03","Nome só com iniciais (ex.: «I. C. Alencar»): completa o 1º nome pelo e-mail quando vem separado (israel.alencar@ → «Israel»); quando vem grudado, NÃO inventa. Marca «⚠ revisar» na tabela pra você conferir."],
   ["3.0","2026-06-03","IA VERIFICA NOMES: detecta nome quebrado (truncado «...Jú/Gonç», titulação «Pós-graduação», ou derivado do e-mail «Profdebora») e reextrai o nome correto do artigo. Relatório agora mostra MODELO usado + tipo de ERRO de cada caso (pra corrigirmos). Base do app que se alimenta."],
