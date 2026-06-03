@@ -677,7 +677,11 @@ function titleNear(lines, ai, prefix){
   for(let j=ai-1;j>=0;j--){
     const s=lines[j].trim();
     if(!s){ if(buf.length) break; else continue; }
-    if(TLINE_NOISE_JS.test(s) || /anais d|semana de ci|uniarax/i.test(s)){ if(buf.length) break; else continue; }
+    let _noise = TLINE_NOISE_JS.test(s) || /anais d|semana de ci|mostra de pesquisa/i.test(s);
+    // exceção: linha de TÍTULO em caixa MISTA começando com "engenharia/ciência" não é o
+    // cabeçalho de seção (que vem em CAIXA ALTA, ex.: "ENGENHARIAS") → mantém no título.
+    if(_noise && /^(ci[êe]ncias?|engenharias?)\b/i.test(s) && s!==s.toUpperCase()) _noise=false;
+    if(_noise){ if(buf.length) break; else continue; }
     buf.unshift(s);
     if(buf.join(" ").length>220) break;
   }
@@ -1898,9 +1902,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "2.4";
+const VERSION = "2.5";
 const VERSION_DATE = "2026-06-02";
 const CHANGELOG = [
+  ["2.5","2026-06-02","BUG IMPORTANTE corrigido: títulos que mencionam «UNIARAXÁ»/«Engenharia» eram truncados/perdidos (o filtro de cabeçalho pegava demais). Agora distingue cabeçalho (CAIXA ALTA) de título. Recupera trabalhos como «Aperfeiçoando os processos… do UNIARAXÁ»."],
   ["2.4","2026-06-02","Painel de COBERTURA: mostra quantos foram coletados, quantos o índice lista e a LISTA dos trabalhos removidos por não ter e-mail (com download). Fim da dúvida de «faltam artigos»."],
   ["2.3","2026-06-02","Custos salvos no navegador (não zeram ao fechar). IA só nos artigos SEM e-mail coletado (menos gasto). Título limpa lixo no fim (ex.: «...convencionais a a»)."],
   ["2.2","2026-06-02","IA confere o DONO do e-mail nos casos incertos (chute do 1º autor ou e-mail não pareado), só usando e-mail presente no texto. Mais segurança sem gastar muito."],
