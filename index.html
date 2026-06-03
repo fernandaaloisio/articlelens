@@ -444,6 +444,18 @@ let curPage = 0;
 /* =========================================================================
    1. MÓDULO — Leitura de PDF  (PDF.js)
    ========================================================================= */
+/* Conserta acentos "soltos" de PDFs feitos em LaTeX (SBC/congressos):
+   o PDF.js extrai o acento como caractere separado (´e→é, ˜a→ã, c¸→ç, m´etricas→métricas). */
+function consertarAcentos(s){
+  if(!/[´˜ˆ^`¨¸ı]/.test(s)) return s;
+  const M={ "´":"́", "˜":"̃", "ˆ":"̂", "^":"̂", "`":"̀", "¨":"̈" };
+  s = s.replace(/ı/g,"i");                                       // i sem ponto (LaTeX)
+  s = s.replace(/ *([´˜ˆ^`¨¸]) */g,"$1");                        // cola o acento solto nos vizinhos
+  s = s.replace(/([´˜ˆ^`¨])([aeiouAEIOUnN])/g,(m,d,v)=> v+M[d]); // acento ANTES da vogal (´e→é)
+  s = s.replace(/([aeiouAEIOUnN])([´˜ˆ^`¨])/g,(m,v,d)=> v+M[d]); // ou DEPOIS (a˜→ã)
+  s = s.replace(/([cC])¸/g,(m,c)=> c+"̧").replace(/¸([cC])/g,(m,c)=> c+"̧"); // cedilha
+  return s;
+}
 async function extractTextFromPDF(file){
   const buf = await file.arrayBuffer();
   let pdf;
@@ -488,7 +500,7 @@ async function extractTextFromPDF(file){
     });
     out += lines.join("\n") + "\n\f\n";     // \f = marca de fim de página (p/ o separador de anais)
   }
-  const clean = out.normalize("NFC")        // acentos compostos (ç, ã) p/ os regexes baterem
+  const clean = consertarAcentos(out).normalize("NFC")   // junta acentos soltos (LaTeX) + compõe ç/ã
                    .replace(/[ \t]+/g," ").replace(/\n{3,}/g,"\n\n").trim();
   if(!clean) throw new Error("PDF sem texto selecionável (provável imagem/escaneado — requer OCR)");
   return clean;
@@ -2010,9 +2022,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "3.4";
+const VERSION = "3.5";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["3.5","2026-06-03","Conserta acentos «soltos» de PDFs em LaTeX/congresso (SBC): «Elaborac¸ ˜ao»→«Elaboração», «m´etricas»→«métricas», «func¸ ˜ao»→«função». Aplicado na leitura do PDF."],
   ["3.4","2026-06-03","Janela de texto p/ a IA aumentada (2000→4500): artigos cujo e-mail fica logo após o cabeçalho (ex.: SILICON/13283) agora são conferidos. Era por isso que «Tksantos Bbi» escapava."],
   ["3.3","2026-06-03","Corrige falha «JSON cortado» da IA em artigos com MUITOS autores: resposta maior (4096 tokens), lote menor (4) e re-tentativa 1 a 1 quando o lote estoura. Os artigos que falhavam (A VIRUS, EDUCAÇÃO INCLUSIVA, SELETIVIDADE) agora são corrigidos pela IA."],
   ["3.2","2026-06-03","Detector de nome quebrado mais forte: pega cargo/titulação no lugar do nome («Residente em Neonatologia»), nome derivado de e-mail mesmo com 2 palavras («Tksantos Bbi» ← tksantos.bbi@) e sobrenome solto. Esses agora vão pra IA corrigir (precisa estar LIGADA)."],
