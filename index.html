@@ -633,6 +633,7 @@ function _join(a){ a=a.filter(Boolean); return a.length?a.join("; "):"—"; }
 const NUM_NAME_JS = /([A-ZÀ-Ý][a-zà-ÿ]+(?:[,.]?\s+(?:[A-ZÀ-Ý][\wÀ-ÿ.]*|[a-zà-ÿ]{2,}|de|da|do|dos|das|e)){0,4})\s*(\d{1,2})(?![@\d.])/g;
 const CONN_JS = new Set(["de","da","do","dos","das","e","del","della","van","von","el","al","bin"]);
 const INST_JS = /(centro universit|curso de|universidade|faculdade|instituto|uniarax|unipam|campus|departamento)/i;
+const AFFIL_RE = /centro universit|universit[áa]ri|universidade|institui[çc][ãa]o|faculdade|instituto federal|centro federal|funda[çc][ãa]o\b/i;
 const TLINE_NOISE_JS = /^(ci[êe]ncias\b|engenhari|artigos completos|resumos\b|p[ôo]steres|apoio\b|bolsista\b|ap[êe]ndice|refer[êe]ncias|introdu|abstract\b|keywords|palavras|xv semana|anais d|mostra de pesquisa|semana de ci|sum[áa]rio|comit[êe]|\d{4}\b|.*\bet al\b|.*\bv\.\s*\d+|.*\bp\.\s*\d+\s*-)/i;
 const EVENT_JS = /(anais d|congresso brasileiro|simp[óo]sio brasileiro|\(cbie|\(sbie|cbie \d|sbie \d|mostra de pesquisa|semana de ci[êe]ncia|brazilian symposium|proceedings of|seminário|seminario|expediente|sum[áa]rio|comit[êe])/i;
 const LOC_JS = /^(acre|rio|branco|sul|norte|brasil|s[ãa]o|floresta|campus|cruzeiro|m[âa]ncio|outras|caixa|postal)\b/i;
@@ -726,7 +727,7 @@ function parseWork(lines){
   // O @ não entra aqui senão a linha do e-mail (que fica sozinha abaixo dos autores) era
   // confundida com a linha de autores → trabalho quebrava e o e-mail se perdia.
   // Estrutura típica: [título] [AUTORES] [AFILIAÇÃO] [e-mail] [RESUMO].
-  const AFFIL=/centro universit|universit[áa]ri|universidade|institui[çc][ãa]o|faculdade|instituto federal|centro federal|funda[çc][ãa]o\b/i;
+  const AFFIL=AFFIL_RE;
   let ai=-1;
   // 1) Âncora preferida = AFILIAÇÃO → autores são a linha logo ACIMA (pega vírgula/;/Prof/qualquer formato)
   for(let i=lines.length-1;i>=1;i--){ if(AFFIL.test(lines[i]) && splitAuthorsSeg(lines[i-1]).length){ ai=i-1; break; } }
@@ -798,7 +799,13 @@ function separarAnais(text){
     for(const pg of pages){
       const plines=pg.split("\n").map(l=>l.trim()).filter(Boolean);
       const head=plines.slice(0,22);
-      const ri=head.findIndex(l=>RES.test(l));
+      let ri=head.findIndex(l=>RES.test(l));
+      if(ri<=0){
+        // Full paper SEM a palavra "RESUMO": cabeçalho vai até o e-mail logo após a afiliação
+        const ei=head.findIndex(l=>/@/.test(l) && !/\.{4,}/.test(l));
+        const afi=head.findIndex(l=>AFFIL_RE.test(l));
+        if(ei>0 && afi>=0 && afi<=ei) ri=ei+1;
+      }
       if(ri<=0) continue;
       const pre=head.slice(0,ri);
       if(pre.some(l=>AUTHOR_SIG.test(l))) add(parseWork(pre));
@@ -1907,9 +1914,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "2.6";
+const VERSION = "2.7";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["2.7","2026-06-03","Corta full papers SEM a palavra «RESUMO» (vão direto pro texto) e de outras instituições (ex.: UNIPAM). Recupera «concreto», «Técnicas construtivas» com seus e-mails. Total subiu p/ 89; 0 com e-mail de fora."],
   ["2.6","2026-06-03","Detector de autores ancora na AFILIAÇÃO (autores = linha acima dela). Pega autores em qualquer formato: vírgula, «;», «Prof» ou nome solto. Resultado: 0 trabalhos com e-mail ficam de fora (antes vários full papers sumiam)."],
   ["2.5","2026-06-02","BUG IMPORTANTE corrigido: títulos que mencionam «UNIARAXÁ»/«Engenharia» eram truncados/perdidos (o filtro de cabeçalho pegava demais). Agora distingue cabeçalho (CAIXA ALTA) de título. Recupera trabalhos como «Aperfeiçoando os processos… do UNIARAXÁ»."],
   ["2.4","2026-06-02","Painel de COBERTURA: mostra quantos foram coletados, quantos o índice lista e a LISTA dos trabalhos removidos por não ter e-mail (com download). Fim da dúvida de «faltam artigos»."],
