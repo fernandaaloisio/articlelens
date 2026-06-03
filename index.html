@@ -725,10 +725,15 @@ function parseWork(lines){
   // estudante; prof — acha a linha dos AUTORES por sinal forte (;/Prof), NÃO a do e-mail.
   // O @ não entra aqui senão a linha do e-mail (que fica sozinha abaixo dos autores) era
   // confundida com a linha de autores → trabalho quebrava e o e-mail se perdia.
+  // Estrutura típica: [título] [AUTORES] [AFILIAÇÃO] [e-mail] [RESUMO].
+  const AFFIL=/centro universit|universit[áa]ri|universidade|institui[çc][ãa]o|faculdade|instituto federal|centro federal|funda[çc][ãa]o\b/i;
   let ai=-1;
-  for(let i=lines.length-1;i>=0;i--){ if(/;|\bprof\b/i.test(lines[i])){ ai=i; break; } }
-  if(ai<0) for(let i=lines.length-1;i>=0;i--){ if(/institui[çc]|curso de|universidade/i.test(lines[i])){ ai=i; break; } }
-  if(ai<0) for(let i=lines.length-1;i>=0;i--){ if(/@/.test(lines[i])){ ai=i; break; } }  // layout "Nome E-mail:" (último recurso)
+  // 1) Âncora preferida = AFILIAÇÃO → autores são a linha logo ACIMA (pega vírgula/;/Prof/qualquer formato)
+  for(let i=lines.length-1;i>=1;i--){ if(AFFIL.test(lines[i]) && splitAuthorsSeg(lines[i-1]).length){ ai=i-1; break; } }
+  // 2) senão, linha com sinal forte de autor (;/Prof)
+  if(ai<0) for(let i=lines.length-1;i>=0;i--){ if(/;|\bprof\b/i.test(lines[i])){ ai=i; break; } }
+  // 3) senão, a própria afiliação (autor na mesma linha) ou e-mail (último recurso)
+  if(ai<0) for(let i=lines.length-1;i>=0;i--){ if(AFFIL.test(lines[i])||/@/.test(lines[i])){ ai=i; break; } }
   if(ai<0) return null;
   // a lista de autores costuma QUEBRAR em várias linhas (alunos numa linha, orientador na
   // outra). Estende o bloco para CIMA enquanto a linha parecer de autores (;/Prof), para não
@@ -1902,9 +1907,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "2.5";
-const VERSION_DATE = "2026-06-02";
+const VERSION = "2.6";
+const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["2.6","2026-06-03","Detector de autores ancora na AFILIAÇÃO (autores = linha acima dela). Pega autores em qualquer formato: vírgula, «;», «Prof» ou nome solto. Resultado: 0 trabalhos com e-mail ficam de fora (antes vários full papers sumiam)."],
   ["2.5","2026-06-02","BUG IMPORTANTE corrigido: títulos que mencionam «UNIARAXÁ»/«Engenharia» eram truncados/perdidos (o filtro de cabeçalho pegava demais). Agora distingue cabeçalho (CAIXA ALTA) de título. Recupera trabalhos como «Aperfeiçoando os processos… do UNIARAXÁ»."],
   ["2.4","2026-06-02","Painel de COBERTURA: mostra quantos foram coletados, quantos o índice lista e a LISTA dos trabalhos removidos por não ter e-mail (com download). Fim da dúvida de «faltam artigos»."],
   ["2.3","2026-06-02","Custos salvos no navegador (não zeram ao fechar). IA só nos artigos SEM e-mail coletado (menos gasto). Título limpa lixo no fim (ex.: «...convencionais a a»)."],
