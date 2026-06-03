@@ -1075,7 +1075,9 @@ function tituloSuspeito(t){
     || /\.{4,}/.test(t)                                           // pontilhado de sumário
     || /^[A-ZÀ-Ý][a-zà-ÿ]+(\s+[A-ZÀ-Ýa-zà-ÿ.]+){1,4}\s*;/.test(t) // começa "Nome Sobrenome;" = lista de autores
     || /;\s*prof/i.test(t)                                        // "...; Prof" = linha de autor
-    || /\bprof[.ªºa]?\s+(dr|dra|m\.?\s?[ea])/i.test(t);           // "Prof. Dr."/"Prof. M.e" = autor
+    || /\bprof[.ªºa]?\s+(dr|dra|m\.?\s?[ea])/i.test(t)            // "Prof. Dr."/"Prof. M.e" = autor
+    || /:\s*$/.test(t)                                            // termina em ":" → título cortado (ex.: "TRIAGEM QUÍMICA:")
+    || /(^|\s)(de|da|do|dos|das|e|em|para|no|na|nos|nas|com|à|ao|aos|sobre|entre)\s*$/i.test(t); // termina em preposição → cortado
 }
 /* E-mail NÃO coletado = NENHUM autor tem e-mail, mas há @ no texto (existe, só não pareou).
    Só esses vão pra IA (não os chutes que já têm e-mail) — economiza muito. */
@@ -2047,9 +2049,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "3.7";
+const VERSION = "3.8";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["3.8","2026-06-03","Detecta TÍTULO CORTADO (termina em \":\" ou preposição como DE/DA/NO) e manda pra IA completar lendo o texto do trabalho. Resolve «TRIAGEM QUÍMICA:», «...UMA FRAÇÃO DE», «...NO ANO DE» (anais UFAC). Precisa da IA ligada."],
   ["3.7","2026-06-03","Título que continua com palavra de seção em CAIXA ALTA («ENGENHARIA CIVIL DA UFAC») não é mais cortado — só corta em cabeçalho de seção COMPLETO (ENGENHARIAS, CIÊNCIAS EXATAS…)."],
   ["3.6","2026-06-03","Lupa de busca no resultado (filtra por título/nome/e-mail) + filtro «só problemas» (mostra nomes/títulos suspeitos ou cortados). Facilita achar artigos com erro."],
   ["3.5","2026-06-03","Conserta acentos «soltos» de PDFs em LaTeX/congresso (SBC): «Elaborac¸ ˜ao»→«Elaboração», «m´etricas»→«métricas», «func¸ ˜ao»→«função». Aplicado na leitura do PDF."],
