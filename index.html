@@ -703,6 +703,7 @@ function titleNear(lines, ai, prefix){
   for(let j=ai-1;j>=0;j--){
     const s=lines[j].trim();
     if(!s){ if(buf.length) break; else continue; }
+    if(/^[\d\s.,]+$/.test(s)) continue;             // linha só de números (superscritos ¹²³) → pula
     let _noise = TLINE_NOISE_JS.test(s) || /anais d|semana de ci|mostra de pesquisa/i.test(s);
     // exceção: linha de TÍTULO em caixa MISTA começando com "engenharia/ciência" não é o
     // cabeçalho de seção (que vem em CAIXA ALTA, ex.: "ENGENHARIAS") → mantém no título.
@@ -734,8 +735,11 @@ function parseWork(lines){
   const block = lines.join(" ").replace(/\s+/g," ").trim();
   if(lines.some(l=>/\.{4,}/.test(l))) return null;   // pontilhado = janela do SUMÁRIO (índice), não é trabalho
   const emails = extractEmails(block);
-  // numerado (UFAC): autor¹ + rodapé¹ email
-  if(/\b\d\s*(bolsista|universidade|instituto|outras|pibic|centro|faculdade)/i.test(block)){
+  // numerado com superscrito COLADO no nome (autor¹ + rodapé¹ email).
+  // NÃO usa este ramo quando os números estão em LINHAS SEPARADAS (ex.: anais UFAC) — aí o
+  // ramo principal abaixo junta o bloco de autores corretamente.
+  const numSeparados = lines.some(l=>/^\s*\d[\d\s]*$/.test(l) && l.trim().length<=10);
+  if(!numSeparados && /\b\d\s*(bolsista|universidade|instituto|outras|pibic|centro|faculdade)/i.test(block)){
     const nm=[...block.matchAll(NUM_NAME_JS)];
     if(nm.length){
       const first=nm[0][0]; let ti=0, pref=block.slice(0,nm[0].index);
@@ -770,10 +774,16 @@ function parseWork(lines){
     if(TLINE_NOISE_JS.test(s)) return false;
     return (/;/.test(s) || /\bprof[.ªºa]?\b/i.test(s)) && splitAuthorsSeg(s).length>=1;
   };
+  const soNumeros = s => /^[\d\s.,]+$/.test((s||"").trim());   // linha só de números (superscritos ¹²³ / "4 5")
   let topA = ai;
-  while(topA-1>=0 && ehAutorLine(lines[topA-1])) topA--;
+  while(topA-1>=0){
+    const prev = lines[topA-1];
+    if(soNumeros(prev)){ topA--; continue; }        // pula superscritos entre as linhas de autores
+    if(ehAutorLine(prev)){ topA--; continue; }
+    break;
+  }
   let names=[];
-  for(let i=topA;i<=ai;i++) names = names.concat(splitAuthorsSeg(lines[i]));
+  for(let i=topA;i<=ai;i++) if(!soNumeros(lines[i])) names = names.concat(splitAuthorsSeg(lines[i]));
   const title=titleNear(lines, topA, "");          // título fica ACIMA do bloco de autores
   const seen=new Set(); names=names.filter(n=>{const k=n.toLowerCase(); if(seen.has(k))return false; seen.add(k); return true;});
   if(!(title.length>10 && names.length)) return null;
@@ -2049,9 +2059,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "3.8";
+const VERSION = "3.9";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["3.9","2026-06-03","Anais numerado (UFAC): captura TODOS os co-autores (era ~1,2/trabalho → ~3,7). Pula linhas de números (superscritos ¹²³) que quebravam o bloco de autores. Sem regressão no UNIARAXÁ/ARACÊ."],
   ["3.8","2026-06-03","Detecta TÍTULO CORTADO (termina em \":\" ou preposição como DE/DA/NO) e manda pra IA completar lendo o texto do trabalho. Resolve «TRIAGEM QUÍMICA:», «...UMA FRAÇÃO DE», «...NO ANO DE» (anais UFAC). Precisa da IA ligada."],
   ["3.7","2026-06-03","Título que continua com palavra de seção em CAIXA ALTA («ENGENHARIA CIVIL DA UFAC») não é mais cortado — só corta em cabeçalho de seção COMPLETO (ENGENHARIAS, CIÊNCIAS EXATAS…)."],
   ["3.6","2026-06-03","Lupa de busca no resultado (filtra por título/nome/e-mail) + filtro «só problemas» (mostra nomes/títulos suspeitos ou cortados). Facilita achar artigos com erro."],
