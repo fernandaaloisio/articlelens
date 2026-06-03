@@ -1071,6 +1071,24 @@ function nomeQuebrado(nome, email){
   return false;
 }
 function temNomeQuebrado(r){ return /@/.test(r._raw||"") && (r.authors||[]).some(a=>nomeQuebrado(a.name, a.email)); }
+/* Nome só com INICIAIS (ex.: "I. C. Alencar"): tenta completar o 1º nome pelo e-mail
+   (só se vier separado, ex.: israel.alencar@ → "Israel"); marca SEMPRE _revisar pra você conferir. */
+function completarIniciais(records){
+  let nComp=0, nFlag=0;
+  for(const r of records) for(const a of (r.authors||[])){
+    const nm=(a.name||"").trim(); if(!nm) continue;
+    const toks=nm.split(/\s+/);
+    if(!/^[A-ZÀ-Ý]\.?$/.test(toks[0])) continue;            // 1º token é inicial (1 letra)?
+    a._revisar=true; nFlag++;
+    if(!a.email) continue;
+    const inicial=_norm(toks[0])[0];
+    const partes=_norm(a.email).split("@")[0].split(/[._\-0-9]+/).filter(x=>x.length>=3 && /^[a-z]+$/.test(x));
+    const sobren=_norm(toks[toks.length-1]);
+    const cand=partes.find(p=>p[0]===inicial && p!==sobren);
+    if(cand){ a.name=cand[0].toUpperCase()+cand.slice(1)+" "+toks.slice(1).join(" "); nComp++; }
+  }
+  return {nComp, nFlag};
+}
 /* Caso para a IA = título suspeito OU sem e-mail (com @ no texto) OU NOME quebrado. */
 function casoDificil(r){ return tituloSuspeito(r.title) || _semEmailColetado(r) || temNomeQuebrado(r); }
 /* IA corrige TÍTULO e confere o DONO do e-mail, usando o texto cru. NÃO inventa e-mail. */
@@ -1494,14 +1512,15 @@ async function processBatch(){
     } else lastRun = { works: allResults.length, cost:0, perWork:0, hard:0, nEmail:0, nTit:0, nNomes:0, nFail:0, report:[] };
     _saveRun();
   }
+  const inic = completarIniciais(allResults);   // completa iniciais pelo e-mail + marca "revisar"
   const ex = excluirSemEmail();          // ETAPA final do validador: remove autores sem e-mail
   renderResults();
   renderCobertura(ex);                   // transparência: o que entrou e o que saiu (e por quê)
   const trab = allResults.length;
   const idxMsg = lastIndice ? " · índice esperava "+lastIndice.total : "";
+  const revMsg = inic.nFlag ? " · ⚠️ "+inic.nFlag+" nomes só com iniciais — REVISAR (marcados na tabela; "+inic.nComp+" completados pelo e‑mail)" : "";
   setStatus("Linha concluída: <b>"+trab+"</b> trabalhos com e‑mail"+idxMsg+" · "+ex.trabRem
-            +" trabalhos removidos (sem e‑mail) · "+ex.autRem+" autores sem e‑mail removidos. "
-            +"Veja a <b>Cobertura</b> abaixo. Depois gere o Excel.");
+            +" trabalhos removidos (sem e‑mail)"+revMsg+". Veja a <b>Cobertura</b> abaixo. Depois gere o Excel.");
   toast("Pronto: "+trab+" trabalhos · "+ex.trabRem+" removidos sem e‑mail (veja Cobertura).");
 }
 
@@ -1637,7 +1656,7 @@ function renderResults(){
     const auths = (r.authors&&r.authors.length)?r.authors:[{name:"",email:""}];
     auths.forEach((a,ai)=>flat.push({ri,ai,hasA:!!(r.authors&&r.authors.length),
       title:r.title||"(sem título)", name:a.name||"", email:a.email||"",
-      src:r.source_file||"", corr:a._corr, inv:a._inv}));
+      src:r.source_file||"", corr:a._corr, inv:a._inv, rev:a._revisar}));
   });
   const pages = Math.max(1, Math.ceil(flat.length/PAGE_SIZE));
   if(curPage>=pages) curPage = pages-1;
@@ -1646,8 +1665,9 @@ function renderResults(){
   const body = document.getElementById("resultBody");
   body.innerHTML = "";
   slice.forEach((r,i)=>{
-    const badge = r.corr ? '<span class="badge-corr" title="corrigido pelo validador">corrigido</span>'
-                 : r.inv ? '<span class="badge-inv" title="formato inválido — revise">inválido</span>' : '';
+    const badge = (r.rev ? '<span class="badge-inv" title="nome só com iniciais — confira o 1º nome">⚠ revisar</span> ' : '')
+                 + (r.corr ? '<span class="badge-corr" title="corrigido pelo validador">corrigido</span>'
+                 : r.inv ? '<span class="badge-inv" title="formato inválido — revise">inválido</span>' : '');
     const cls = r.inv ? 'email einv' : (r.corr ? 'email ecorr' : 'email');
     const editAttr = r.hasA ? ' contenteditable="true" data-ri="'+r.ri+'" data-ai="'+r.ai+'"' : '';
     const tr = document.createElement("tr");
@@ -1983,9 +2003,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "3.0";
+const VERSION = "3.1";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["3.1","2026-06-03","Nome só com iniciais (ex.: «I. C. Alencar»): completa o 1º nome pelo e-mail quando vem separado (israel.alencar@ → «Israel»); quando vem grudado, NÃO inventa. Marca «⚠ revisar» na tabela pra você conferir."],
   ["3.0","2026-06-03","IA VERIFICA NOMES: detecta nome quebrado (truncado «...Jú/Gonç», titulação «Pós-graduação», ou derivado do e-mail «Profdebora») e reextrai o nome correto do artigo. Relatório agora mostra MODELO usado + tipo de ERRO de cada caso (pra corrigirmos). Base do app que se alimenta."],
   ["2.9","2026-06-03","Fundação dos MODELOS DE COLETA: app passa a reconhecer e mostrar qual modelo usou (Anais / Periódico / Artigo) em cada PDF — visível no painel Cobertura."],
   ["2.8","2026-06-03","Nomes de periódico (ARACÊ etc.) corrigidos: nome buscado ACIMA da titulação (sem «Doutor/Graduando» grudado), limitado ao cabeçalho (sem e-mail de referências) e sem autor-fantasma do tipo «Profdebora»/«Psiframp»."],
