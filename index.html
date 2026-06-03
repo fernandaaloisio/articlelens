@@ -1060,12 +1060,12 @@ function _semEmailColetado(r){
 /* NOME quebrado: truncado (termina em ç/ã/õ ou ≤2 letras), titulação/metadado, ou derivado do e-mail. */
 function nomeQuebrado(nome, email){
   const n=(nome||"").trim(); if(!n) return true;
-  if(/^(p[óo]s|doutor|mestr|gradua|especializ|bacharel|licenc|doctor|master|student|institui|e-?mail|orcid)/i.test(n)) return true;
+  // titulação / cargo / metadado no lugar do nome
+  if(/^(p[óo]s|doutor|mestr|gradua|especializ|bacharel|licenc|resid[êe]nc|residente|estagi|bolsist|t[ée]cnic|enfermeir|m[ée]dic|disc[ei]|docente|professor|acad[êe]mic|doctor|master|student|institui|e-?mail|orcid)/i.test(n)) return true;
+  // derivado do E-MAIL (concatenado): nome sem espaços == parte local do e-mail sem pontuação (ex.: "Tksantos Bbi" ← tksantos.bbi@)
+  if(email){ const lp=_norm(email).split("@")[0].replace(/[^a-z]/g,""); const nn=_norm(n).replace(/[^a-z]/g,""); if(nn && nn===lp) return true; }
   const toks=n.split(/\s+/), last=toks[toks.length-1].replace(/[.,;]/g,"");
-  if(toks.length<2){
-    if(email){ const lp=_norm(email).split("@")[0].replace(/[^a-z]/g,""); if(_norm(n).replace(/[^a-z]/g,"")===lp) return true; }
-    return true;                                  // nome de 1 palavra só = suspeito
-  }
+  if(toks.length<2) return true;                  // 1 palavra só = suspeito
   if(last.length<=2) return true;                 // "Jú", "Ar"
   if(/[çãõ]$/i.test(last)) return true;           // "Gonç", "Mendonç" (ç/ã/õ nunca terminam palavra em PT)
   return false;
@@ -2003,9 +2003,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "3.1";
+const VERSION = "3.2";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["3.2","2026-06-03","Detector de nome quebrado mais forte: pega cargo/titulação no lugar do nome («Residente em Neonatologia»), nome derivado de e-mail mesmo com 2 palavras («Tksantos Bbi» ← tksantos.bbi@) e sobrenome solto. Esses agora vão pra IA corrigir (precisa estar LIGADA)."],
   ["3.1","2026-06-03","Nome só com iniciais (ex.: «I. C. Alencar»): completa o 1º nome pelo e-mail quando vem separado (israel.alencar@ → «Israel»); quando vem grudado, NÃO inventa. Marca «⚠ revisar» na tabela pra você conferir."],
   ["3.0","2026-06-03","IA VERIFICA NOMES: detecta nome quebrado (truncado «...Jú/Gonç», titulação «Pós-graduação», ou derivado do e-mail «Profdebora») e reextrai o nome correto do artigo. Relatório agora mostra MODELO usado + tipo de ERRO de cada caso (pra corrigirmos). Base do app que se alimenta."],
   ["2.9","2026-06-03","Fundação dos MODELOS DE COLETA: app passa a reconhecer e mostrar qual modelo usou (Anais / Periódico / Artigo) em cada PDF — visível no painel Cobertura."],
