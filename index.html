@@ -1057,17 +1057,33 @@ function tituloSuspeito(t){
 function _semEmailColetado(r){
   return /@/.test(r._raw||"") && !(r.authors||[]).some(a=>a.email);
 }
-/* Caso para a IA = título suspeito OU artigo sem e-mail coletado (mas com @ no texto). */
-function casoDificil(r){ return tituloSuspeito(r.title) || _semEmailColetado(r); }
+/* NOME quebrado: truncado (termina em ç/ã/õ ou ≤2 letras), titulação/metadado, ou derivado do e-mail. */
+function nomeQuebrado(nome, email){
+  const n=(nome||"").trim(); if(!n) return true;
+  if(/^(p[óo]s|doutor|mestr|gradua|especializ|bacharel|licenc|doctor|master|student|institui|e-?mail|orcid)/i.test(n)) return true;
+  const toks=n.split(/\s+/), last=toks[toks.length-1].replace(/[.,;]/g,"");
+  if(toks.length<2){
+    if(email){ const lp=_norm(email).split("@")[0].replace(/[^a-z]/g,""); if(_norm(n).replace(/[^a-z]/g,"")===lp) return true; }
+    return true;                                  // nome de 1 palavra só = suspeito
+  }
+  if(last.length<=2) return true;                 // "Jú", "Ar"
+  if(/[çãõ]$/i.test(last)) return true;           // "Gonç", "Mendonç" (ç/ã/õ nunca terminam palavra em PT)
+  return false;
+}
+function temNomeQuebrado(r){ return /@/.test(r._raw||"") && (r.authors||[]).some(a=>nomeQuebrado(a.name, a.email)); }
+/* Caso para a IA = título suspeito OU sem e-mail (com @ no texto) OU NOME quebrado. */
+function casoDificil(r){ return tituloSuspeito(r.title) || _semEmailColetado(r) || temNomeQuebrado(r); }
 /* IA corrige TÍTULO e confere o DONO do e-mail, usando o texto cru. NÃO inventa e-mail. */
 async function aiFixHard(grupo){
-  const sys = "Você confere extrações de trabalhos acadêmicos pelo TEXTO CRU. Corrija o título (às vezes "
-    + "veio trocado pela lista de autores ou truncado) e diga de QUEM é cada e-mail (associe ao autor certo pelo nome). "
-    + "REGRA DURA: só use e-mail que aparece no texto; nunca invente. Responda APENAS JSON.";
+  const sys = "Você confere extrações de artigos acadêmicos a partir do TEXTO CRU. Devolva, por item: "
+    + "(a) o TÍTULO correto; (b) a lista de AUTORES, cada um com NOME COMPLETO e próprio — sem titulação "
+    + "('Doutor', 'Mestre', 'Pós-graduação', 'Graduando'), sem cortar no meio (nomes às vezes quebram entre linhas, "
+    + "junte-os), e NUNCA use o e-mail como nome — e o e-mail de cada autor. "
+    + "REGRA DURA: só use e-mail que APARECE no texto; nunca invente. Responda APENAS JSON.";
   const itens = grupo.map((r,i)=>({ i, titulo_atual:r.title,
-    autores:(r.authors||[]).map(a=>a.name), texto:(r._raw||"").slice(0,1500) }));
-  const user = 'Devolva {"itens":[{"i":idx,"title":"...","authors":[{"name":"...","email":"..."}]}]}. '
-    + 'E-mail vazio "" se o autor não tiver e-mail no texto.\n\n' + JSON.stringify(itens);
+    autores:(r.authors||[]).map(a=>a.name), texto:(r._raw||"").slice(0,1800) }));
+  const user = 'Devolva {"itens":[{"i":idx,"title":"...","authors":[{"name":"Nome Completo","email":"..."}]}]}. '
+    + 'E-mail "" se o autor não tiver e-mail no texto.\n\n' + JSON.stringify(itens);
   return _aiJson(await aiChat([{role:"system",content:sys},{role:"user",content:user}])).itens || [];
 }
 
@@ -1344,7 +1360,8 @@ async function collectFromPDF(file, mode){
   }
   if(!recs){
     const title = extractTitle(text, null);              // periódico/artigo: 1 PDF = 1 artigo
-    recs = [{ title, authors: await buildAuthors(text, null, title), source_file:file.name }];
+    recs = [{ title, authors: await buildAuthors(text, null, title),
+              _raw: text.slice(0, 2000), source_file:file.name }];   // cabeçalho p/ a IA conferir nomes
   }
   recs.forEach(r=>r._modelo = modelo.nome);
   return recs;
@@ -1419,8 +1436,8 @@ async function processBatch(){
   if(AI.enabled && AI.orchestrate && allResults.length){
     const alvos = allResults.filter(casoDificil).slice(0, 400);
     if(alvos.length){
-      setStatus("🧠 IA conferindo "+alvos.length+" casos (título/dono do e‑mail)…");
-      let nTit=0, nEmail=0, nFail=0, lastErr="";
+      setStatus("🧠 IA conferindo "+alvos.length+" casos (título/nome/dono do e‑mail)…");
+      let nTit=0, nEmail=0, nNomes=0, nFail=0, lastErr="";
       const usdBefore = aiUsage.usd;
       const relatorio = [];
       const CHUNK = 6;
@@ -1429,41 +1446,52 @@ async function processBatch(){
         let fixes = null;
         try{ fixes = await aiFixHard(grupo); }
         catch(e){ nFail++; lastErr=e.message;
-          grupo.forEach(r=>relatorio.push({titulo:(r.title||"").slice(0,70), acao:"falhou", detalhe:e.message})); }
+          grupo.forEach(r=>relatorio.push({modelo:r._modelo||"", titulo:(r.title||"").slice(0,60), erro:"IA falhou", acao:"falhou", detalhe:e.message})); }
         if(fixes) grupo.forEach((r,gi)=>{
-          const f = fixes.find(x=>x.i===gi); const antesT = r.title; const mudouE=[];
+          const f = fixes.find(x=>x.i===gi); const antesT = r.title; const mudouE=[]; let nomesCorr=false;
+          const tinhaNomeQuebrado = temNomeQuebrado(r);
           if(f){
             if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)){ r.title=f.title; nTit++; }
-            // confere o DONO do e-mail: só aceita e-mail presente no texto cru
-            if(Array.isArray(f.authors)) for(const fa of f.authors){
+            // (A) NOMES quebrados → substitui a lista de autores pela da IA (validada e com e-mail do texto)
+            if(tinhaNomeQuebrado && Array.isArray(f.authors) && f.authors.length){
+              const novos = f.authors
+                .filter(a=>a && a.name && a.name.trim().split(/\s+/).length>=2 && !nomeQuebrado(a.name, a.email))
+                .map(a=>{ let em=(a.email||"").trim().toLowerCase();
+                          if(em && (!/@/.test(em) || !(r._raw||"").toLowerCase().includes(em))) em="";
+                          return {name:a.name.trim(), email:em}; });
+              if(novos.length){ r.authors=novos; nomesCorr=true; nNomes++; }
+            }
+            // (B) senão, confere o DONO do e-mail (vazio/chute): só e-mail presente no texto
+            else if(Array.isArray(f.authors)) for(const fa of f.authors){
               const em=(fa.email||"").trim().toLowerCase();
-              if(!/@/.test(em) || !(r._raw||"").toLowerCase().includes(em)) continue;   // tem de estar no texto
+              if(!/@/.test(em) || !(r._raw||"").toLowerCase().includes(em)) continue;
               const fn=_norm(fa.name||"").split(/\s+/).filter(t=>t.length>=3);
               const alvo=(r.authors||[]).find(a=>{const an=_norm(a.name); return fn.some(t=>an.includes(t));});
-              if(alvo && (!alvo.email || alvo._guess) && alvo.email!==em){   // corrige vazio ou chute
+              if(alvo && (!alvo.email || alvo._guess) && alvo.email!==em){
                 alvo.email=em; alvo._guess=false; nEmail++; mudouE.push(alvo.name.split(" ")[0]+"→"+em); }
             }
           }
-          (r.authors||[]).forEach(a=>{ delete a._guess; });   // resolveu o chute
+          (r.authors||[]).forEach(a=>{ delete a._guess; });
           aprender(r);
-          const mudou = r.title!==antesT || mudouE.length;
-          relatorio.push({ titulo:(r.title||"").slice(0,70),
-            acao: mudou ? "corrigido" : "sem mudança",
-            detalhe: [ r.title!==antesT?("título: «"+antesT.slice(0,28)+"»→«"+r.title.slice(0,28)+"»"):"",
-                       mudouE.length?("e‑mail: "+mudouE.join("; ")):"" ].filter(Boolean).join(" | ") || "ok" });
+          const detalhe=[ r.title!==antesT?("título corrigido"):"",
+                          nomesCorr?("nomes corrigidos ("+r.authors.length+")"):"",
+                          mudouE.length?("e‑mail: "+mudouE.join("; ")):"" ].filter(Boolean).join(" | ");
+          relatorio.push({ modelo:r._modelo||"", titulo:(r.title||"").slice(0,60),
+            erro: tinhaNomeQuebrado?"nome quebrado":(tituloSuspeito(antesT)?"título suspeito":"e‑mail incerto"),
+            acao: detalhe?"corrigido":"sem mudança", detalhe: detalhe||"ok" });
         });
         setProgress(Math.min(i+CHUNK,alvos.length), alvos.length, "IA");
       }
       const runCost = aiUsage.usd - usdBefore;
       lastRun = { works: allResults.length, cost: runCost,
                   perWork: allResults.length ? runCost/allResults.length : 0,
-                  hard: alvos.length, nEmail, nTit, nFail, report: relatorio };
+                  hard: alvos.length, nEmail, nTit, nNomes, nFail, report: relatorio };
       if(nFail && nFail*CHUNK>=alvos.length)
         toast("⚠️ IA NÃO funcionou — erro: "+lastErr+". Verifique login/modelo/Render.","warn");
       else
-        toast("🧠 IA: "+nTit+" títulos · "+nEmail+" donos de e‑mail conferidos em "+alvos.length+" · US$ "
+        toast("🧠 IA: "+nNomes+" nomes · "+nTit+" títulos · "+nEmail+" e‑mails em "+alvos.length+" casos · US$ "
               +runCost.toFixed(4)+" (US$ "+lastRun.perWork.toFixed(4)+"/trab)"+(nFail?" · "+nFail+" falhas":"")+".");
-    } else lastRun = { works: allResults.length, cost:0, perWork:0, hard:0, nEmail:0, nTit:0, nFail:0, report:[] };
+    } else lastRun = { works: allResults.length, cost:0, perWork:0, hard:0, nEmail:0, nTit:0, nNomes:0, nFail:0, report:[] };
     _saveRun();
   }
   const ex = excluirSemEmail();          // ETAPA final do validador: remove autores sem e-mail
@@ -1552,23 +1580,27 @@ function renderRun(){
   document.getElementById("runWorks").textContent = lastRun.works;
   document.getElementById("runCost").textContent  = fmt(lastRun.cost);
   document.getElementById("runPer").textContent   = fmt(lastRun.perWork);
-  sum.innerHTML = "IA revisou <b>"+lastRun.hard+"</b> casos difíceis · "
-    +"<b>"+lastRun.nEmail+"</b> e‑mails recuperados · <b>"+lastRun.nTit+"</b> títulos corrigidos"
+  sum.innerHTML = "IA revisou <b>"+lastRun.hard+"</b> casos · "
+    +"<b>"+(lastRun.nNomes||0)+"</b> nomes corrigidos · <b>"+lastRun.nEmail+"</b> e‑mails · <b>"+lastRun.nTit+"</b> títulos"
     +(lastRun.nFail?" · <b style='color:var(--danger)'>"+lastRun.nFail+" lotes falharam</b>":"");
+  const td="padding:6px 8px;border-bottom:1px solid var(--border)";
   const rows = (lastRun.report||[]).map(x=>{
     const cor = x.acao==="corrigido"?"var(--accent)":(x.acao==="falhou"?"var(--danger)":"var(--muted)");
-    return "<tr><td style='padding:6px 8px;border-bottom:1px solid var(--border)'>"+escapeHtml(x.titulo)+"</td>"
-      +"<td style='padding:6px 8px;border-bottom:1px solid var(--border);color:"+cor+"'>"+escapeHtml(x.acao)+"</td>"
-      +"<td style='padding:6px 8px;border-bottom:1px solid var(--border);color:var(--muted)'>"+escapeHtml(x.detalhe)+"</td></tr>"; }).join("");
+    return "<tr><td style='"+td+"'>"+escapeHtml(x.modelo||"")+"</td>"
+      +"<td style='"+td+"'>"+escapeHtml(x.titulo)+"</td>"
+      +"<td style='"+td+";color:var(--warn)'>"+escapeHtml(x.erro||"")+"</td>"
+      +"<td style='"+td+";color:"+cor+"'>"+escapeHtml(x.acao)+"</td>"
+      +"<td style='"+td+";color:var(--muted)'>"+escapeHtml(x.detalhe)+"</td></tr>"; }).join("");
   box.innerHTML = "<table style='width:100%;border-collapse:collapse;font-size:13px'>"
-    +"<thead><tr><th style='text-align:left;padding:6px 8px'>Trabalho</th><th style='text-align:left;padding:6px 8px'>Ação</th><th style='text-align:left;padding:6px 8px'>Detalhe</th></tr></thead><tbody>"
+    +"<thead><tr><th style='text-align:left;padding:6px 8px'>Modelo</th><th style='text-align:left;padding:6px 8px'>Trabalho</th>"
+    +"<th style='text-align:left;padding:6px 8px'>Erro</th><th style='text-align:left;padding:6px 8px'>Ação</th><th style='text-align:left;padding:6px 8px'>Detalhe</th></tr></thead><tbody>"
     +rows+"</tbody></table>";
 }
 document.getElementById("aiReportDl").onclick = ()=>{
   if(!lastRun || !lastRun.report.length){ toast("Sem relatório ainda. Rode uma coleta com IA.","warn"); return; }
   const esc=s=>'"'+String(s==null?"":s).replace(/"/g,'""')+'"';
-  const csv="﻿"+["Trabalho","Acao","Detalhe"].map(esc).join(",")+"\n"
-    +lastRun.report.map(x=>[x.titulo,x.acao,x.detalhe].map(esc).join(",")).join("\n");
+  const csv="﻿"+["Modelo","Trabalho","Erro","Acao","Detalhe"].map(esc).join(",")+"\n"
+    +lastRun.report.map(x=>[x.modelo||"",x.titulo,x.erro||"",x.acao,x.detalhe].map(esc).join(",")).join("\n");
   download(new Blob([csv],{type:"text/csv;charset=utf-8;"}), "relatorio_ia.csv");
 };
 document.getElementById("costRefresh").onclick = loadUsage;
@@ -1951,10 +1983,11 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "2.9";
+const VERSION = "3.0";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
-  ["2.9","2026-06-03","Fundação dos MODELOS DE COLETA: app passa a reconhecer e mostrar qual modelo usou (Anais / Periódico / Artigo) em cada PDF — visível no painel Cobertura. Base do «app que se alimenta» (próximo: IA escolhe o modelo e propõe modelos novos pra você aprovar)."],
+  ["3.0","2026-06-03","IA VERIFICA NOMES: detecta nome quebrado (truncado «...Jú/Gonç», titulação «Pós-graduação», ou derivado do e-mail «Profdebora») e reextrai o nome correto do artigo. Relatório agora mostra MODELO usado + tipo de ERRO de cada caso (pra corrigirmos). Base do app que se alimenta."],
+  ["2.9","2026-06-03","Fundação dos MODELOS DE COLETA: app passa a reconhecer e mostrar qual modelo usou (Anais / Periódico / Artigo) em cada PDF — visível no painel Cobertura."],
   ["2.8","2026-06-03","Nomes de periódico (ARACÊ etc.) corrigidos: nome buscado ACIMA da titulação (sem «Doutor/Graduando» grudado), limitado ao cabeçalho (sem e-mail de referências) e sem autor-fantasma do tipo «Profdebora»/«Psiframp»."],
   ["2.7","2026-06-03","Corta full papers SEM a palavra «RESUMO» (vão direto pro texto) e de outras instituições (ex.: UNIPAM). Recupera «concreto», «Técnicas construtivas» com seus e-mails. Total subiu p/ 89; 0 com e-mail de fora."],
   ["2.6","2026-06-03","Detector de autores ancora na AFILIAÇÃO (autores = linha acima dela). Pega autores em qualquer formato: vírgula, «;», «Prof» ou nome solto. Resultado: 0 trabalhos com e-mail ficam de fora (antes vários full papers sumiam)."],
