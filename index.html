@@ -561,6 +561,22 @@ function extractTitle(text, html){
 }
 function titleFromText(text){
   if(!text) return null;
+  // CASO SBC/CBIE/SBIE: título tem VÁRIAS linhas, entre o cabeçalho do evento e a linha de
+  // superscritos (ex.: "1 1 1") ou os autores. Junta tudo (senão sairia só a 1ª linha).
+  const L = text.split("\n").map(s=>s.trim()).filter(Boolean);
+  const ev = L.findIndex(l=>/\(cbie|\(sbie|simp[óo]sio brasileiro de inform|congresso brasileiro de inform/i.test(l));
+  if(ev>=0){
+    let fim=-1;
+    for(let i=ev+1;i<L.length && i<ev+8;i++){
+      if(/^[\d\s.,]+$/.test(L[i]) || /@/.test(L[i]) || /^(abstract|resumo|keywords|palavras)/i.test(L[i])){ fim=i; break; }
+    }
+    if(fim>ev+1){
+      const t = L.slice(ev+1,fim)
+        .filter(l=>!/\(cbie|\(sbie|anais d|congresso brasileiro|simp[óo]sio brasileiro/i.test(l))
+        .join(" ").replace(/\s+/g," ").trim();
+      if(t.length>=12) return t;
+    }
+  }
   // Filtra ruído de cabeçalho/rodapé da revista (PDF.js às vezes entrega antes do título):
   // nome da revista, cidade, ISSN, "v.X n.Y", "p.1-14", DOI, URLs, datas, Lattes, ORCID, nº de página.
   const noise = /^\s*(revista\b|são josé dos pinhais|iss?n|v\.?\s*\d+\s*,?\s*n\.?\s*\d+|p\.?\s*\d+\s*-\s*\d+|doi\b|https?:\/\/|data de (submiss|public)|submitted on|publication date|lattes\b|orcid|©|\d{1,4})\b/i;
@@ -1723,19 +1739,22 @@ function renderResults(){
                  + (r.corr ? '<span class="badge-corr" title="corrigido pelo validador">corrigido</span>'
                  : r.inv ? '<span class="badge-inv" title="formato inválido — revise">inválido</span>' : '');
     const cls = r.inv ? 'email einv' : (r.corr ? 'email ecorr' : 'email');
-    const editAttr = r.hasA ? ' contenteditable="true" data-ri="'+r.ri+'" data-ai="'+r.ai+'"' : '';
+    const di = ' data-ri="'+r.ri+'" data-ai="'+r.ai+'"';
+    const ed = ' contenteditable="true"';
     const tr = document.createElement("tr");
     tr.innerHTML =
       '<td class="idx">'+(curPage*PAGE_SIZE+i+1)+'</td>'+
-      '<td>'+escapeHtml(r.title)+'</td>'+
-      '<td>'+escapeHtml(r.name||"—")+'</td>'+
-      '<td class="'+cls+'"'+editAttr+'>'+escapeHtml(r.email)+'</td>'+
+      '<td'+ed+di+' data-field="title" title="clique para editar">'+escapeHtml(r.title)+'</td>'+
+      (r.hasA
+        ? '<td'+ed+di+' data-field="name">'+escapeHtml(r.name||"")+'</td>'+
+          '<td class="'+cls+'"'+ed+di+' data-field="email">'+escapeHtml(r.email)+'</td>'
+        : '<td>—</td><td>—</td>')+
       '<td>'+badge+'</td>';
     body.appendChild(tr);
   });
 
   document.getElementById("pageInfo").textContent =
-    "Página "+(curPage+1)+" de "+pages+" — "+flat.length+" linhas (e‑mail editável)";
+    "Página "+(curPage+1)+" de "+pages+" — "+flat.length+" linhas (título, nome e e‑mail editáveis ✏️)";
   document.getElementById("prevPage").disabled = curPage<=0;
   document.getElementById("nextPage").disabled = curPage>=pages-1;
 
@@ -1901,12 +1920,15 @@ document.getElementById("expJson").onclick = ()=>_exp(exportJSON);
 /* Conferir: edição do e-mail na tabela atualiza o dado subjacente */
 document.getElementById("resultBody").addEventListener("input", e=>{
   const td = e.target.closest('td[contenteditable]'); if(!td) return;
-  const ri=+td.dataset.ri, ai=+td.dataset.ai;
-  if(allResults[ri] && allResults[ri].authors[ai]){
-    allResults[ri].authors[ai].email = td.textContent.trim();
-    td.classList.remove("einv","ecorr");
-    aprender(allResults[ri]);              // edição manual vira aprendizado (não repete o erro)
+  const ri=+td.dataset.ri, ai=+td.dataset.ai, field=td.dataset.field;
+  const r = allResults[ri]; if(!r) return;
+  const val = td.textContent.trim();
+  if(field==="title"){ r.title = val; }
+  else if(r.authors && r.authors[ai]){
+    if(field==="name") r.authors[ai].name = val;
+    else if(field==="email"){ r.authors[ai].email = val; td.classList.remove("einv","ecorr"); }
   }
+  aprender(r);                              // edição manual vira aprendizado (não repete o erro)
 });
 
 /* =========================================================================
@@ -2059,9 +2081,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "3.9";
+const VERSION = "4.0";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["4.0","2026-06-03","EDITOR: agora dá pra editar título, nome E e-mail direto na tabela (clique na célula). Título de SBC/SBIE em várias linhas agora vem completo (era cortado na 1ª linha). Acentos LaTeX já eram resolvidos sem IA (v3.5)."],
   ["3.9","2026-06-03","Anais numerado (UFAC): captura TODOS os co-autores (era ~1,2/trabalho → ~3,7). Pula linhas de números (superscritos ¹²³) que quebravam o bloco de autores. Sem regressão no UNIARAXÁ/ARACÊ."],
   ["3.8","2026-06-03","Detecta TÍTULO CORTADO (termina em \":\" ou preposição como DE/DA/NO) e manda pra IA completar lendo o texto do trabalho. Resolve «TRIAGEM QUÍMICA:», «...UMA FRAÇÃO DE», «...NO ANO DE» (anais UFAC). Precisa da IA ligada."],
   ["3.7","2026-06-03","Título que continua com palavra de seção em CAIXA ALTA («ENGENHARIA CIVIL DA UFAC») não é mais cortado — só corta em cabeçalho de seção COMPLETO (ENGENHARIAS, CIÊNCIAS EXATAS…)."],
