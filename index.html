@@ -382,6 +382,16 @@
       </div>
     </details>
 
+    <div class="row" style="gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <div style="position:relative;flex:1;min-width:200px">
+        <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:.6">🔍</span>
+        <input type="text" id="resSearch" placeholder="Buscar por título, nome ou e‑mail…"
+               style="width:100%;box-sizing:border-box;padding-left:32px">
+      </div>
+      <label class="opt" style="white-space:nowrap"><input type="checkbox" id="resOnlyProb"> ⚠️ só problemas</label>
+      <span id="resCount" class="aihelp" style="white-space:nowrap"></span>
+    </div>
+
     <div class="table-wrap">
       <table>
         <thead><tr><th>#</th><th>Título do Trabalho</th><th>Nome Completo</th><th>E-mail (editável)</th><th>Status</th></tr></thead>
@@ -1670,13 +1680,23 @@ function renderResults(){
   document.getElementById("sEmails").textContent = nEmails;
 
   // lista achatada COM mapeamento (ri=registro, ai=autor) p/ edição na etapa Conferir
-  const flat = [];
+  let flat = [];
   allResults.forEach((r,ri)=>{
     const auths = (r.authors&&r.authors.length)?r.authors:[{name:"",email:""}];
     auths.forEach((a,ai)=>flat.push({ri,ai,hasA:!!(r.authors&&r.authors.length),
       title:r.title||"(sem título)", name:a.name||"", email:a.email||"",
       src:r.source_file||"", corr:a._corr, inv:a._inv, rev:a._revisar}));
   });
+  const totalFlat = flat.length;
+  // 🔍 filtro: busca + "só problemas"
+  const q = _norm((document.getElementById("resSearch")||{}).value||"").trim();
+  const onlyProb = !!(document.getElementById("resOnlyProb")||{}).checked;
+  const ehProblema = x => x.inv || x.rev || tituloSuspeito(x.title) || nomeQuebrado(x.name, x.email)
+                          || /\b(de|da|do|e|em|para|com|no|na)$/i.test((x.title||"").trim());  // título cortado no fim
+  if(q) flat = flat.filter(x=>_norm(x.title+" "+x.name+" "+x.email).includes(q));
+  if(onlyProb) flat = flat.filter(ehProblema);
+  const cnt=document.getElementById("resCount");
+  if(cnt) cnt.textContent = (q||onlyProb) ? (flat.length+" de "+totalFlat+" linhas") : (totalFlat+" linhas");
   const pages = Math.max(1, Math.ceil(flat.length/PAGE_SIZE));
   if(curPage>=pages) curPage = pages-1;
   const slice = flat.slice(curPage*PAGE_SIZE, curPage*PAGE_SIZE+PAGE_SIZE);
@@ -1716,6 +1736,8 @@ function renderResults(){
 }
 document.getElementById("prevPage").onclick = ()=>{ if(curPage>0){curPage--;renderResults();} };
 document.getElementById("nextPage").onclick = ()=>{ curPage++; renderResults(); };
+document.getElementById("resSearch").addEventListener("input", ()=>{ curPage=0; renderResults(); });
+document.getElementById("resOnlyProb").addEventListener("change", ()=>{ curPage=0; renderResults(); });
 
 /* Painel de Cobertura — o que entrou e o que saiu (e por quê) */
 function renderCobertura(ex){
@@ -2022,9 +2044,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "3.5";
+const VERSION = "3.6";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["3.6","2026-06-03","Lupa de busca no resultado (filtra por título/nome/e-mail) + filtro «só problemas» (mostra nomes/títulos suspeitos ou cortados). Facilita achar artigos com erro."],
   ["3.5","2026-06-03","Conserta acentos «soltos» de PDFs em LaTeX/congresso (SBC): «Elaborac¸ ˜ao»→«Elaboração», «m´etricas»→«métricas», «func¸ ˜ao»→«função». Aplicado na leitura do PDF."],
   ["3.4","2026-06-03","Janela de texto p/ a IA aumentada (2000→4500): artigos cujo e-mail fica logo após o cabeçalho (ex.: SILICON/13283) agora são conferidos. Era por isso que «Tksantos Bbi» escapava."],
   ["3.3","2026-06-03","Corrige falha «JSON cortado» da IA em artigos com MUITOS autores: resposta maior (4096 tokens), lote menor (4) e re-tentativa 1 a 1 quando o lote estoura. Os artigos que falhavam (A VIRUS, EDUCAÇÃO INCLUSIVA, SELETIVIDADE) agora são corrigidos pela IA."],
