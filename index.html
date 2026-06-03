@@ -1099,24 +1099,30 @@ async function aiPairAuthorsEmails(names, emails, title){
    "Nome  <titulação>  Instituição: ...  E-mail: x@y  Orcid: ...".
    Como nome e e-mail estão NO MESMO bloco, o pareamento é exato (sem IA). */
 const _DEGREE = /\b(doutor\w*|doutorand[oa]|p[óo]s[\- ]?doutor\w*|mestr[aeio]\w*|mestrand[oa]|especialista|p[óo]s[\- ]?graduand[oa]|graduand[oa]|graduad[oa]|bacharel\w*|licenciad[oa]|disc[ei]\w*|docente|professor\w*|acad[êe]mic[oa]|enfermeir[oa]|m[ée]dic[oa]|advogad[oa]|engenheir[oa]|psic[óo]log[oa]|biom[ée]dic[oa]|farmac[êe]utic[oa]|nutricionista|fisioterapeuta|odont[óo]log[oa]|cirurgi[ãa]o)\b/i;
+const _META_LINE = /institui[çc]|e-?mail|orcid|lattes|^\s*data\b|submiss|publica|^https?:|doi|^\s*resumo|^\s*abstract/i;
 function parseAuthorBlocks(text){
-  const lines = text.replace(/\r/g,"").split("\n");
+  const lines = text.replace(/\r/g,"").split("\n").map(l=>l.trim());
+  // limita ao CABEÇALHO do artigo (antes do Resumo/Abstract) — evita e-mails das REFERÊNCIAS
+  let endHdr = lines.findIndex(l=>/^(resumo|abstract|resumen)\b/i.test(l));
+  if(endHdr<5) endHdr = Math.min(lines.length, 70);
   const out = [];
-  for(let i=0;i<lines.length;i++){
-    if(!/institui[çc][ãa]o\s*:/i.test(lines[i])) continue;   // linha do bloco do autor
-    // e-mail pode estar na mesma linha ou nas 2 seguintes (Orcid quebra o bloco)
-    const ctx = [lines[i], lines[i+1]||"", lines[i+2]||""].join(" ");
+  for(let i=0;i<endHdr;i++){
+    if(!/institui[çc][ãa]o\s*:/i.test(lines[i])) continue;   // linha "Instituição:" delimita o bloco
+    // e-mail nas próximas linhas (Orcid pode quebrar o bloco)
+    const ctx = [lines[i], lines[i+1]||"", lines[i+2]||"", lines[i+3]||""].join(" ");
     const email = ((ctx.match(EMAIL_RE)||[])[0] || "").toLowerCase().replace(/[.,;)]+$/,"");
-    // nome = início da linha, antes da titulação/Instituição
-    let name = lines[i].split(_DEGREE)[0].split(/institui[çc][ãa]o/i)[0]
-                       .replace(/\d|\*|†|‡|§/g,"").trim();
-    if(name.length<5 || !/\s/.test(name)){                   // nome estava na linha anterior
-      name = (lines[i-1]||"").split(_DEGREE)[0].split(/institui[çc][ãa]o/i)[0]
-                             .replace(/\d|\*|†|‡|§/g,"").trim();
+    // NOME: subindo de i-1, pula titulação/metadados e pega a 1ª linha que é nome de pessoa
+    let name = "";
+    for(let k=i-1; k>=Math.max(0,i-5); k--){
+      let s = lines[k]; if(!s) continue;
+      if(_META_LINE.test(s)) continue;                       // Instituição/E-mail/Orcid/Data/etc.
+      s = s.replace(/\d|\*|†|‡|§/g,"").trim();
+      const semTit = s.split(_DEGREE)[0].replace(/[ ,;.\-]+$/,"").trim();   // tira titulação colada
+      if(_DEGREE.test(s) && !semTit){ continue; }            // linha que é SÓ titulação
+      const cand = semTit || s;
+      if(cand.length>=5 && /\s/.test(cand) && /^[A-ZÀ-Ý]/.test(cand) && cand.split(/\s+/).length<=6){ name = cand; break; }
     }
-    if(name.length>=5 && /\s/.test(name) && /^[A-ZÀ-Ý]/.test(name)){
-      out.push({ name, email });
-    }
+    if(name) out.push({ name, email });
   }
   return out;
 }
@@ -1129,9 +1135,8 @@ async function buildAuthors(text, html, title){
   if(!html){
     const blocks = parseAuthorBlocks(text);
     if(blocks.length){
-      // acrescenta e-mails que sobraram (não ligados a bloco) como autor inferido
-      const usados = new Set(blocks.map(b=>b.email).filter(Boolean));
-      extractEmails(text).forEach(e=>{ if(!usados.has(e)) blocks.push({name:_inferName(e), email:e}); });
+      // formato estruturado: os blocos SÃO os autores. NÃO inventar autor a partir de
+      // e-mails soltos (eles vêm das REFERÊNCIAS e poluíam com "nomes" tipo "Profdebora").
       return blocks;
     }
   }
@@ -1914,9 +1919,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "2.7";
+const VERSION = "2.8";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["2.8","2026-06-03","Nomes de periódico (ARACÊ etc.) corrigidos: nome buscado ACIMA da titulação (sem «Doutor/Graduando» grudado), limitado ao cabeçalho (sem e-mail de referências) e sem autor-fantasma do tipo «Profdebora»/«Psiframp»."],
   ["2.7","2026-06-03","Corta full papers SEM a palavra «RESUMO» (vão direto pro texto) e de outras instituições (ex.: UNIPAM). Recupera «concreto», «Técnicas construtivas» com seus e-mails. Total subiu p/ 89; 0 com e-mail de fora."],
   ["2.6","2026-06-03","Detector de autores ancora na AFILIAÇÃO (autores = linha acima dela). Pega autores em qualquer formato: vírgula, «;», «Prof» ou nome solto. Resultado: 0 trabalhos com e-mail ficam de fora (antes vários full papers sumiam)."],
   ["2.5","2026-06-02","BUG IMPORTANTE corrigido: títulos que mencionam «UNIARAXÁ»/«Engenharia» eram truncados/perdidos (o filtro de cabeçalho pegava demais). Agora distingue cabeçalho (CAIXA ALTA) de título. Recupera trabalhos como «Aperfeiçoando os processos… do UNIARAXÁ»."],
