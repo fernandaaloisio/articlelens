@@ -1099,7 +1099,7 @@ async function aiFixHard(grupo){
     + "junte-os), e NUNCA use o e-mail como nome — e o e-mail de cada autor. "
     + "REGRA DURA: só use e-mail que APARECE no texto; nunca invente. Responda APENAS JSON.";
   const itens = grupo.map((r,i)=>({ i, titulo_atual:r.title,
-    autores:(r.authors||[]).map(a=>a.name), texto:(r._raw||"").slice(0,1800) }));
+    autores:(r.authors||[]).map(a=>a.name), texto:(r._raw||"").slice(0,3500) }));
   const user = 'Devolva {"itens":[{"i":idx,"title":"...","authors":[{"name":"Nome Completo","email":"..."}]}]}. '
     + 'E-mail "" se o autor não tiver e-mail no texto.\n\n' + JSON.stringify(itens);
   return _aiJson(await aiChat([{role:"system",content:sys},{role:"user",content:user}])).itens || [];
@@ -1379,7 +1379,7 @@ async function collectFromPDF(file, mode){
   if(!recs){
     const title = extractTitle(text, null);              // periódico/artigo: 1 PDF = 1 artigo
     recs = [{ title, authors: await buildAuthors(text, null, title),
-              _raw: text.slice(0, 2000), source_file:file.name }];   // cabeçalho p/ a IA conferir nomes
+              _raw: text.slice(0, 4500), source_file:file.name }];   // cabeçalho+rodapés (e-mails) p/ a IA conferir
   }
   recs.forEach(r=>r._modelo = modelo.nome);
   return recs;
@@ -2010,9 +2010,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "3.3";
+const VERSION = "3.4";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["3.4","2026-06-03","Janela de texto p/ a IA aumentada (2000→4500): artigos cujo e-mail fica logo após o cabeçalho (ex.: SILICON/13283) agora são conferidos. Era por isso que «Tksantos Bbi» escapava."],
   ["3.3","2026-06-03","Corrige falha «JSON cortado» da IA em artigos com MUITOS autores: resposta maior (4096 tokens), lote menor (4) e re-tentativa 1 a 1 quando o lote estoura. Os artigos que falhavam (A VIRUS, EDUCAÇÃO INCLUSIVA, SELETIVIDADE) agora são corrigidos pela IA."],
   ["3.2","2026-06-03","Detector de nome quebrado mais forte: pega cargo/titulação no lugar do nome («Residente em Neonatologia»), nome derivado de e-mail mesmo com 2 palavras («Tksantos Bbi» ← tksantos.bbi@) e sobrenome solto. Esses agora vão pra IA corrigir (precisa estar LIGADA)."],
   ["3.1","2026-06-03","Nome só com iniciais (ex.: «I. C. Alencar»): completa o 1º nome pelo e-mail quando vem separado (israel.alencar@ → «Israel»); quando vem grudado, NÃO inventa. Marca «⚠ revisar» na tabela pra você conferir."],
