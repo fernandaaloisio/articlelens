@@ -807,10 +807,21 @@ function addFootAuthors(authors, block){
 }
 /* Preenche os e-mails faltantes: 1º pelo NÚMERO do rodapé (autor i ↔ "i+1."), 2º ACRESCENTA autores
    limpos do rodapé (nome+e-mail), 3º chute por ORDEM no que sobrar. Compartilhado pelos dois caminhos. */
-function preencherEmails(authors, block, emails){
+/* REGRA GERAL: autor com superscrito Nº → seus dados estão na NOTA de rodapé com o MESMO número,
+   na mesma página. Lê as notas LINHA A LINHA (número no INÍCIO da linha) p/ um dígito DENTRO do
+   e-mail (ex.: "andreiah2o@…") não ser confundido com o número da nota. Devolve {N: email}. */
+function _notasNumeradas(src){
+  const linhas = Array.isArray(src) ? src : String(src||"").split(/\n/);
+  const numEmail={};
+  for(const l of linhas){
+    const m=String(l).trim().match(/^(\d{1,2})\b[^@]*?([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i);
+    if(m && !(m[1] in numEmail)) numEmail[+m[1]] = m[2].toLowerCase().replace(/[.,;)]+$/,"");
+  }
+  return numEmail;
+}
+function preencherEmails(authors, block, emails, lines){
   if(authors.some(a=>!a.email) && authors.length){
-    const numEmail={}; let mm; const reN=/(\d{1,2})\D{0,200}?([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/gi;
-    while((mm=reN.exec(block))){ if(!(mm[1] in numEmail)) numEmail[+mm[1]] = mm[2].toLowerCase().replace(/[.,;)]+$/,""); }
+    const numEmail=_notasNumeradas(lines || (block||"").split(/\n/));   // autor k ↔ nota k+1 (regra geral)
     const usados=new Set(authors.map(a=>(a.email||"").toLowerCase()).filter(Boolean));
     if(Object.keys(numEmail).length)
       authors.forEach((a,i)=>{ if(!a.email && numEmail[i+1] && !usados.has(numEmail[i+1])){ a.email=numEmail[i+1]; usados.add(numEmail[i+1]); a._guess=true; } });
@@ -883,7 +894,7 @@ function parseWork(lines, knownTitle){
       nm.push(...splitAuthorsSeg(l).filter(n=>!_ehGrauJS(n)));  // divide por ; , e & (pega lista numa linha só)
     }
     const seen0=new Set(); nm=nm.filter(n=>{const k=n.toLowerCase(); if(seen0.has(k))return false; seen0.add(k); return true;});
-    const auth = preencherEmails(nm.map(n=>({name:n,email:""})), block, emails);
+    const auth = preencherEmails(nm.map(n=>({name:n,email:""})), block, emails, lines);
     if(auth.length){ let t=titleNear(aLines, footStart>0?footStart:aLines.length, "");
       if(!(t&&t.length>10)) t=(aLines[0]||"").trim();
       return {title:t, authors:auth, all_emails:emails, _raw:block}; }
@@ -923,7 +934,7 @@ function parseWork(lines, knownTitle){
   const seen=new Set(); names=names.filter(n=>{const k=n.toLowerCase(); if(seen.has(k))return false; seen.add(k); return true;});
   if(!(title.length>10 && names.length)) return null;
   const authors=pairWork(names, emails); fixSwapsJS(authors);
-  return {title, authors:preencherEmails(authors, block, emails), all_emails:emails, _raw:block};
+  return {title, authors:preencherEmails(authors, block, emails, lines), all_emails:emails, _raw:block};
 }
 /* Detecta as linhas de AFILIAÇÃO que se repetem ~1× por trabalho (âncora robusta).
    Em muitos anais cada trabalho repete a mesma instituição do evento; isso delimita
@@ -1070,13 +1081,7 @@ function cortarPorSumario(text){
     // E-MAILS NUMERADOS no FIM do resumo ("1 fulano@x", "2 beltrano@y") — completa autores sem e-mail
     // pelo número (autor i ↔ "i+1 e-mail"), usando o bloco INTEIRO (não só o cabeçalho).
     if(authors.length && authors.some(a=>!a.email)){
-      // O número da nota liga ao autor de mesmo superscrito. Lê o rodapé LINHA A LINHA (número no
-      // INÍCIO da linha), p/ um dígito DENTRO do e-mail (ex.: "andreiah2o@…") não virar nº de nota.
-      const numEmail={};
-      block.split(/\n/).forEach(line=>{
-        const m=line.trim().match(/^(\d{1,2})\b[^@]*?([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i);
-        if(m && !(m[1] in numEmail)) numEmail[+m[1]]=m[2].toLowerCase().replace(/[.,;)]+$/,"");
-      });
+      const numEmail=_notasNumeradas(block);   // regra geral: nota Nº ↔ autor Nº (linha a linha)
       const usados=new Set(authors.map(a=>(a.email||"").toLowerCase()).filter(Boolean));
       authors.forEach((a,k)=>{ if(!a.email && numEmail[k+1] && !usados.has(numEmail[k+1])){ a.email=numEmail[k+1]; usados.add(numEmail[k+1]); a._guess=true; } });
       if(authors.some(a=>!a.email)){ const livres=[...new Set((block.match(ERX2)||[]).map(e=>e.toLowerCase()))].filter(e=>!usados.has(e));
@@ -2603,9 +2608,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.0";
+const VERSION = "13.1";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["13.1","2026-06-04","A regra do número↔rodapé virou GERAL: agora vale pra TODOS os artigos de qualquer PDF (corte por sumário, método antigo e artigo único) — sempre que o autor tiver um número (¹²³…) e a nota com o mesmo número trouxer o e-mail, ele é ligado corretamente, mesmo com dígito dentro do e-mail. Centralizei num único leitor de notas (linha a linha). Sem regressão."],
   ["13.0","2026-06-04","Sua regra do número↔rodapé (base: MENINAS NA CIÊNCIA): quando o autor tem um número (¹²³…), os dados dele estão na nota de rodapé com o MESMO número, na mesma página. Agora o app lê o rodapé LINHA A LINHA (número no início) e liga cada autor à sua nota — corrigindo o caso em que um dígito DENTRO do e‑mail atrapalhava (ex.: «andreiah2o@…» fazia sair «o@univates.br»). Resultado MENINAS: os 9 autores com os 9 e‑mails certos. Sem regressão."],
   ["12.9","2026-06-04","Você tinha razão de novo: o pdf_366 TEM sumário (pág 7), num 3º formato — título em CAIXA ALTA terminando com o NÚMERO DA PÁGINA (sem pontilhado, sem numeração). Agora o app lê esse formato também. E, se o anais não tiver sumário no texto, usa os MARCADORES (bookmarks) do PDF como índice. Resultado pdf_366: de 1 registro lixo → 23 trabalhos (7 com e‑mail). Sem regressão (2023 513, 2019 371, 336 18, mostra 78)."],
   ["12.8","2026-06-04","Você tinha razão: o pdf_345 TEM e-mail. Esse anais usa um layout incomum — AUTORES ACIMA do título e E-MAILS no FIM do resumo (notas «1 fulano@x», «2 beltrano@y»). Agora o app: (1) procura autores também ACIMA do título quando não acha abaixo; (2) pega os e-mails numerados do FIM do resumo e liga ao autor pelo número. Recuperou e-mails reais (ex.: Alessandra Magalhães → aemagalhaes@hotmail.com). Sem regressão (2023 513, 2019 371, 336 18). Obs.: nesse anais só ~3 resumos trazem e-mail — os outros realmente não têm."],
