@@ -95,6 +95,7 @@
   .btn.primary:hover{filter:brightness(1.08)}
   .btn.ghost{background:transparent}
   .btn:disabled{opacity:.45;cursor:not-allowed}
+  .chper.active{border-color:var(--accent);color:var(--accent);font-weight:700}
   .btn-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:18px}
 
   /* ---------- Área de ação ---------- */
@@ -246,6 +247,14 @@
       <span class="aihelp" id="aiTestMsg" style="align-self:center"></span>
     </div>
     <p class="aihelp">🔒 O token fica só no seu navegador. A chave da Anthropic nunca aparece aqui — está só no Render.</p>
+
+    <!-- Relatório da IA (o que ela fez na última coleta) -->
+    <h4 style="margin:24px 0 6px">📋 Relatório da IA — o que ela fez</h4>
+    <div id="aiReportSummary" class="aihelp" style="margin-bottom:8px">Rode uma coleta com a IA ligada para ver o relatório.</div>
+    <div id="aiReportBox" style="max-height:340px;overflow:auto;border:1px solid var(--border);border-radius:10px"></div>
+    <div class="btn-bar" style="margin-top:10px">
+      <button class="btn ghost" id="aiReportDl">⬇️ Baixar relatório (.csv)</button>
+    </div>
   </section>
 
   <!-- Aba Custos (admin) -->
@@ -270,8 +279,23 @@
     <div class="meter-label" id="costDetail">—</div>
     <div class="btn-bar" style="margin-top:16px">
       <button class="btn ghost" id="costRefresh">↻ Atualizar</button>
-      <button class="btn ghost" id="costReset">Zerar contador</button>
+      <button class="btn ghost" id="costReset">Zerar contador (Render)</button>
     </div>
+
+    <!-- Histórico de gastos (salvo no navegador → não zera quando o Render reinicia) -->
+    <h4 style="margin:24px 0 8px">📈 Histórico de gastos <span class="aihelp" style="font-weight:400">— salvo no seu navegador (não zera)</span></h4>
+    <div class="row" style="gap:12px;flex-wrap:wrap">
+      <div style="flex:1;min-width:110px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:12px"><div style="font-size:11px;color:var(--muted)">Hoje</div><div id="chToday" style="font-size:19px;font-weight:800;color:var(--accent)">—</div></div>
+      <div style="flex:1;min-width:110px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:12px"><div style="font-size:11px;color:var(--muted)">Este mês</div><div id="chMonth" style="font-size:19px;font-weight:800">—</div></div>
+      <div style="flex:1;min-width:110px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:12px"><div style="font-size:11px;color:var(--muted)">Este ano</div><div id="chYear" style="font-size:19px;font-weight:800">—</div></div>
+      <div style="flex:1;min-width:110px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:12px"><div style="font-size:11px;color:var(--muted)">Total geral</div><div id="chTotal" style="font-size:19px;font-weight:800">—</div></div>
+    </div>
+    <div class="btn-bar" style="margin:12px 0 4px;gap:6px">
+      <button class="btn ghost chper active" data-per="dia">Por dia</button>
+      <button class="btn ghost chper" data-per="mes">Por mês</button>
+      <button class="btn ghost chper" data-per="ano">Por ano</button>
+    </div>
+    <div id="costChart" style="display:flex;align-items:flex-end;gap:8px;min-height:150px;padding:10px 4px;border:1px solid var(--border);border-radius:10px;background:var(--bg-soft);overflow-x:auto"></div>
 
     <!-- Última coleta: custo por trabalho -->
     <h4 style="margin:22px 0 6px">📦 Última coleta</h4>
@@ -290,31 +314,11 @@
       </div>
     </div>
 
-    <!-- Relatório da IA -->
-    <h4 style="margin:22px 0 6px">📋 Relatório da IA — o que ela fez</h4>
-    <div id="aiReportSummary" class="aihelp" style="margin-bottom:8px">Rode uma coleta com a IA ligada para ver o relatório.</div>
-    <div id="aiReportBox" style="max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:10px"></div>
-    <div class="btn-bar" style="margin-top:10px">
-      <button class="btn ghost" id="aiReportDl">⬇️ Baixar relatório (.csv)</button>
-    </div>
-
     <p class="aihelp" style="margin-top:10px">⚠️ Valor estimado (preços padrão da tabela). O limite oficial e inquebrável você define no painel da Anthropic (Billing → Limits).</p>
   </section>
 
-  <!-- LINHA DE PRODUÇÃO -->
+  <!-- COLETA -->
   <div class="action">
-    <div class="pipe" id="pipe">
-      <div class="step" data-s="1"><span class="dot">1</span> Cortar</div>
-      <div class="seta">→</div>
-      <div class="step" data-s="2"><span class="dot">2</span> Coletar</div>
-      <div class="seta">→</div>
-      <div class="step" data-s="3"><span class="dot">3</span> Validar e‑mail</div>
-      <div class="seta">→</div>
-      <div class="step" data-s="4"><span class="dot">4</span> Conferir</div>
-      <div class="seta">→</div>
-      <div class="step" data-s="5"><span class="dot">5</span> Excel</div>
-    </div>
-
     <div class="sepbox">
       <span class="seplbl">✂️ Passar pelo separador (anais com vários trabalhos por PDF)?</span>
       <label class="opt"><input type="radio" name="sepmode" value="auto" checked> Automático</label>
@@ -322,10 +326,10 @@
       <label class="opt"><input type="radio" name="sepmode" value="nao"> Nunca (1 artigo por PDF)</label>
     </div>
 
-    <div class="status-msg" id="statusMsg">Pronto. Selecione arquivos e inicie a linha.</div>
+    <div class="status-msg" id="statusMsg">Pronto. Selecione os PDFs e clique em Coletar.</div>
     <div class="meter"><span id="progMeter"></span></div>
     <div class="btn-bar">
-      <button class="btn primary" id="extractBtn">▶ Iniciar linha de produção</button>
+      <button class="btn primary" id="extractBtn">▶ Coletar</button>
       <button class="btn ghost" id="clearAll">Limpar tudo</button>
     </div>
   </div>
@@ -1180,16 +1184,23 @@ function isAmbiguous(authors){
    ========================================================================= */
 const AI = { enabled:false, orchestrate:false, sample:true, sameFormat:true, baseURL:"", model:"claude-3-5-sonnet-20240620", apiKey:"" };
 /* Rastreio de custo no próprio app (a partir dos tokens devolvidos pela Claude) */
-const AIPRICES = { "claude-3-5-sonnet":[3,15],"claude-3-7-sonnet":[3,15],"claude-3-5-haiku":[0.8,4],"claude-3-opus":[15,75],"claude-3-haiku":[0.25,1.25] };
+const AIPRICES = { "claude-3-5-sonnet":[3,15],"claude-3-7-sonnet":[3,15],"claude-3-5-haiku":[0.8,4],"claude-3-opus":[15,75],"claude-3-haiku":[0.25,1.25],
+  "claude-opus-4":[15,75],"claude-sonnet-4":[3,15],"claude-haiku-4":[0.8,4] };
 function aiPriceFor(m){ const k=Object.keys(AIPRICES).find(k=>(m||"").includes(k)); return AIPRICES[k]||AIPRICES["claude-3-5-sonnet"]; }
 let aiUsage = (()=>{ try{ return JSON.parse(localStorage.getItem("articlelens_usage")) || {in:0,out:0,usd:0,calls:0}; }catch(e){ return {in:0,out:0,usd:0,calls:0}; } })();
+// Histórico de custo POR DIA (no navegador → não zera quando o Render reinicia). Dia → US$.
+let costHist = (()=>{ try{ return JSON.parse(localStorage.getItem("articlelens_costhist")) || {}; }catch(e){ return {}; } })();
+function _diaHoje(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 function trackAIUsage(data){
   const u=data&&data.usage||{};
   const i=(u.input_tokens!=null?u.input_tokens:u.prompt_tokens)||0;
   const o=(u.output_tokens!=null?u.output_tokens:u.completion_tokens)||0;
   const [pin,pout]=aiPriceFor(AI.model);
-  aiUsage.in+=i; aiUsage.out+=o; aiUsage.usd+= i/1e6*pin + o/1e6*pout; aiUsage.calls++;
-  try{ localStorage.setItem("articlelens_usage", JSON.stringify(aiUsage)); }catch(e){}   // salva (persiste ao fechar)
+  const custo = i/1e6*pin + o/1e6*pout;
+  aiUsage.in+=i; aiUsage.out+=o; aiUsage.usd+=custo; aiUsage.calls++;
+  costHist[_diaHoje()] = (costHist[_diaHoje()]||0) + custo;     // acumula no dia de hoje
+  try{ localStorage.setItem("articlelens_usage", JSON.stringify(aiUsage)); }catch(e){}
+  try{ localStorage.setItem("articlelens_costhist", JSON.stringify(costHist)); }catch(e){}
 }
 let lastRun = (()=>{ try{ return JSON.parse(localStorage.getItem("articlelens_lastrun")) || null; }catch(e){ return null; } })();
 function _saveRun(){ try{ localStorage.setItem("articlelens_lastrun", JSON.stringify(lastRun)); }catch(e){} }
@@ -1881,6 +1892,7 @@ document.querySelectorAll(".tab").forEach(tab=>{
     tab.classList.add("active");
     document.getElementById("panel-"+tab.dataset.tab).classList.add("active");
     if(tab.dataset.tab === "cost") loadUsage();
+    if(tab.dataset.tab === "ia") renderRun();    // mostra o relatório da IA ao abrir a aba
   };
 });
 
@@ -1914,8 +1926,43 @@ async function loadUsage(){
     det.textContent = "Total do servidor indisponível ("+e.message+"). Mostrando acumulado LOCAL salvo neste navegador: "
       +(aiUsage.calls||0)+" chamadas · "+(aiUsage.in||0).toLocaleString()+" tokens entrada · "+(aiUsage.out||0).toLocaleString()+" saída.";
   }
-  renderRun();
+  renderRun(); renderCostChart();
 }
+/* ===== GRÁFICO de gastos (histórico local por dia/mês/ano) ===== */
+let _chartPeriodo = "dia";
+function _aggCost(){
+  const dia={}, mes={}, ano={}; let total=0;
+  for(const [d,v] of Object.entries(costHist||{})){
+    dia[d]=(dia[d]||0)+v; mes[d.slice(0,7)]=(mes[d.slice(0,7)]||0)+v; ano[d.slice(0,4)]=(ano[d.slice(0,4)]||0)+v; total+=v;
+  }
+  return {dia,mes,ano,total};
+}
+function renderCostChart(){
+  const box=document.getElementById("costChart"); if(!box) return;
+  const a=_aggCost(); const fmt=v=>"US$ "+(v||0).toFixed(v<1?4:2);
+  const hoje=_diaHoje();
+  const set=(id,v)=>{const e=document.getElementById(id); if(e)e.textContent=fmt(v);};
+  set("chToday",a.dia[hoje]||0); set("chMonth",a.mes[hoje.slice(0,7)]||0); set("chYear",a.ano[hoje.slice(0,4)]||0); set("chTotal",a.total);
+  let entries;
+  if(_chartPeriodo==="mes") entries=Object.entries(a.mes).sort();
+  else if(_chartPeriodo==="ano") entries=Object.entries(a.ano).sort();
+  else entries=Object.entries(a.dia).sort().slice(-30);     // últimos 30 dias
+  if(!entries.length){ box.innerHTML="<div class='aihelp' style='margin:auto'>Sem gastos registrados ainda. Rode uma coleta com a IA ligada.</div>"; return; }
+  const max=Math.max(...entries.map(e=>e[1]),0.0001);
+  box.innerHTML=entries.map(([k,v])=>{
+    const h=Math.max(4,Math.round(v/max*120));
+    const lbl=_chartPeriodo==="dia"?k.slice(5):(_chartPeriodo==="mes"?k.slice(2):k);
+    return "<div title='"+k+": "+fmt(v)+"' style='display:flex;flex-direction:column;align-items:center;gap:4px;min-width:32px'>"
+      +"<div style='font-size:9px;color:var(--muted);white-space:nowrap'>"+fmt(v).replace('US$ ','$')+"</div>"
+      +"<div style='width:22px;height:"+h+"px;background:var(--accent);border-radius:4px 4px 0 0'></div>"
+      +"<div style='font-size:10px;color:var(--muted);white-space:nowrap'>"+escapeHtml(lbl)+"</div></div>";
+  }).join("");
+}
+document.querySelectorAll(".chper").forEach(b=>b.onclick=()=>{
+  _chartPeriodo=b.dataset.per;
+  document.querySelectorAll(".chper").forEach(x=>x.classList.toggle("active",x===b));
+  renderCostChart();
+});
 /* Custo por trabalho + relatório da IA (da última coleta) */
 function renderRun(){
   const fmt = v => "US$ " + (v||0).toFixed(v<1?4:2);
@@ -2394,9 +2441,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "11.2";
+const VERSION = "12.0";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["12.0","2026-06-04","Custos reformulados: (1) GRÁFICO de gastos com totais de HOJE / mês / ano / TOTAL e barras por dia/mês/ano — e agora o histórico é salvo NO NAVEGADOR, então NÃO zera quando o Render reinicia; (2) custo por trabalho na «Última coleta»; (3) o «📋 Relatório da IA — o que ela fez» foi pra aba 🧠 IA (onde faz sentido); (4) removida a «linha de produção» (aquele desenho de etapas) — o botão agora é só «▶ Coletar». Adicionados preços do Opus/Sonnet/Haiku 4."],
   ["11.2","2026-06-04","A 🧠 IA virou uma ABA só de ADMIN (saiu do rodapé): só o administrador vê e mexe nas configurações da IA (ligar, modelo, token, proxy). Usuário comum nem enxerga a aba. As novidades/versões continuam no rodapé."],
   ["11.1","2026-06-04","Removidas as abas «HTML / URL» e «Manual» (não faziam sentido pro uso real). Agora a entrada é direta pelo PDF (arrastar/soltar). Sobra a aba 📄 PDF e, pra admin, 💰 Custos."],
   ["11.0","2026-06-04","Cara nova: o app agora se chama «Seven Coleta de @», tema BRANCO e LARANJA. Foco só em COLETAR — removido o recurso de baixar/agente (varrer sites). Layout reorganizado: o topo agora é o fluxo principal (escolher fonte → coletar → resultados); as configurações (🧠 IA) e 📋 novidades foram pro rodapé e começam recolhidas."],
