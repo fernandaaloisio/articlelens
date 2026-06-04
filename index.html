@@ -801,8 +801,12 @@ function preencherEmails(authors, block, emails){
   }
   return result;
 }
-function parseWork(lines){
+function parseWork(lines, knownTitle){
   const block = lines.join(" ").replace(/\s+/g," ").trim();
+  // Quando o TÍTULO já é conhecido (corte por sumário), nunca deixa uma linha que faz parte dele
+  // virar "autor" (ex.: 2ª linha do título "DE Bifidobacterium breve" / "…E DO SOLO NA ATIVIDADE…").
+  const _ntit = knownTitle ? _norm(knownTitle) : "";
+  const ehTitLine = l => { if(!_ntit) return false; const nl=_norm(l); return nl.length>=8 && _ntit.includes(nl); };
   if(lines.some(l=>/\.{4,}/.test(l))) return null;   // pontilhado = janela do SUMÁRIO (índice), não é trabalho
   const emails = extractEmails(block);
   // numerado com superscrito COLADO no nome (autor¹ + rodapé¹ email).
@@ -847,6 +851,7 @@ function parseWork(lines){
   if(ai<0){
     let nm=[];
     for(const l of aLines){ if(soNumeros(l)) continue; if(SECAO_JS.test(l)||TLINE_NOISE_JS.test(l)) continue;
+      if(ehTitLine(l)) continue;                                // linha que faz parte do título conhecido
       const letras=l.replace(/[^A-Za-zÀ-ÿ]/g,"");
       if(letras.length>3 && l===l.toUpperCase()) continue;     // linha em CAIXA ALTA = título, não autor
       nm.push(...splitAuthorsSeg(l).filter(n=>!_ehGrauJS(n)));  // divide por ; , e & (pega lista numa linha só)
@@ -875,11 +880,12 @@ function parseWork(lines){
     break;
   }
   let names=[];
-  for(let i=topA;i<=ai;i++) if(!soNumeros(aLines[i])) names = names.concat(splitAuthorsSeg(aLines[i]));
+  for(let i=topA;i<=ai;i++) if(!soNumeros(aLines[i]) && !ehTitLine(aLines[i])) names = names.concat(splitAuthorsSeg(aLines[i]));
   // Estende PARA BAIXO: autores que continuam em linhas abaixo (ex.: "Daniel ; Katiane ;" e na linha
   // seguinte, após o superscrito "3", "Antonio Thiago Madeira Beirão"). aLines já exclui os rodapés.
   for(let i=ai+1;i<aLines.length;i++){ const l=aLines[i];
     if(soNumeros(l)) continue;                                  // pula superscritos "3"
+    if(ehTitLine(l)) continue;                                  // linha do título conhecido
     if(SECAO_JS.test(l)||TLINE_NOISE_JS.test(l)) break;
     const letras=l.replace(/[^A-Za-zÀ-ÿ]/g,""); if(letras.length>3 && l===l.toUpperCase()) break; // CAIXA ALTA = não-autor
     const segs=splitAuthorsSeg(l).filter(n=>!_ehGrauJS(n));
@@ -963,7 +969,7 @@ function cortarPorSumario(text){
     // (o corpo do resumo e as palavras-chave não são autores) — evita pegar "Palavras-chave" como nome.
     const ri = blines.findIndex(l=>/^(resumo|abstract|resumen|palavras?[\s\-]*chave|keywords?)\b/i.test(l));
     const head = ri>0 ? blines.slice(0, ri) : blines.slice(0, 14);
-    const w=parseWork(head) || {authors:[], all_emails:[]};
+    const w=parseWork(head, found[i].e.title) || {authors:[], all_emails:[]};   // passa o título oficial
     works.push({ title: found[i].e.title, authors:(w.authors||[]), all_emails:(w.all_emails||[]),
                  _raw: block.slice(0,4500), _fromIndex:true });
   }
@@ -2366,9 +2372,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "7.0";
+const VERSION = "7.1";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["7.1","2026-06-04","Pente-fino: 2 «autores» eram pedaços do TÍTULO que vazaram (ex.: «DE Bifidobacterium breve», «DO SOLO NA ATIVIDADE DE REFLORESTAMENTO» — a 2ª linha do título não toda em CAIXA ALTA). Conserto GERAL: no corte por sumário, como o título oficial é conhecido, nenhuma linha que faz parte dele pode virar autor. Bônus: isso realinhou o pareamento (ex.: GENÔMICA: Ronilson↔seu e-mail, Pablo↔o dele — antes estavam trocados). Resultado anais 2023: 0 nome-lixo, 0 nome com número, 0 e-mail inválido."],
   ["7.0","2026-06-04","Foco em NUNCA errar a identificação no próximo PDF (sua diretriz): (1) a IA lê o começo do PDF e confirma o TIPO (anais com vários trabalhos × um‑por‑PDF) — é a rede de segurança pra formatos novos; a regra fixa continua como caminho rápido e a IA só corrige (nunca quebra um anais já certo). A QUANTIDADE não é chute: anais = nº de trabalhos do SUMÁRIO (índice); um‑por‑PDF = 1. (2) Verificação SEMPRE visível: o painel mostra «sumário lista N · localizei L · com e‑mail M» e, dos removidos sem e‑mail, separa quantos REALMENTE não têm e‑mail vs quantos TINHAM e‑mail mas a extração não pegou (⚠️) — fim do erro silencioso. Tudo degrada sem IA."],
   ["6.5","2026-06-04","Você perguntou de novo: dos trabalhos sem e-mail, quais REALMENTE não têm? Conferi numa janela ampla: dos 14, só 5 não têm e-mail nenhum no PDF (autores não informaram) — esses estão certos em ficar de fora. Os outros 9 TÊM e-mail, mas em formato bem irregular (número em linha própria, e-mail grudado na sigla, e-mail «inline» sem nota numerada). De quebra, recuperei mais 1 caso: rodapé que começa com «(» (ex.: «1. (PIBIC), … e-mail:»). Total: 510 trabalhos com e-mail, 759 e-mails únicos (de 803 = 94,5%). Os 9 irregulares são o caso do mapa por IA."],
   ["6.4","2026-06-04","Você reparou: o e-mail do «autor-lixo» (ex.: «Professor do ICIBE») pertencia a um autor REAL que estava no bloco (Antonio Thiago Madeira Beirão). Dois consertos: (1) captura autores que continuam na LINHA DE BAIXO (ex.: «Daniel; Katiane;» e na linha seguinte «Antonio Thiago…»); (2) «Professor/Professora», «Técnico», «Autor/Coautor» deixam de ser confundidos com nome. Resultado: autores-lixo 2→0, e o e-mail vai pro NOME certo. E-mails únicos 748→758 (de 803 = 94%), trabalhos com e-mail 507→509."],
