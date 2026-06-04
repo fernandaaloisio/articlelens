@@ -832,7 +832,7 @@ function parseWork(lines){
   // (que tem "Universidade", ";", "Energias Renováveis"…) é confundido com a linha de autores.
   let footStart = -1;
   for(let i=1;i<lines.length;i++){ const l=lines[i].trim();
-    if(/^\d{1,2}\.\s*[A-Za-zÀ-ÿ]/.test(l) && (/@/.test(l)||AFFIL.test(l)||/bolsist|graduand|docente|discente|mestrand|doutorand|orientad|p[óo]s[\- ]?grad|pibic|pivic/i.test(l))){ footStart=i; break; } }
+    if(/^\d{1,2}\.\s*[A-Za-zÀ-ÿ(]/.test(l) && (/@/.test(l)||AFFIL.test(l)||/bolsist|graduand|docente|discente|mestrand|doutorand|orientad|p[óo]s[\- ]?grad|pibic|pivic/i.test(l))){ footStart=i; break; } }
   const aLines = footStart>0 ? lines.slice(0, footStart) : lines;   // janela só dos autores (sem rodapés)
   let ai=-1;
   // 1) Âncora preferida = AFILIAÇÃO → autores são a linha logo ACIMA (pega vírgula/;/Prof/qualquer formato)
@@ -2314,9 +2314,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "6.4";
+const VERSION = "6.5";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["6.5","2026-06-04","Você perguntou de novo: dos trabalhos sem e-mail, quais REALMENTE não têm? Conferi numa janela ampla: dos 14, só 5 não têm e-mail nenhum no PDF (autores não informaram) — esses estão certos em ficar de fora. Os outros 9 TÊM e-mail, mas em formato bem irregular (número em linha própria, e-mail grudado na sigla, e-mail «inline» sem nota numerada). De quebra, recuperei mais 1 caso: rodapé que começa com «(» (ex.: «1. (PIBIC), … e-mail:»). Total: 510 trabalhos com e-mail, 759 e-mails únicos (de 803 = 94,5%). Os 9 irregulares são o caso do mapa por IA."],
   ["6.4","2026-06-04","Você reparou: o e-mail do «autor-lixo» (ex.: «Professor do ICIBE») pertencia a um autor REAL que estava no bloco (Antonio Thiago Madeira Beirão). Dois consertos: (1) captura autores que continuam na LINHA DE BAIXO (ex.: «Daniel; Katiane;» e na linha seguinte «Antonio Thiago…»); (2) «Professor/Professora», «Técnico», «Autor/Coautor» deixam de ser confundidos com nome. Resultado: autores-lixo 2→0, e o e-mail vai pro NOME certo. E-mails únicos 748→758 (de 803 = 94%), trabalhos com e-mail 507→509."],
   ["6.3","2026-06-03","Você perguntou se os «sem e-mail» realmente não tinham: a maioria TINHA e a gente perdia. Consertos: (1) autores em linhas isoladas/separados por vírgula (sem «;») agora são lidos e pareados; (2) rodapé com ponto SEM espaço («1.Bolsista») passou a ser reconhecido. No anais 2023: e-mails únicos 732→748 (de 803 no PDF = 93%), trabalhos com e-mail 500→507, autores-lixo 5→2. Sobram ~12 em formato bem irregular (e-mail inline / grudado na sigla) + ~5 que realmente não têm e-mail no PDF."],
   ["6.2","2026-06-03","Recupera os e-mails que «sobravam»: (1) os autores agora são lidos SÓ acima das notas de rodapé — o texto do rodapé («Universidade…», «Energias Renováveis») não vira mais nome; isso ALÉM de limpar nomes, consertou nomes truncados (ex.: «Julia Rodrigues»→«Julia Isabella de Matos Rodrigues»). (2) Quando a linha de autores funde/perde nomes, o sistema ACRESCENTA o autor a partir do próprio rodapé numerado («N. Nome Completo, … e-mail:»), ligando nome↔e-mail corretos. No anais 2023: e-mails únicos 584→732 (de 803 no PDF = 91%) e trabalhos com e-mail 448→500. Sem regressão em 2019/mostra."],
