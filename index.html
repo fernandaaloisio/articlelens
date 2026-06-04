@@ -210,6 +210,8 @@
         A conexão passa pelo seu <b>proxy no Render</b> — a chave da Anthropic fica escondida no servidor.</p>
       <label class="fld"><input type="checkbox" id="aiEnabled"> Usar IA</label>
       <label class="fld"><input type="checkbox" id="aiOrch"> 🧠 IA orquestra a esteira (decide o corte 1× por PDF + confere amostra)</label>
+      <label class="fld"><input type="checkbox" id="aiSample"> 💸 Conferir só uma AMOSTRA por formato (mais barato) — a IA aprende o padrão no 1º trabalho e confere poucos, em vez de cada caso</label>
+      <label class="fld"><input type="checkbox" id="aiSameFmt"> 📎 Todos os PDFs têm a MESMA formatação (sonda só o 1º e reusa nos demais)</label>
       <div class="btn-bar" style="margin:4px 0">
         <button class="btn ghost" id="aiPresetRender" type="button">Preencher dados do meu Render</button>
       </div>
@@ -1052,7 +1054,7 @@ function isAmbiguous(authors){
    Config salva no localStorage do navegador. A chave nunca sai daqui,
    exceto para o endpoint que VOCÊ configurar.
    ========================================================================= */
-const AI = { enabled:false, orchestrate:false, baseURL:"", model:"claude-3-5-sonnet-20240620", apiKey:"" };
+const AI = { enabled:false, orchestrate:false, sample:true, sameFormat:true, baseURL:"", model:"claude-3-5-sonnet-20240620", apiKey:"" };
 /* Rastreio de custo no próprio app (a partir dos tokens devolvidos pela Claude) */
 const AIPRICES = { "claude-3-5-sonnet":[3,15],"claude-3-7-sonnet":[3,15],"claude-3-5-haiku":[0.8,4],"claude-3-opus":[15,75],"claude-3-haiku":[0.25,1.25] };
 function aiPriceFor(m){ const k=Object.keys(AIPRICES).find(k=>(m||"").includes(k)); return AIPRICES[k]||AIPRICES["claude-3-5-sonnet"]; }
@@ -1163,6 +1165,31 @@ function completarIniciais(records){
 }
 /* Caso para a IA = título suspeito OU sem e-mail (com @ no texto) OU NOME quebrado. */
 function casoDificil(r){ return tituloSuspeito(r.title) || _semEmailColetado(r) || temNomeQuebrado(r); }
+/* Descreve o formato detectado (DE GRAÇA, sem IA) p/ mostrar ao usuário: tipo + título CAIXA ALTA + e‑mail por número. */
+function descreverFormato(recs){
+  if(!recs || !recs.length) return "";
+  const r0 = recs[0] || {};
+  const t = (r0.title||"");
+  const caps = t.replace(/[^A-Za-zÀ-ÿ]/g,"").length>4 && t===t.toUpperCase();
+  const amostraRaw = recs.slice(0,5).map(r=>r._raw||"").join("\n").slice(0,5000);
+  const num = /(^|\n)\s*\d{1,2}\s*[\).º\-–]\D{0,160}?[a-z0-9._%+\-]+@/i.test(amostraRaw);
+  return [r0._modelo||"formato geral", caps?"título CAIXA ALTA":"", num?"e‑mail ligado por número":""].filter(Boolean).join(" · ");
+}
+/* Escolhe a AMOSTRA de casos difíceis por formato: 1º trabalho (sonda) + alguns espaçados, em vez de todos.
+   Agrupa por _modelo (e por arquivo, se os PDFs NÃO têm a mesma formatação). */
+function amostrarPorFormato(alvos, porPdf){
+  const grupos = {};
+  alvos.forEach(r=>{ const k=(r._modelo||"geral")+(porPdf?("|"+(r.source_file||"")):""); (grupos[k]=grupos[k]||[]).push(r); });
+  const escolhidos = [];
+  for(const k in grupos){
+    const g = grupos[k];
+    const idx = new Set([0,1,2]);                       // 1º (sonda) + os 2 seguintes
+    const step = Math.max(1, Math.floor(g.length/5));
+    for(let i=0;i<g.length && idx.size<8;i+=step) idx.add(i);   // + espaçados, máx 8 por formato
+    [...idx].sort((a,b)=>a-b).forEach(i=>{ if(g[i]) escolhidos.push(g[i]); });
+  }
+  return escolhidos;
+}
 /* IA corrige TÍTULO e confere o DONO do e-mail, usando o texto cru. NÃO inventa e-mail. */
 /* Tarefa simples (extrair nome/título do texto) → usa modelo BARATO (Haiku, ~8x menos).
    Se a conta não tiver Haiku, cai pro modelo configurado (uma vez) e segue. */
@@ -1536,9 +1563,19 @@ async function processBatch(){
   // ETAPA 4 — IA só nos casos incertos (título suspeito OU e-mail chutado/não pareado). Mínimo de IA.
   pipeStep(4,"active");
   if(AI.enabled && AI.orchestrate && allResults.length){
-    const alvos = allResults.filter(casoDificil).slice(0, 400);
+    const fmt = descreverFormato(allResults);
+    if(fmt) setStatus("Formato detectado (sem IA): <b>"+escapeHtml(fmt)+"</b>");
+    const todosAlvos = allResults.filter(casoDificil);
+    // AMOSTRA por formato (sonda no 1º + poucos) em vez de cada caso — corta MUITO o custo.
+    let alvos, amostraInfo=null;
+    if(AI.sample!==false && todosAlvos.length>8){
+      alvos = amostrarPorFormato(todosAlvos, AI.sameFormat===false);
+      amostraInfo = { total: todosAlvos.length, conferidos: alvos.length };
+    } else {
+      alvos = todosAlvos.slice(0, 400);
+    }
     if(alvos.length){
-      setStatus("🧠 IA conferindo "+alvos.length+" casos (título/nome/dono do e‑mail)…");
+      setStatus("🧠 IA conferindo "+alvos.length+(amostraInfo?(" de "+amostraInfo.total+" casos (amostra por formato)"):" casos")+" — título/nome/dono do e‑mail…");
       let nTit=0, nEmail=0, nNomes=0, nFail=0, lastErr="";
       const usdBefore = aiUsage.usd;
       const relatorio = [];
@@ -1591,17 +1628,22 @@ async function processBatch(){
         });
         setProgress(Math.min(i+CHUNK,alvos.length), alvos.length, "IA");
       }
+      // Registra as correções da amostra (re-execuções e trabalhos idênticos pegam de graça).
+      // Os NÃO conferidos mantêm a extração determinística (que após v4.5/v4.6 já acerta o formato).
+      if(amostraInfo){ try{ aplicarAprendizado(allResults); }catch(e){ console.warn("aplicarAprendizado:",e); } }
       const runCost = aiUsage.usd - usdBefore;
       lastRun = { works: allResults.length, cost: runCost,
                   perWork: allResults.length ? runCost/allResults.length : 0,
-                  hard: alvos.length, nEmail, nTit, nNomes, nFail, report: relatorio };
+                  hard: alvos.length, nEmail, nTit, nNomes, nFail, report: relatorio,
+                  formato: fmt, amostra: amostraInfo };
       const modeloIA = _repairOK ? "Haiku (barato)" : "Sonnet (caro — sua conta não tem Haiku!)";
       lastRun.modeloIA = modeloIA;
+      const escopo = amostraInfo ? (alvos.length+" de "+amostraInfo.total+" casos (amostra/formato)") : (alvos.length+" casos");
       if(nFail && nFail*CHUNK>=alvos.length)
         toast("⚠️ IA NÃO funcionou — erro: "+lastErr+". Verifique login/modelo/Render.","warn");
       else
-        toast("🧠 IA ["+modeloIA+"]: "+nNomes+" nomes · "+nTit+" títulos · "+nEmail+" e‑mails em "+alvos.length
-              +" casos · US$ "+runCost.toFixed(4)+" (US$ "+lastRun.perWork.toFixed(4)+"/trab)"+(nFail?" · "+nFail+" falhas":"")+".");
+        toast("🧠 IA ["+modeloIA+"]: "+nNomes+" nomes · "+nTit+" títulos · "+nEmail+" e‑mails em "+escopo
+              +" · US$ "+runCost.toFixed(4)+" (US$ "+lastRun.perWork.toFixed(4)+"/trab)"+(nFail?" · "+nFail+" falhas":"")+".");
     } else lastRun = { works: allResults.length, cost:0, perWork:0, hard:0, nEmail:0, nTit:0, nNomes:0, nFail:0, report:[] };
     _saveRun();
   }
@@ -1699,7 +1741,9 @@ function renderRun(){
   document.getElementById("runWorks").textContent = lastRun.works;
   document.getElementById("runCost").textContent  = fmt(lastRun.cost);
   document.getElementById("runPer").textContent   = fmt(lastRun.perWork);
-  sum.innerHTML = "IA revisou <b>"+lastRun.hard+"</b> casos · "
+  sum.innerHTML = (lastRun.formato?"Formato (detectado sem IA): <b>"+escapeHtml(lastRun.formato)+"</b><br>":"")
+    +"IA revisou <b>"+lastRun.hard+"</b> casos"
+    +(lastRun.amostra?" <i>(amostra de "+lastRun.amostra.total+" — confere o 1º trabalho de cada formato + alguns)</i>":"")+" · "
     +"<b>"+(lastRun.nNomes||0)+"</b> nomes corrigidos · <b>"+lastRun.nEmail+"</b> e‑mails · <b>"+lastRun.nTit+"</b> títulos"
     +(lastRun.nFail?" · <b style='color:var(--danger)'>"+lastRun.nFail+" lotes falharam</b>":"");
   const td="padding:6px 8px;border-bottom:1px solid var(--border)";
@@ -1985,6 +2029,8 @@ function initAIUI(){
   loadAIConfig();
   document.getElementById("aiEnabled").checked = !!AI.enabled;
   document.getElementById("aiOrch").checked = !!AI.orchestrate;
+  document.getElementById("aiSample").checked = AI.sample!==false;
+  document.getElementById("aiSameFmt").checked = AI.sameFormat!==false;
   document.getElementById("aiBase").value  = AI.baseURL || "";
   document.getElementById("aiModel").value = AI.model || "";
   document.getElementById("aiKey").value   = AI.apiKey || "";
@@ -1993,6 +2039,8 @@ function initAIUI(){
 document.getElementById("aiSave").onclick = ()=>{
   AI.enabled = document.getElementById("aiEnabled").checked;
   AI.orchestrate = document.getElementById("aiOrch").checked;
+  AI.sample = document.getElementById("aiSample").checked;
+  AI.sameFormat = document.getElementById("aiSameFmt").checked;
   AI.baseURL = document.getElementById("aiBase").value.trim();
   AI.model   = document.getElementById("aiModel").value.trim() || "claude-3-5-sonnet-20240620";
   AI.apiKey  = document.getElementById("aiKey").value.trim();
@@ -2005,6 +2053,8 @@ document.getElementById("aiPresetRender").onclick = ()=>{
   document.getElementById("aiModel").value = "claude-3-5-sonnet-20240620";
   document.getElementById("aiEnabled").checked = true;
   document.getElementById("aiOrch").checked = true;
+  document.getElementById("aiSample").checked = true;
+  document.getElementById("aiSameFmt").checked = true;
   base.focus();
   toast("Troque SEU-SERVICO pela URL do seu Render e cole o ACCESS_TOKEN no campo Token.");
 };
@@ -2123,9 +2173,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "4.6";
+const VERSION = "5.0";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["5.0","2026-06-03","Sua ideia do «modelo por PDF»: o formato (anais numerado, título CAIXA ALTA, e-mail por número) já é detectado SEM IA e aparece na tela. A IA passa a conferir só uma AMOSTRA por formato — o 1º trabalho (sonda) + alguns — em vez de cada caso. No anais 2023: 182 casos difíceis → IA confere só 8 (~46→~2 chamadas, ~95% menos custo). Novo campo «todos os PDFs têm a mesma formatação» (marcado): sonda só o 1º PDF do lote. Desmarque «conferir só amostra» se um PDF vier bagunçado e quiser checar tudo."],
   ["4.6","2026-06-03","Sua regra do NÚMERO: quando o autor tem um número (¹²³) que liga a uma nota de rodapé com e-mail, agora linka autor↔e-mail PELO número (autor 1 ↔ nota «1. …e-mail»), não mais por ordem cega — mais preciso. Bônus: «autores» que são só titulação (Bolsista, Graduanda, Orientador…) deixam de ser puxados como nome → não vão pra IA (custo menor) e somem do resultado."],
   ["4.5","2026-06-03","Sua regra: descarta trabalhos-FANTASMA criados a partir de notas de rodapé numeradas (título = «...e-mail: x@y» ou «Bolsista/Graduanda...»). No anais 2023: 478→332 trabalhos reais. Bônus: corta MUITAS chamadas de IA (esses fantasmas iam pra IA) → custo menor."],
   ["4.4","2026-06-03","Mostra qual modelo a IA usou (Haiku barato vs Sonnet caro) no aviso final — pra diagnosticar custo. Se aparecer «Sonnet», sua conta não tem Haiku habilitado."],
