@@ -1004,17 +1004,36 @@ function cortarPorSumario(text){
   }
   if(found.length<5) return null;                      // não conseguiu localizar → usa método antigo
   const works=[];
+  const ERX2=/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/gi;
+  const _markBody=/^(resumo|abstract|resumen|introdu|objetivo|metodolog|palavras?[\s\-]*chave|keywords?)\b/i;
+  function _extrair(from, end, titulo){
+    const block=bodyRaw.slice(from, end);
+    const blines=block.split(/\n/).map(l=>l.trim()).filter(Boolean);
+    const ri = blines.findIndex(l=>_markBody.test(l));
+    const head = ri>2 ? blines.slice(0, ri) : blines.slice(0, 16);
+    const w=parseWork(head, titulo) || {authors:[]};
+    return {block, authors:w.authors||[]};
+  }
   for(let i=0;i<found.length;i++){
     const start=found[i].off;
     const end = i+1<found.length ? found[i+1].off : Math.min(bodyRaw.length, start+6000);
-    const block=bodyRaw.slice(start, end);
-    let blines=block.split(/\n/).map(l=>l.trim()).filter(Boolean);
-    // CABEÇALHO: do título até RESUMO/ABSTRACT/PALAVRAS-CHAVE — é onde ficam autores+e-mails.
-    // (o corpo do resumo e as palavras-chave não são autores) — evita pegar "Palavras-chave" como nome.
-    const ri = blines.findIndex(l=>/^(resumo|abstract|resumen|palavras?[\s\-]*chave|keywords?)\b/i.test(l));
-    const head = ri>0 ? blines.slice(0, ri) : blines.slice(0, 14);
-    const w=parseWork(head, found[i].e.title) || {authors:[], all_emails:[]};   // passa o título oficial
-    works.push({ title: found[i].e.title, authors:(w.authors||[]), all_emails:(w.all_emails||[]),
+    const titulo = found[i].e.title;
+    // 1) normal: do título pra baixo (autores abaixo do título). 2) se NÃO achar autor, tenta incluir
+    //    ~260 chars ACIMA do título (anais que põem os autores ACIMA do título, ex.: Univates).
+    let r = _extrair(start, end, titulo);
+    if(!r.authors.length){ const back=Math.max(i>0?found[i-1].off:0, start-260); r=_extrair(back, end, titulo); }
+    const block = r.block; let authors = r.authors;
+    // E-MAILS NUMERADOS no FIM do resumo ("1 fulano@x", "2 beltrano@y") — completa autores sem e-mail
+    // pelo número (autor i ↔ "i+1 e-mail"), usando o bloco INTEIRO (não só o cabeçalho).
+    if(authors.length && authors.some(a=>!a.email)){
+      const numEmail={}; let mm; const reN=/(?:^|[^0-9])(\d{1,2})\s*[.\)\-–]?\s*([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/gi;
+      while((mm=reN.exec(block))){ if(!(mm[1] in numEmail)) numEmail[+mm[1]]=mm[2].toLowerCase().replace(/[.,;)]+$/,""); }
+      const usados=new Set(authors.map(a=>(a.email||"").toLowerCase()).filter(Boolean));
+      authors.forEach((a,k)=>{ if(!a.email && numEmail[k+1] && !usados.has(numEmail[k+1])){ a.email=numEmail[k+1]; usados.add(numEmail[k+1]); a._guess=true; } });
+      if(authors.some(a=>!a.email)){ const livres=[...new Set((block.match(ERX2)||[]).map(e=>e.toLowerCase()))].filter(e=>!usados.has(e));
+        let j=0; for(const a of authors){ if(!a.email && j<livres.length){ a.email=livres[j++]; a._guess=true; } } }
+    }
+    works.push({ title: found[i].e.title, authors, all_emails:[...new Set((block.match(ERX2)||[]).map(e=>e.toLowerCase()))],
                  _raw: block.slice(0,4500), _fromIndex:true });
   }
   works._sumario = {total:entries.length, localizados:found.length};
@@ -2535,9 +2554,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "12.7";
+const VERSION = "12.8";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["12.8","2026-06-04","Você tinha razão: o pdf_345 TEM e-mail. Esse anais usa um layout incomum — AUTORES ACIMA do título e E-MAILS no FIM do resumo (notas «1 fulano@x», «2 beltrano@y»). Agora o app: (1) procura autores também ACIMA do título quando não acha abaixo; (2) pega os e-mails numerados do FIM do resumo e liga ao autor pelo número. Recuperou e-mails reais (ex.: Alessandra Magalhães → aemagalhaes@hotmail.com). Sem regressão (2023 513, 2019 371, 336 18). Obs.: nesse anais só ~3 resumos trazem e-mail — os outros realmente não têm."],
   ["12.7","2026-06-04","Teste pdf_345: (1) MODELO — sua conta não tem os Haiku que eu tentava (HTTP 404); agora o app cai sempre no seu modelo configurado (opus-4-8, que funciona) sem travar nem repetir erro. (2) NOMES-LIXO — rótulos de evento como «X SISA», «XVI SIS», «IX SEPS» (numeral romano + sigla) não viram mais «autor». Obs.: o pdf_345 é «Resumos Simples» e NÃO traz e-mail de autor por trabalho (só ~7 e-mails no PDF inteiro, da editora) — por isso dá ~0 e-mails: não é falha, é o anais que não tem o que coletar."],
   ["12.6","2026-06-04","Você perguntou qual foi excluído: dos 7 do pdf_336, 6 realmente não têm e-mail (revisões/relatos) e 1 («INDICADORES DE FARMÁCIA CLÍNICA…») TINHA — o e-mail não pareava porque os autores vinham separados por VÍRGULA e a afiliação («UNIVATES») não era reconhecida. Conserto geral: agora detecta a linha de autores separada por vírgula (sem confundir com afiliação). Recuperou esse e mais vários: 336 17→18, 2023 510→512, 2019 343→370 e-mails. Sem regressão."],
   ["12.5","2026-06-04","Custos em REAL (R$): todos os valores agora mostram R$ (com o US$ menorzinho ao lado), com uma cotação aproximada US$→R$ que você edita na aba Custos. E o custo deixou de ser «por trabalho» — virou «por E-MAIL» (custo da coleta ÷ e-mails coletados). Obs.: 1 e-mail veio cortado sem «.br» (o PDF quebrou o final em outra linha) — dá pra ajustar no editor."],
