@@ -592,9 +592,21 @@ function titleFromText(text){
   const head = [];
   for(const l of lines){ if(stop.test(l) || /@/.test(l)) break; head.push(l); }
   const pool = head.length ? head : lines;
-  // Título = primeira linha "titulosa": >=20 caracteres, contendo letras
-  const cand = pool.find(s => s.length>=20 && /[A-Za-zÀ-ÿ]/.test(s));
-  return cand || null;
+  // Título = primeira linha "titulosa" (>=20 chars) + as CONTINUAÇÕES, juntando linhas do título
+  // que quebram em 2-3 linhas. PARA na TRADUÇÃO (versão em inglês/espanhol) ou em linha não-título —
+  // assim periódicos com título PT/EN/ES não saem truncados nem misturam idiomas.
+  const idx = pool.findIndex(s => s.length>=20 && /[A-Za-zÀ-ÿ]/.test(s));
+  if(idx<0) return null;
+  const outraLingua = /\b(the|of|and|for|with|from|applied|stage|wheat|tillering|selectivity|effect|evaluation|study|del|la|el|en|durante|etapa|ahijamiento|aplicado durante)\b/i;
+  const parts=[pool[idx]];
+  for(let i=idx+1;i<pool.length;i++){ const s=pool[i];
+    if(!/[A-Za-zÀ-ÿ]/.test(s) || /@/.test(s) || stop.test(s)) break;
+    if(outraLingua.test(s)) break;               // começou a tradução (EN/ES) → para
+    if(/[.;]\s*$/.test(parts[parts.length-1])) break;  // título raramente termina com . ou ;
+    parts.push(s);
+    if(parts.join(" ").length>200) break;
+  }
+  return parts.join(" ").replace(/\s+/g," ").trim() || null;
 }
 
 /* =========================================================================
@@ -1399,7 +1411,7 @@ async function aiPairAuthorsEmails(names, emails, title){
 /* PRECISÃO MÁXIMA p/ PDFs de periódico: cada autor vem num bloco
    "Nome  <titulação>  Instituição: ...  E-mail: x@y  Orcid: ...".
    Como nome e e-mail estão NO MESMO bloco, o pareamento é exato (sem IA). */
-const _DEGREE = /\b(doutor\w*|doutorand[oa]|p[óo]s[\- ]?doutor\w*|mestr[aeio]\w*|mestrand[oa]|especialista|p[óo]s[\- ]?graduand[oa]|graduand[oa]|graduad[oa]|bacharel\w*|licenciad[oa]|disc[ei]\w*|docente|professor\w*|acad[êe]mic[oa]|enfermeir[oa]|m[ée]dic[oa]|advogad[oa]|engenheir[oa]|psic[óo]log[oa]|biom[ée]dic[oa]|farmac[êe]utic[oa]|nutricionista|fisioterapeuta|odont[óo]log[oa]|cirurgi[ãa]o)\b/i;
+const _DEGREE = /\b(doutor\w*|doutorand[oa]|p[óo]s[\- ]?doutor\w*|mestr[aeio]\w*|mestrand[oa]|especialista|p[óo]s[\- ]?graduand[oa]|graduand[oa]|graduad[oa]|bacharel\w*|licenciad[oa]|disc[ei]\w*|docente|professor\w*|acad[êe]mic[oa]|enfermeir[oa]|m[ée]dic[oa]|advogad[oa]|engenheir[oa]|eng\.?\s*agr\w*|agr[ôo]nom\w*|t[ée]cnic[oa]|zootecnist\w*|psic[óo]log[oa]|biom[ée]dic[oa]|farmac[êe]utic[oa]|nutricionista|fisioterapeuta|odont[óo]log[oa]|cirurgi[ãa]o)\b/i;
 const _META_LINE = /institui[çc]|e-?mail|orcid|lattes|^\s*data\b|submiss|publica|^https?:|doi|^\s*resumo|^\s*abstract/i;
 function parseAuthorBlocks(text){
   const lines = text.replace(/\r/g,"").split("\n").map(l=>l.trim());
@@ -2464,9 +2476,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "8.1";
+const VERSION = "8.2";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["8.2","2026-06-04","Testamos um PDF DIFERENTE (artigo único de periódico, revista ARACÊ) pra estressar a generalização — e achou 2 bugs, agora corrigidos: (1) TÍTULO multilíngue saía truncado (só a 1ª linha) — agora junta as linhas do título em português e PARA na tradução (inglês/espanhol); (2) último autor vinha como «Eng. Agronomo» (cargo) em vez do nome — adicionei agrônomo/eng./técnico/zootecnista à lista de cargos ignorados, então pega o nome real («André Bressiani Machado»). Resultado: 8/8 autores certos. Anais sem regressão."],
   ["8.1","2026-06-04","Conserto do «carregando infinito» na verificação por IA: (1) agora mostra BARRA DE PROGRESSO + «X de Y» e o que está fazendo («recuperando excluídos…», «conferindo nomes…»); (2) a lentidão vinha de marcar como incerto TODO e-mail ligado por chute — agora só checa nome quebrado/título suspeito + excluídos que tinham @ (no anais 2023: ~69 casos, ~18 chamadas, não 500); (3) TEMPO-LIMITE por lote (45s) — se a IA travar/cair, ele não fica preso, pula e continua; (4) se não houver nada incerto, avisa na hora."],
   ["8.0","2026-06-04","Sua ideia: botão «🔍 Verificar incertos com IA» (no painel Cobertura) que responde 3 perguntas — (1) todos analisados? (do sumário); (2) os excluídos realmente não têm e-mail? a IA TENTA RECUPERAR os que tinham @ no texto (formato irregular) e re-inclui; (3) títulos/nomes certos? a IA confere SÓ os marcados como suspeitos (nome quebrado/chute). Roda só quando você clica e SÓ nos casos incertos (~dezenas, não os 500) — barato. Mostra um relatório com as 3 respostas + o custo. Sem IA, o painel determinístico já responde 1 e 2."],
   ["7.1","2026-06-04","Pente-fino: 2 «autores» eram pedaços do TÍTULO que vazaram (ex.: «DE Bifidobacterium breve», «DO SOLO NA ATIVIDADE DE REFLORESTAMENTO» — a 2ª linha do título não toda em CAIXA ALTA). Conserto GERAL: no corte por sumário, como o título oficial é conhecido, nenhuma linha que faz parte dele pode virar autor. Bônus: isso realinhou o pareamento (ex.: GENÔMICA: Ronilson↔seu e-mail, Pablo↔o dele — antes estavam trocados). Resultado anais 2023: 0 nome-lixo, 0 nome com número, 0 e-mail inválido."],
