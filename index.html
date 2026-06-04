@@ -2082,10 +2082,15 @@ function renderCobertura(ex){
 /* VERIFICAÇÃO PELA IA — só nos casos INCERTOS (barato). Responde as 3 perguntas:
    1) todos analisados? (determinístico, do sumário)  2) excluídos realmente sem e-mail? (IA tenta
    RECUPERAR os que tinham @)  3) títulos/nomes certos? (IA confere só os MARCADOS como suspeitos). */
+/* corre uma promessa com TEMPO-LIMITE — pra IA nunca travar pra sempre (proxy lento/caído). */
+function _comTimeout(promise, ms, rotulo){
+  return Promise.race([ promise,
+    new Promise((_,rej)=>setTimeout(()=>rej(new Error("tempo esgotado ("+(rotulo||"IA")+")")), ms)) ]);
+}
 async function _aiAplicarGrupo(grupo, modo, contador){
   let fixes=[];
-  try{ fixes = await aiFixHard(grupo); }
-  catch(e){ for(let j=0;j<grupo.length;j++){ try{ const u=await aiFixHard([grupo[j]]); if(u[0]){ u[0].i=j; fixes.push(u[0]); } }catch(_){ } } }
+  try{ fixes = await _comTimeout(aiFixHard(grupo), 45000, "lote"); }
+  catch(e){ for(let j=0;j<grupo.length;j++){ try{ const u=await _comTimeout(aiFixHard([grupo[j]]),30000,"item"); if(u[0]){ u[0].i=j; fixes.push(u[0]); } }catch(_){ } } }
   grupo.forEach((r,gi)=>{
     const f=(fixes||[]).find(x=>x.i===gi); if(!f) return;
     const limpaAutores = arr => (arr||[])
@@ -2112,14 +2117,30 @@ async function verificarIncertosIA(){
   if(btn){ btn.disabled=true; btn.textContent="🔍 Verificando…"; }
   try{
     const CAP=60;
-    let recuperaveis=(lastRemovidosFull||[]).filter(r=>/@/.test(r._raw||""));   // excluídos que TINHAM e-mail
-    let suspeitos=allResults.filter(r=>temNomeQuebrado(r) || (r.authors||[]).some(a=>a._guess)); // nomes marcados
+    // INCERTOS de verdade: excluídos que tinham @ (recuperar) + nomes quebrados/títulos suspeitos (conferir).
+    // NÃO uso _guess aqui (quase todo e-mail ligado por número fica _guess → seria "tudo", lento à toa).
+    let recuperaveis=(lastRemovidosFull||[]).filter(r=>/@/.test(r._raw||""));
+    let suspeitos=allResults.filter(r=>temNomeQuebrado(r) || tituloSuspeito(r.title));
     const capInfo=(recuperaveis.length>CAP)||(suspeitos.length>CAP);
     recuperaveis=recuperaveis.slice(0,CAP); suspeitos=suspeitos.slice(0,CAP);
-    const cont={rec:0,nome:0,tit:0}; const usdBefore=aiUsage.usd;
-    setStatus("🧠 IA verificando "+(recuperaveis.length+suspeitos.length)+" casos incertos…");
-    for(let i=0;i<recuperaveis.length;i+=4) await _aiAplicarGrupo(recuperaveis.slice(i,i+4),"recupera",cont);
-    for(let i=0;i<suspeitos.length;i+=4)   await _aiAplicarGrupo(suspeitos.slice(i,i+4),"confere",cont);
+    const TOTAL=recuperaveis.length+suspeitos.length;
+    if(!TOTAL){
+      if(vb) vb.innerHTML="<b>🔎 Verificação:</b> nada incerto a checar — todos os títulos/nomes passaram nas regras e nenhum excluído tinha e‑mail. ✅";
+      if(btn){ btn.disabled=false; btn.textContent="🔍 Verificar incertos com IA"; } return;
+    }
+    const cont={rec:0,nome:0,tit:0}; const usdBefore=aiUsage.usd; let feito=0;
+    // barra de progresso (reusa o medidor) + contador "X de Y" no painel
+    const prog=(fase)=>{ if(vb) vb.innerHTML="<b>🧠 Verificando com IA…</b> "+feito+" de "+TOTAL+" — "+fase
+        +"<div style='height:8px;background:var(--border);border-radius:6px;margin-top:6px;overflow:hidden'>"
+        +"<div style='height:100%;width:"+Math.round(feito/TOTAL*100)+"%;background:var(--accent,#4f8cff);transition:.2s'></div></div>";
+      setProgress(feito, TOTAL, "IA verificando"); };
+    prog("iniciando…");
+    for(let i=0;i<recuperaveis.length;i+=4){ const g=recuperaveis.slice(i,i+4);
+      prog("recuperando excluídos com e‑mail ("+(i+1)+"–"+Math.min(i+4,recuperaveis.length)+")");
+      await _aiAplicarGrupo(g,"recupera",cont); feito+=g.length; prog("recuperando excluídos…"); }
+    for(let i=0;i<suspeitos.length;i+=4){ const g=suspeitos.slice(i,i+4);
+      prog("conferindo nomes/títulos marcados ("+(i+1)+"–"+Math.min(i+4,suspeitos.length)+")");
+      await _aiAplicarGrupo(g,"confere",cont); feito+=g.length; prog("conferindo nomes/títulos…"); }
     // tira da lista de removidos os que foram recuperados
     const dentro=new Set(allResults);
     lastRemovidosFull=(lastRemovidosFull||[]).filter(r=>!dentro.has(r));
@@ -2141,8 +2162,9 @@ async function verificarIncertosIA(){
       + "<li><b>3. Títulos/nomes certos?</b> "+q3+"</li></ul>"
       + "<div style='color:var(--muted);margin-top:4px'>Custo desta verificação: US$ "+custo.toFixed(4)+"</div>";
     try{ renderResults(); }catch(e){ console.warn(e); }
+    setProgress(TOTAL, TOTAL, ""); setStatus("Verificação concluída.");
     toast("Verificação IA: "+cont.rec+" recuperados · "+cont.nome+" nomes · "+cont.tit+" títulos · US$ "+custo.toFixed(4));
-  }catch(e){ toast("Falha na verificação: "+e.message,"warn"); }
+  }catch(e){ if(vb) vb.innerHTML="<b style='color:var(--danger)'>Falha na verificação:</b> "+escapeHtml(e.message); toast("Falha na verificação: "+e.message,"warn"); }
   finally{ if(btn){ btn.disabled=false; btn.textContent="🔍 Verificar incertos com IA"; } }
 }
 document.getElementById("verificarIA").onclick = verificarIncertosIA;
@@ -2442,9 +2464,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "8.0";
+const VERSION = "8.1";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["8.1","2026-06-04","Conserto do «carregando infinito» na verificação por IA: (1) agora mostra BARRA DE PROGRESSO + «X de Y» e o que está fazendo («recuperando excluídos…», «conferindo nomes…»); (2) a lentidão vinha de marcar como incerto TODO e-mail ligado por chute — agora só checa nome quebrado/título suspeito + excluídos que tinham @ (no anais 2023: ~69 casos, ~18 chamadas, não 500); (3) TEMPO-LIMITE por lote (45s) — se a IA travar/cair, ele não fica preso, pula e continua; (4) se não houver nada incerto, avisa na hora."],
   ["8.0","2026-06-04","Sua ideia: botão «🔍 Verificar incertos com IA» (no painel Cobertura) que responde 3 perguntas — (1) todos analisados? (do sumário); (2) os excluídos realmente não têm e-mail? a IA TENTA RECUPERAR os que tinham @ no texto (formato irregular) e re-inclui; (3) títulos/nomes certos? a IA confere SÓ os marcados como suspeitos (nome quebrado/chute). Roda só quando você clica e SÓ nos casos incertos (~dezenas, não os 500) — barato. Mostra um relatório com as 3 respostas + o custo. Sem IA, o painel determinístico já responde 1 e 2."],
   ["7.1","2026-06-04","Pente-fino: 2 «autores» eram pedaços do TÍTULO que vazaram (ex.: «DE Bifidobacterium breve», «DO SOLO NA ATIVIDADE DE REFLORESTAMENTO» — a 2ª linha do título não toda em CAIXA ALTA). Conserto GERAL: no corte por sumário, como o título oficial é conhecido, nenhuma linha que faz parte dele pode virar autor. Bônus: isso realinhou o pareamento (ex.: GENÔMICA: Ronilson↔seu e-mail, Pablo↔o dele — antes estavam trocados). Resultado anais 2023: 0 nome-lixo, 0 nome com número, 0 e-mail inválido."],
   ["7.0","2026-06-04","Foco em NUNCA errar a identificação no próximo PDF (sua diretriz): (1) a IA lê o começo do PDF e confirma o TIPO (anais com vários trabalhos × um‑por‑PDF) — é a rede de segurança pra formatos novos; a regra fixa continua como caminho rápido e a IA só corrige (nunca quebra um anais já certo). A QUANTIDADE não é chute: anais = nº de trabalhos do SUMÁRIO (índice); um‑por‑PDF = 1. (2) Verificação SEMPRE visível: o painel mostra «sumário lista N · localizei L · com e‑mail M» e, dos removidos sem e‑mail, separa quantos REALMENTE não têm e‑mail vs quantos TINHAM e‑mail mas a extração não pegou (⚠️) — fim do erro silencioso. Tudo degrada sem IA."],
