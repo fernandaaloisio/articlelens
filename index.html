@@ -828,8 +828,16 @@ function detectAffiliations(lines){
 }
 function separarAnais(text){
   const recs=[]; const seenT=new Set();
+  // título que na verdade é uma NOTA DE RODAPÉ (cargo/grau + afiliação + "e-mail:") não é trabalho real
+  const ehRodape = t => { t=(t||"").trim(); if(!t) return false;
+    if(/e-?mail\s*:/i.test(t)) return true;                      // tem "e-mail:" → é rodapé
+    // começa com CARGO/GRAU e está em caixa MISTA (rodapé) — não um TÍTULO em CAIXA ALTA
+    return /^(ic\b|bic\b|pibi[ct]|bolsist|graduand|graduad[oa]|docente|mestrand|doutorand|orientador|discente|zootecnist|p[óo]s[\- ]?grad)/i.test(t)
+           && t!==t.toUpperCase(); };
   const add=r=>{ if(!r) return; const k=_norm(r.title).slice(0,60);
-    if(k.length<8 || seenT.has(k)) return; seenT.add(k); recs.push(r); };
+    if(k.length<8 || seenT.has(k)) return;
+    if(ehRodape(r.title)) return;                 // descarta trabalho-fantasma vindo de rodapé numerado
+    seenT.add(k); recs.push(r); };
   const lines=text.split(/\n|\f/).map(l=>l.trim()).filter(Boolean);
 
   // 1) Ancorado na afiliação repetida (pega trabalhos sem "RESUMO")
@@ -2107,9 +2115,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "4.4";
+const VERSION = "4.5";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["4.5","2026-06-03","Sua regra: descarta trabalhos-FANTASMA criados a partir de notas de rodapé numeradas (título = «...e-mail: x@y» ou «Bolsista/Graduanda...»). No anais 2023: 478→332 trabalhos reais. Bônus: corta MUITAS chamadas de IA (esses fantasmas iam pra IA) → custo menor."],
   ["4.4","2026-06-03","Mostra qual modelo a IA usou (Haiku barato vs Sonnet caro) no aviso final — pra diagnosticar custo. Se aparecer «Sonnet», sua conta não tem Haiku habilitado."],
   ["4.3","2026-06-03","CORREÇÃO IMPORTANTE: trabalhos eram removidos como «sem e-mail» quando NA VERDADE tinham e-mail (só o pareamento falhava). Agora, se ninguém pareou mas há e-mail no bloco, atribui por ordem (marca pra revisão). No anais 2023: 188 removidos→1. Recupera ~187 trabalhos."],
   ["4.2","2026-06-03","Blindagem: se algo falhar DEPOIS da coleta (desenhar tabela etc.), os dados continuam prontos e o Excel/CSV ainda funciona — com aviso na tela em vez de ficar sem nada. Exportação também protegida."],
