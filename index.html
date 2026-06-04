@@ -801,13 +801,21 @@ function parseWork(lines){
   let names=[];
   for(let i=topA;i<=ai;i++) if(!soNumeros(lines[i])) names = names.concat(splitAuthorsSeg(lines[i]));
   const title=titleNear(lines, topA, "");          // título fica ACIMA do bloco de autores
+  // Tira "autores" que são na verdade titulação/cargo do rodapé (não são nomes) → não viram autor nem vão pra IA.
+  const ehGrau = n => /^(ic\b|bic\b|pibi[ct]|bolsist|graduand|graduad[oa]|p[óo]s[\- ]?grad|mestrand|doutorand|orientador|coorientador|docente|discente|estagi|resid|especializ|zootecnist)/i.test((n||"").trim());
+  names = names.filter(n=>!ehGrau(n));
   const seen=new Set(); names=names.filter(n=>{const k=n.toLowerCase(); if(seen.has(k))return false; seen.add(k); return true;});
   if(!(title.length>10 && names.length)) return null;
   const authors=pairWork(names, emails); fixSwapsJS(authors);
-  // Ninguém pareou mas HÁ e-mail(s) no bloco (apelidos/lista numerada) → atribui por ORDEM e
-  // marca _guess (pra IA/usuário conferir). Evita PERDER o trabalho por falha de pareamento.
-  if(!authors.some(a=>a.email) && emails.length && authors.length){
-    for(let i=0;i<authors.length && i<emails.length;i++){ authors[i].email = emails[i]; authors[i]._guess = true; }
+  // Ninguém pareou por nome, mas HÁ e-mail no bloco → liga pelo NÚMERO do rodapé (autor i ↔ "i+1. …e-mail"),
+  // que é mais preciso; se não houver número, cai pra ORDEM. Marca _guess (pra IA/usuário conferir).
+  if(!authors.some(a=>a.email) && authors.length){
+    const numEmail={}; let mm; const reN=/(\d{1,2})\D{0,200}?([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/gi;
+    while((mm=reN.exec(block))){ if(!(mm[1] in numEmail)) numEmail[+mm[1]] = mm[2].toLowerCase().replace(/[.,;)]+$/,""); }
+    if(Object.keys(numEmail).length)                       // 1) pelo NÚMERO do rodapé
+      authors.forEach((a,i)=>{ if(numEmail[i+1]){ a.email=numEmail[i+1]; a._guess=true; } });
+    if(!authors.some(a=>a.email) && emails.length)         // 2) senão, por ORDEM
+      for(let i=0;i<authors.length && i<emails.length;i++){ authors[i].email=emails[i]; authors[i]._guess=true; }
   }
   return {title, authors, all_emails:emails, _raw:block};
 }
@@ -2115,9 +2123,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "4.5";
+const VERSION = "4.6";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["4.6","2026-06-03","Sua regra do NÚMERO: quando o autor tem um número (¹²³) que liga a uma nota de rodapé com e-mail, agora linka autor↔e-mail PELO número (autor 1 ↔ nota «1. …e-mail»), não mais por ordem cega — mais preciso. Bônus: «autores» que são só titulação (Bolsista, Graduanda, Orientador…) deixam de ser puxados como nome → não vão pra IA (custo menor) e somem do resultado."],
   ["4.5","2026-06-03","Sua regra: descarta trabalhos-FANTASMA criados a partir de notas de rodapé numeradas (título = «...e-mail: x@y» ou «Bolsista/Graduanda...»). No anais 2023: 478→332 trabalhos reais. Bônus: corta MUITAS chamadas de IA (esses fantasmas iam pra IA) → custo menor."],
   ["4.4","2026-06-03","Mostra qual modelo a IA usou (Haiku barato vs Sonnet caro) no aviso final — pra diagnosticar custo. Se aparecer «Sonnet», sua conta não tem Haiku habilitado."],
   ["4.3","2026-06-03","CORREÇÃO IMPORTANTE: trabalhos eram removidos como «sem e-mail» quando NA VERDADE tinham e-mail (só o pareamento falhava). Agora, se ninguém pareou mas há e-mail no bloco, atribui por ordem (marca pra revisão). No anais 2023: 188 removidos→1. Recupera ~187 trabalhos."],
