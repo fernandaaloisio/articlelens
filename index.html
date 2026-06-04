@@ -1885,12 +1885,20 @@ function toast(msg, type){
 }
 
 /* tabs */
+// Os blocos de COLETA (separador + botão + resultados) e Novidades pertencem ao FLUXO DO PDF.
+// Só aparecem na aba PDF — somem nas abas IA e Custos.
+function _mostrarFluxoPDF(onPdf){
+  const act=document.querySelector(".action"); if(act) act.style.display=onPdf?"":"none";
+  const res=document.getElementById("results"); if(res) res.style.display=onPdf?"":"none";
+  const cl=document.getElementById("changelogBox"); if(cl) cl.style.display=onPdf?"":"none";
+}
 document.querySelectorAll(".tab").forEach(tab=>{
   tab.onclick = ()=>{
     document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
     document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
     tab.classList.add("active");
     document.getElementById("panel-"+tab.dataset.tab).classList.add("active");
+    _mostrarFluxoPDF(tab.dataset.tab === "pdf");
     if(tab.dataset.tab === "cost") loadUsage();
     if(tab.dataset.tab === "ia") renderRun();    // mostra o relatório da IA ao abrir a aba
   };
@@ -2391,6 +2399,7 @@ function applyRole(role){
       document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active", t.dataset.tab==="pdf"));
     }
   }
+  if(typeof _mostrarFluxoPDF==="function") _mostrarFluxoPDF((document.querySelector(".panel.active")||{}).id==="panel-pdf");
   const badge = document.getElementById("roleBadge");
   if(badge) badge.textContent = isUser ? "👤 Usuário" : "🔑 Admin";
 }
@@ -2441,9 +2450,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "12.0";
+const VERSION = "12.1";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["12.1","2026-06-04","Arrumação: o bloco do ✂️ separador, o botão Coletar, os resultados e o «Novidades & versões» agora aparecem SÓ na aba 📄 PDF. Some quando você está na aba 🧠 IA ou 💰 Custos — onde não faziam sentido."],
   ["12.0","2026-06-04","Custos reformulados: (1) GRÁFICO de gastos com totais de HOJE / mês / ano / TOTAL e barras por dia/mês/ano — e agora o histórico é salvo NO NAVEGADOR, então NÃO zera quando o Render reinicia; (2) custo por trabalho na «Última coleta»; (3) o «📋 Relatório da IA — o que ela fez» foi pra aba 🧠 IA (onde faz sentido); (4) removida a «linha de produção» (aquele desenho de etapas) — o botão agora é só «▶ Coletar». Adicionados preços do Opus/Sonnet/Haiku 4."],
   ["11.2","2026-06-04","A 🧠 IA virou uma ABA só de ADMIN (saiu do rodapé): só o administrador vê e mexe nas configurações da IA (ligar, modelo, token, proxy). Usuário comum nem enxerga a aba. As novidades/versões continuam no rodapé."],
   ["11.1","2026-06-04","Removidas as abas «HTML / URL» e «Manual» (não faziam sentido pro uso real). Agora a entrada é direta pelo PDF (arrastar/soltar). Sobra a aba 📄 PDF e, pra admin, 💰 Custos."],
