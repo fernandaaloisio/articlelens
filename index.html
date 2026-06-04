@@ -606,7 +606,9 @@ function titleFromText(text){
   const noise = /^\s*(revista\b|são josé dos pinhais|iss?n|v\.?\s*\d+\s*,?\s*n\.?\s*\d+|p\.?\s*\d+\s*-\s*\d+|doi\b|https?:\/\/|data de (submiss|public)|submitted on|publication date|lattes\b|orcid|©|\d{1,4})\b/i;
   // Cabeçalho de EVENTO (anais/congresso/simpósio) NÃO é título — remover essas linhas.
   const evento = /(anais d|congresso brasileiro|simp[óo]sio brasileiro|\(cbie|\(sbie|cbie \d|sbie \d|mostra de pesquisa|semana de ci[êe]ncia|brazilian symposium|proceedings of|workshop de inform)/i;
-  const lines = text.split("\n").map(s=>s.trim()).filter(s=>s.length>0 && !noise.test(s) && !evento.test(s));
+  // Rótulo de categoria do Even3 ("RESUMO EXPANDIDO - ÁREA", "ARTIGO - ÁREA", "PÔSTER - …") NÃO é título.
+  const categoria = /^(resumo expandido|resumo simples|artigo|p[ôo]ster(\s+digital)?|comunica[çc][ãa]o oral|apresenta[çc][ãa]o oral|trabalho completo|minicurso|relato de experi[êe]ncia)\s*[-–—]/i;
+  const lines = text.split("\n").map(s=>s.trim()).filter(s=>s.length>0 && !noise.test(s) && !evento.test(s) && !categoria.test(s));
   // Para no início do corpo (abstract/resumo/autores com e-mail)
   const stop = /^(abstract|resumo|keywords|palavras[- ]?chave|introdu|1[\.\)]\s)/i;
   const head = [];
@@ -1460,6 +1462,22 @@ function parseAuthorBlocks(text){
   return out;
 }
 
+/* Formato "RESUMO/ARTIGO Even3": autor vem como "Nome Completo (email@dominio)" logo após o
+   título. Lê o CABEÇALHO (antes do corpo) e devolve cada par nome↔e-mail. */
+function parseInlineEmailAuthors(text){
+  const linhas = (text||"").split("\n").slice(0, 20);   // só o topo (título + linha(s) de autores)
+  // [ \t] (não \s) p/ o nome NÃO atravessar quebras de linha e engolir o título acima.
+  const re = /([A-ZÀ-Ý][\p{L}'.\-]+(?:[ \t]+(?:d[aeoi]s?|e|do|da|[A-ZÀ-Ý][\p{L}'.\-]+))*)[ \t]*\([ \t]*([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})[ \t]*\)/giu;
+  const out=[], seen=new Set();
+  for(const l of linhas){ let m; re.lastIndex=0;
+    while((m=re.exec(l))){
+      const name=cleanAuthor(m[1]); const email=m[2].toLowerCase().replace(/[.,;]+$/,"");
+      if(validPname(name) && !seen.has(email)){ seen.add(email); out.push({name, email}); }
+    }
+  }
+  return out;
+}
+
 /* =========================================================================
    Orquestração de extração por fonte
    ========================================================================= */
@@ -1472,6 +1490,9 @@ async function buildAuthors(text, html, title){
       // e-mails soltos (eles vêm das REFERÊNCIAS e poluíam com "nomes" tipo "Profdebora").
       return blocks;
     }
+    // formato Even3 "Nome (email)" logo após o título → exato, sem pegar frases do corpo.
+    const inline = parseInlineEmailAuthors(text);
+    if(inline.length) return inline;
   }
   // 2) Caminho geral: nomes (meta/regex) + e-mails + pareamento inteligente
   const names  = extractAuthorNames(text, html);
@@ -2578,9 +2599,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "10.1";
+const VERSION = "10.2";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["10.2","2026-06-04","Formato RESUMO/ARTIGO do Even3 (amostra que você mandou) agora coletado certo: (1) TÍTULO — ignora o rótulo «RESUMO EXPANDIDO - ÁREA» / «ARTIGO - …» e pega o título real; (2) AUTORES — lê o formato «Nome Completo (email@dominio)» que vem após o título (antes pegava frases do corpo como «Poder Judiciário»). Ex.: título «AUDIÊNCIAS DE CUSTÓDIA…» + autor «Eduarda Rodrigues Rosa → eduardarosa@tjro.jus.br». Sem regressão (periódico ARACÊ 8/8, anais ok). Só frontend."],
   ["10.1","2026-06-04","Conserto do teste do agente: o Even3 expõe o MESMO PDF por vários links (download/rede/href), então vinham duplicados (33 links p/ ~14 trabalhos) + erros de links repetidos. Agora o download faz DEDUP POR CONTEÚDO (PDFs idênticos viram 1 só) e mostra «X duplicados ignorados». Falta ainda limpar o título dos resumos do Even3 («RESUMO EXPANDIDO - ÁREA - título») — preciso de uma amostra do PDF."],
   ["10.0","2026-06-04","AGENTE LOCAL: agora dá pra fazer TUDO pela tela. Abra o Iniciar_Agente.bat (pasta Downloads) e, na aba 📥 Baixar PDFs, cole a URL do anais (Even3) e clique «Buscar do anais» — o agente, NA SUA MÁQUINA, varre o evento e traz os links; daí «Baixar e coletar». Com o agente aberto o download é 100% local (de graça, SEM Render). A aba mostra «● agente aberto/fechado». Sem o agente, ainda dá pra colar links e baixar pelo Render. Esta versão é só frontend — NÃO precisa redeploy do Render."],
   ["9.0","2026-06-04","Nova aba 📥 Baixar PDFs: você cola os links (gerados pelo gerar_links_pdfs.py), o app baixa cada PDF PELO SEU PROXY DO RENDER (contorna o CORS), joga na fila e já coleta. Barra de progresso «X de Y» + lista de falhas. ⚠️ EXIGE REDEPLOY DO RENDER (novo endpoint /fetch no proxy, com proteções: só http/https, bloqueia hosts privados, limite 60 MB, confere se é PDF). Use a MESMA URL/token da aba 🧠 IA."],
