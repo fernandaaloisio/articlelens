@@ -812,11 +812,18 @@ function addFootAuthors(authors, block){
    e-mail (ex.: "andreiah2o@…") não ser confundido com o número da nota. Devolve {N: email}. */
 function _notasNumeradas(src){
   const linhas = Array.isArray(src) ? src : String(src||"").split(/\n/);
-  const numEmail={};
+  const ER=/([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i;
+  const numEmail={}; let curN=null, buf=[];
+  // A nota de um autor vai do NÚMERO dele até o PRÓXIMO número. O e-mail pode estar em qualquer
+  // linha desse bloco (às vezes quebra de linha: "1 … E-mail" / "fulano@x"). Pega o e-mail do bloco.
+  const flush=()=>{ if(curN!=null){ const m=buf.join(" ").match(ER); if(m) numEmail[curN]=m[1].toLowerCase().replace(/[.,;)]+$/,""); } curN=null; buf=[]; };
   for(const l of linhas){
-    const m=String(l).trim().match(/^(\d{1,2})\b[^@]*?([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i);
-    if(m && !(m[1] in numEmail)) numEmail[+m[1]] = m[2].toLowerCase().replace(/[.,;)]+$/,"");
+    const t=String(l).trim(); if(!t) continue;
+    const m=t.match(/^(\d{1,2})\b(.*)$/);
+    if(m){ flush(); curN=+m[1]; buf=[m[2]]; }     // inicia o bloco da nota Nº
+    else if(curN!=null) buf.push(t);              // continuação da MESMA nota (e-mail quebrado de linha)
   }
+  flush();
   return numEmail;
 }
 function preencherEmails(authors, block, emails, lines){
@@ -1634,13 +1641,13 @@ async function extractFromHTML(rawHtml, sourceName){
    5. MÓDULO — Exportação (CSV / Excel / JSON)
    ========================================================================= */
 function flattenRows(records){
-  // 1 linha por autor; artigo sem autor = 1 linha vazia
+  // 1 linha por autor — SÓ autores COM e-mail (regra do projeto; nunca exporta linha sem e-mail).
   const rows = [];
   for(const rec of records){
     const title = rec.title || "(sem título)";
-    const authors = rec.authors && rec.authors.length ? rec.authors : [{name:"",email:""}];
-    for(const a of authors){
-      rows.push([title, a.name||"", a.email||"", rec.source_file||""]);
+    for(const a of (rec.authors||[])){
+      if(!(a.email && a.email.trim())) continue;
+      rows.push([title, a.name||"", a.email.trim(), rec.source_file||""]);
     }
   }
   return rows;
@@ -1660,8 +1667,10 @@ function exportXLSX(records){
   // Excel LIMPO de 3 colunas: Título do Trabalho · Nome Completo · E-mail (1 linha por autor)
   const aoa = [['Título do Trabalho','Nome Completo','E-mail']];
   for(const r of records){
-    const auths = (r.authors&&r.authors.length)?r.authors:[{name:"",email:""}];
-    for(const a of auths) aoa.push([r.title||"(sem título)", a.name||"", a.email||""]);
+    for(const a of (r.authors||[])){               // SÓ autores COM e-mail (nunca exporta linha sem e-mail)
+      if(!(a.email && a.email.trim())) continue;
+      aoa.push([r.title||"(sem título)", a.name||"", a.email.trim()]);
+    }
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:58},{wch:32},{wch:32}];
@@ -2608,9 +2617,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.1";
+const VERSION = "13.2";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["13.2","2026-06-04","Dois consertos: (1) GRAVE — autor SEM e-mail nunca mais vai pro Excel/CSV (a exportação agora filtra: só sai quem tem e-mail, sempre). (2) A nota de rodapé de cada autor vai do NÚMERO dele até o PRÓXIMO número (bloco inteiro), então o e-mail é pego mesmo quando QUEBRA de linha (ex.: «1 … E-mail» / «bruna.ehlert@…»). Ex. «A EXPERIÊNCIA CARTOGRÁFICA»: Bruna→bruna.ehlert, Claudete→crempel. Sem regressão."],
   ["13.1","2026-06-04","A regra do número↔rodapé virou GERAL: agora vale pra TODOS os artigos de qualquer PDF (corte por sumário, método antigo e artigo único) — sempre que o autor tiver um número (¹²³…) e a nota com o mesmo número trouxer o e-mail, ele é ligado corretamente, mesmo com dígito dentro do e-mail. Centralizei num único leitor de notas (linha a linha). Sem regressão."],
   ["13.0","2026-06-04","Sua regra do número↔rodapé (base: MENINAS NA CIÊNCIA): quando o autor tem um número (¹²³…), os dados dele estão na nota de rodapé com o MESMO número, na mesma página. Agora o app lê o rodapé LINHA A LINHA (número no início) e liga cada autor à sua nota — corrigindo o caso em que um dígito DENTRO do e‑mail atrapalhava (ex.: «andreiah2o@…» fazia sair «o@univates.br»). Resultado MENINAS: os 9 autores com os 9 e‑mails certos. Sem regressão."],
   ["12.9","2026-06-04","Você tinha razão de novo: o pdf_366 TEM sumário (pág 7), num 3º formato — título em CAIXA ALTA terminando com o NÚMERO DA PÁGINA (sem pontilhado, sem numeração). Agora o app lê esse formato também. E, se o anais não tiver sumário no texto, usa os MARCADORES (bookmarks) do PDF como índice. Resultado pdf_366: de 1 registro lixo → 23 trabalhos (7 com e‑mail). Sem regressão (2023 513, 2019 371, 336 18, mostra 78)."],
