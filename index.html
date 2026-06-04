@@ -1070,7 +1070,9 @@ function cortarPorSumario(text){
     // E-MAILS NUMERADOS no FIM do resumo ("1 fulano@x", "2 beltrano@y") — completa autores sem e-mail
     // pelo número (autor i ↔ "i+1 e-mail"), usando o bloco INTEIRO (não só o cabeçalho).
     if(authors.length && authors.some(a=>!a.email)){
-      const numEmail={}; let mm; const reN=/(?:^|[^0-9])(\d{1,2})\s*[.\)\-–]?\s*([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/gi;
+      // o número da nota liga ao autor de mesmo superscrito; permite TEXTO entre o número e o e-mail
+      // (ex.: "1 Graduanda do curso de História… schmitt.gabriela@hotmail.com").
+      const numEmail={}; let mm; const reN=/(\d{1,2})\D{0,200}?([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/gi;
       while((mm=reN.exec(block))){ if(!(mm[1] in numEmail)) numEmail[+mm[1]]=mm[2].toLowerCase().replace(/[.,;)]+$/,""); }
       const usados=new Set(authors.map(a=>(a.email||"").toLowerCase()).filter(Boolean));
       authors.forEach((a,k)=>{ if(!a.email && numEmail[k+1] && !usados.has(numEmail[k+1])){ a.email=numEmail[k+1]; usados.add(numEmail[k+1]); a._guess=true; } });
