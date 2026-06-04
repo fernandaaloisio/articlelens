@@ -685,7 +685,7 @@ const DEGREE_J = /\b(doutor\w*|doutorand[oa]|p[óo]s[\- ]?doutor\w*|mestr[aeio]\
 
 function _norm(s){ return s.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase(); }
 function cleanAuthor(s){
-  s = s.replace(/[\d*†‡§]/g,""); let p=null;
+  s = s.replace(/[\d*†‡§¹²³⁰⁴⁵⁶⁷⁸⁹]/g,""); let p=null;   // tira dígitos ASCII E superscritos (¹²³…) colados no nome
   while(p!==s){ p=s; s=s.replace(PROFPRE_JS,"").trim(); }
   return s.replace(/\s+/g," ").trim().replace(/^[ ,;.\-]+|[ ,;.\-]+$/g,"");
 }
@@ -809,15 +809,17 @@ function parseWork(lines){
   const seen=new Set(); names=names.filter(n=>{const k=n.toLowerCase(); if(seen.has(k))return false; seen.add(k); return true;});
   if(!(title.length>10 && names.length)) return null;
   const authors=pairWork(names, emails); fixSwapsJS(authors);
-  // Ninguém pareou por nome, mas HÁ e-mail no bloco → liga pelo NÚMERO do rodapé (autor i ↔ "i+1. …e-mail"),
-  // que é mais preciso; se não houver número, cai pra ORDEM. Marca _guess (pra IA/usuário conferir).
-  if(!authors.some(a=>a.email) && authors.length){
+  // Preenche os e-mails que FALTARAM (não só quando TODOS faltam — antes, se o pairWork acertava 1-2
+  // por nome, os outros 4-5 com e-mail no rodapé ficavam sem). 1º pelo NÚMERO do rodapé (autor i ↔ "i+1."),
+  // 2º por ORDEM com os e-mails ainda não usados. Marca _guess (pra IA/usuário conferir).
+  if(authors.some(a=>!a.email) && authors.length){
     const numEmail={}; let mm; const reN=/(\d{1,2})\D{0,200}?([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/gi;
     while((mm=reN.exec(block))){ if(!(mm[1] in numEmail)) numEmail[+mm[1]] = mm[2].toLowerCase().replace(/[.,;)]+$/,""); }
+    const usados=new Set(authors.map(a=>(a.email||"").toLowerCase()).filter(Boolean));
     if(Object.keys(numEmail).length)                       // 1) pelo NÚMERO do rodapé
-      authors.forEach((a,i)=>{ if(numEmail[i+1]){ a.email=numEmail[i+1]; a._guess=true; } });
-    if(!authors.some(a=>a.email) && emails.length)         // 2) senão, por ORDEM
-      for(let i=0;i<authors.length && i<emails.length;i++){ authors[i].email=emails[i]; authors[i]._guess=true; }
+      authors.forEach((a,i)=>{ if(!a.email && numEmail[i+1] && !usados.has(numEmail[i+1])){ a.email=numEmail[i+1]; usados.add(numEmail[i+1]); a._guess=true; } });
+    const livres=emails.map(e=>e.toLowerCase()).filter(e=>!usados.has(e));   // 2) sobra por ORDEM
+    let j=0; for(const a of authors){ if(!a.email && j<livres.length){ a.email=livres[j++]; a._guess=true; } }
   }
   return {title, authors, all_emails:emails, _raw:block};
 }
@@ -2242,9 +2244,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "6.0";
+const VERSION = "6.1";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["6.1","2026-06-03","Dois consertos do seu pente-fino: (1) NOMES com número colado (ex.: «Breno Pinto Rayol³») — agora tira os superscritos ¹²³ do nome. (2) MUITO mais e-mails pareados: antes, se o pareamento acertava 1-2 autores por nome, os outros 4-5 (que tinham e-mail no rodapé numerado) ficavam SEM e-mail; agora preenche TODOS os que faltam pelo número do rodapé. No anais 2023: e-mails pareados 456→584 (linhas autor+e-mail 728→855). Obs.: o PDF tem 803 e-mails únicos (não 1000+); ainda faltam ~200 em trabalhos onde nomes se fundem — próximo alvo."],
   ["6.0","2026-06-03","Sua ideia do SUMÁRIO: em anais grande com sumário numerado (1. TÍTULO, 2. TÍTULO…), o corte agora se baseia NELE — lê a lista oficial, localiza cada título no corpo e corta ali. Nenhum trabalho é pulado e o título sai oficial (de graça, sem IA). No anais 2023: 273→524 trabalhos (sumário lista 540; recupera ~250 que eram pulados) e acabaram os «títulos que não existem». Quem não tem sumário numerado (artigo único, ou anais sem numeração) usa o método antigo — sem mudança."],
   ["5.0","2026-06-03","Sua ideia do «modelo por PDF»: o formato (anais numerado, título CAIXA ALTA, e-mail por número) já é detectado SEM IA e aparece na tela. A IA passa a conferir só uma AMOSTRA por formato — o 1º trabalho (sonda) + alguns — em vez de cada caso. No anais 2023: 182 casos difíceis → IA confere só 8 (~46→~2 chamadas, ~95% menos custo). Novo campo «todos os PDFs têm a mesma formatação» (marcado): sonda só o 1º PDF do lote. Desmarque «conferir só amostra» se um PDF vier bagunçado e quiser checar tudo."],
   ["4.6","2026-06-03","Sua regra do NÚMERO: quando o autor tem um número (¹²³) que liga a uma nota de rodapé com e-mail, agora linka autor↔e-mail PELO número (autor 1 ↔ nota «1. …e-mail»), não mais por ordem cega — mais preciso. Bônus: «autores» que são só titulação (Bolsista, Graduanda, Orientador…) deixam de ser puxados como nome → não vão pra IA (custo menor) e somem do resultado."],
