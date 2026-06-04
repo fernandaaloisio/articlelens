@@ -750,7 +750,7 @@ function pairWork(names, emails){
   return authors;
 }
 /* É titulação/cargo (não é nome próprio)? */
-const _ehGrauJS = n=>/^(ic\b|bic\b|pibi[ct]|bolsist|graduand|graduad[oa]|p[óo]s[\- ]?grad|mestrand|doutorand|orientador|coorientador|professora?\b|docente|discente|estagi|resid|especializ|zootecnist|t[ée]cnic[oa]\b|autor\b|coautor)/i.test((n||"").trim());
+const _ehGrauJS = n=>/^(ic\b|bic\b|pibi[ct]|bolsist|graduand|graduad[oa]|p[óo]s[\- ]?grad|mestrand|doutorand|orientador|coorientador|professora?\b|docente|discente|estagi|resid|especializ|zootecnist|t[ée]cnic[oa]\b|autor\b|coautor|farmac[êe]utic|enfermeir|m[ée]dic[oa]\b|nutricion|fisioterap|odont[óo]log|psic[óo]log|biom[ée]dic|acad[êe]mic|disc\b)/i.test((n||"").trim());
 /* Lê as NOTAS DE RODAPÉ numeradas ("1. Nome Completo, …, e-mail: x@y; 2. …") e devolve, por número,
    {name, email}. O nome só conta se for um nome próprio válido (senão fica ""). Usado para recuperar
    e-mails de autores que a linha de autores fundiu/truncou. */
@@ -1375,7 +1375,10 @@ function amostrarPorFormato(alvos, porPdf){
 /* IA corrige TÍTULO e confere o DONO do e-mail, usando o texto cru. NÃO inventa e-mail. */
 /* Tarefa simples (extrair nome/título do texto) → usa modelo BARATO (Haiku, ~8x menos).
    Se a conta não tiver Haiku, cai pro modelo configurado (uma vez) e segue. */
-let _repairModel = "claude-3-5-haiku-20241022", _repairOK = true;
+// Modelos BARATOS p/ reparo/identificação (tenta em ordem antes de cair no modelo caro configurado).
+let _repairCands = ["claude-3-5-haiku-20241022","claude-3-haiku-20240307","claude-haiku-4-20250514"];
+let _repairIdx = 0, _repairOK = true;     // _repairOK=false → último recurso = modelo configurado (caro)
+function _repairModelNow(){ return _repairOK ? _repairCands[_repairIdx] : undefined; }
 /* IA de IDENTIFICAÇÃO (1 chamada/PDF, barato): lê o COMEÇO do PDF e diz o tipo + estima quantos
    trabalhos. É a rede de segurança p/ formatos NOVOS — a regra fixa decide; a IA confirma/corrige. */
 let _formatoIA = null, _lastFid = null;     // cache do lote + último resultado (p/ verificação)
@@ -1387,7 +1390,7 @@ async function aiIdentificarFormato(amostra){
     + '"onde_email":"rodape_numerado"|"inline"|"bloco_instituicao"|"nenhum","confianca":<0 a 1>}. '
     + 'REGRA: "anais" = VÁRIOS trabalhos no mesmo PDF (tem um SUMÁRIO/índice listando os trabalhos). '
     + '"periodico"/"artigo" = UM único artigo no PDF.';
-  const j = _aiJson(await aiChat([{role:"system",content:sys},{role:"user",content:user}], _repairOK?_repairModel:undefined));
+  const j = _aiJson(await aiChat([{role:"system",content:sys},{role:"user",content:user}], _repairModelNow()));
   return (j && j.tipo) ? j : null;
 }
 async function aiFixHard(grupo){
@@ -1402,11 +1405,11 @@ async function aiFixHard(grupo){
     + 'E-mail "" se o autor não tiver e-mail no texto.\n\n' + JSON.stringify(itens);
   const msgs = [{role:"system",content:sys},{role:"user",content:user}];
   try{
-    return _aiJson(await aiChat(msgs, _repairOK ? _repairModel : undefined)).itens || [];
+    return _aiJson(await aiChat(msgs, _repairModelNow())).itens || [];
   }catch(e){
-    if(_repairOK && /not_found|model:/i.test(e.message)){     // conta sem Haiku → usa o configurado
-      _repairOK = false;
-      return _aiJson(await aiChat(msgs)).itens || [];
+    if(/not_found|model:/i.test(e.message)){
+      if(_repairOK && _repairIdx < _repairCands.length-1){ _repairIdx++; return aiFixHard(grupo); }  // tenta próximo Haiku barato
+      if(_repairOK){ _repairOK=false; return _aiJson(await aiChat(msgs)).itens || []; }                // só então o configurado (caro)
     }
     throw e;
   }
@@ -1854,7 +1857,11 @@ async function processBatch(){
                 .map(a=>{ let em=(a.email||"").trim().toLowerCase();
                           if(em && (!/@/.test(em) || !(r._raw||"").toLowerCase().includes(em))) em="";
                           return {name:a.name.trim(), email:em}; });
-              if(novos.length){ r.authors=novos; nomesCorr=true; nNomes++; }
+              // TRAVA: a IA NUNCA pode REDUZIR os e-mails já coletados. Se a versão dela tem
+              // menos e-mails que a nossa, mantém a nossa (a IA estava jogando e-mail fora).
+              const emailsAntes = (r.authors||[]).filter(a=>a.email).length;
+              const emailsNovos = novos.filter(a=>a.email).length;
+              if(novos.length && emailsNovos>=emailsAntes){ r.authors=novos; nomesCorr=true; nNomes++; }
             }
             // (B) senão, confere o DONO do e-mail (vazio/chute): só e-mail presente no texto
             else if(Array.isArray(f.authors)) for(const fa of f.authors){
@@ -1885,7 +1892,7 @@ async function processBatch(){
                   perWork: allResults.length ? runCost/allResults.length : 0,
                   hard: alvos.length, nEmail, nTit, nNomes, nFail, report: relatorio,
                   formato: fmt, amostra: amostraInfo };
-      const modeloIA = _repairOK ? "Haiku (barato)" : "Sonnet (caro — sua conta não tem Haiku!)";
+      const modeloIA = _repairOK ? ("Haiku barato ("+_repairCands[_repairIdx]+")") : "⚠️ modelo CONFIGURADO (CARO — sua conta não aceitou nenhum Haiku!)";
       lastRun.modeloIA = modeloIA;
       const escopo = amostraInfo ? (alvos.length+" de "+amostraInfo.total+" casos (amostra/formato)") : (alvos.length+" casos");
       if(nFail && nFail*CHUNK>=alvos.length)
@@ -2154,7 +2161,7 @@ document.getElementById("resOnlyProb").addEventListener("change", ()=>{ curPage=
 /* Painel de Cobertura — o que entrou e o que saiu (e por quê) */
 function renderCobertura(ex){
   const box=document.getElementById("coberturaBox"); if(!box) return;
-  box.style.display="";
+  box.style.display=""; box.open=true;          // já abre o painel (com a verificação) após a coleta
   const idxN = lastIndice ? lastIndice.total : null;
   document.getElementById("coberturaResumo").textContent =
     "· "+allResults.length+" com e‑mail · "+ex.trabRem+" removidos (sem e‑mail)"
@@ -2503,9 +2510,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "12.3";
+const VERSION = "12.4";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["12.4","2026-06-04","Consertos do teste: (1) TRAVA — a IA NUNCA pode reduzir os e-mails já coletados (ela estava «corrigindo» nomes e jogando e-mail fora: 17→13). Agora só troca se mantiver/aumentar os e-mails. (2) CUSTO — tenta vários modelos BARATOS (Haiku 3.5 → Haiku 3 → Haiku 4) antes de cair no Opus caro; o aviso final mostra QUAL modelo a IA usou. (3) Profissões-cargo (Farmacêutica/Enfermeira/Médica…) não viram mais «nome». (4) O painel 📊 Cobertura (com a verificação «realmente sem e-mail» + botão 🔍 Verificar incertos) agora abre sozinho após a coleta."],
   ["12.3","2026-06-04","Conserto do PDF novo (anais Univates): (1) o corte por SUMÁRIO agora lê também o sumário com PONTILHADO («TÍTULO ……… pág»), não só o numerado; (2) a IA de identificação NÃO rebaixa mais um anais (ela lia só a capa e achava que era «artigo único», quebrando tudo num registro só); (3) o app roda os dois métodos (sumário × página/RESUMO) e fica com o melhor, mas mantendo os títulos oficiais do sumário quando o ganho de e-mail é pequeno. Resultado: pdf_336 saiu de 1 registro lixo → 24 trabalhos/17 e-mails com títulos limpos; sem regressão nos outros."],
   ["12.2","2026-06-04","A linha de produção (Cortar → Coletar → Validar → Conferir → Excel) voltou — mas só na aba 📄 PDF (era pra sumir só da IA e Custos, não de vez)."],
   ["12.1","2026-06-04","Arrumação: o bloco do ✂️ separador, o botão Coletar, os resultados e o «Novidades & versões» agora aparecem SÓ na aba 📄 PDF. Some quando você está na aba 🧠 IA ou 💰 Custos — onde não faziam sentido."],
