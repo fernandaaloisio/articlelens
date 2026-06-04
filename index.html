@@ -1053,8 +1053,8 @@ function loadAIConfig(){
 }
 function saveAIConfig(){ localStorage.setItem("articlelens_ai", JSON.stringify(AI)); }
 
-async function aiChat(messages){
-  if(/api\.anthropic\.com/.test(AI.baseURL)) return aiChatAnthropic(messages);
+async function aiChat(messages, model){
+  if(/api\.anthropic\.com/.test(AI.baseURL)) return aiChatAnthropic(messages, model);
   const url = AI.baseURL.replace(/\/+$/,"") + "/chat/completions";
   const isLocal = /localhost|127\.0\.0\.1/.test(AI.baseURL);
   if(!isLocal && !AI.apiKey)
@@ -1063,7 +1063,7 @@ async function aiChat(messages){
     method:"POST",
     headers:{ "Content-Type":"application/json",
               ...(AI.apiKey ? {"Authorization":"Bearer "+AI.apiKey} : {}) },
-    body: JSON.stringify({ model: AI.model, temperature: 0, max_tokens: 4096, messages })
+    body: JSON.stringify({ model: model||AI.model, temperature: 0, max_tokens: 4096, messages })
   });
   if(!r.ok) throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,120));
   const data = await r.json();
@@ -1071,7 +1071,7 @@ async function aiChat(messages){
   return data.choices?.[0]?.message?.content || "";
 }
 /* API nativa da Anthropic (api.anthropic.com) — formato diferente do OpenAI */
-async function aiChatAnthropic(messages){
+async function aiChatAnthropic(messages, model){
   if(!AI.apiKey) throw new Error("Campo Chave vazio — cole sua chave (sk-ant-…) e clique Salvar.");
   const sys  = messages.filter(m=>m.role==="system").map(m=>m.content).join("\n");
   const msgs = messages.filter(m=>m.role!=="system").map(m=>({role:m.role, content:m.content}));
@@ -1082,7 +1082,7 @@ async function aiChatAnthropic(messages){
               "x-api-key": AI.apiKey,
               "anthropic-version":"2023-06-01",
               "anthropic-dangerous-direct-browser-access":"true" },
-    body: JSON.stringify({ model: AI.model, max_tokens: 4096,
+    body: JSON.stringify({ model: model||AI.model, max_tokens: 4096,
                            ...(sys?{system:sys}:{}), messages: msgs })
   });
   if(!r.ok) throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,160));
@@ -1145,6 +1145,9 @@ function completarIniciais(records){
 /* Caso para a IA = título suspeito OU sem e-mail (com @ no texto) OU NOME quebrado. */
 function casoDificil(r){ return tituloSuspeito(r.title) || _semEmailColetado(r) || temNomeQuebrado(r); }
 /* IA corrige TÍTULO e confere o DONO do e-mail, usando o texto cru. NÃO inventa e-mail. */
+/* Tarefa simples (extrair nome/título do texto) → usa modelo BARATO (Haiku, ~8x menos).
+   Se a conta não tiver Haiku, cai pro modelo configurado (uma vez) e segue. */
+let _repairModel = "claude-3-5-haiku-20241022", _repairOK = true;
 async function aiFixHard(grupo){
   const sys = "Você confere extrações de artigos acadêmicos a partir do TEXTO CRU. Devolva, por item: "
     + "(a) o TÍTULO correto; (b) a lista de AUTORES, cada um com NOME COMPLETO e próprio — sem titulação "
@@ -1152,10 +1155,19 @@ async function aiFixHard(grupo){
     + "junte-os), e NUNCA use o e-mail como nome — e o e-mail de cada autor. "
     + "REGRA DURA: só use e-mail que APARECE no texto; nunca invente. Responda APENAS JSON.";
   const itens = grupo.map((r,i)=>({ i, titulo_atual:r.title,
-    autores:(r.authors||[]).map(a=>a.name), texto:(r._raw||"").slice(0,3500) }));
+    autores:(r.authors||[]).map(a=>a.name), texto:(r._raw||"").slice(0,3000) }));
   const user = 'Devolva {"itens":[{"i":idx,"title":"...","authors":[{"name":"Nome Completo","email":"..."}]}]}. '
     + 'E-mail "" se o autor não tiver e-mail no texto.\n\n' + JSON.stringify(itens);
-  return _aiJson(await aiChat([{role:"system",content:sys},{role:"user",content:user}])).itens || [];
+  const msgs = [{role:"system",content:sys},{role:"user",content:user}];
+  try{
+    return _aiJson(await aiChat(msgs, _repairOK ? _repairModel : undefined)).itens || [];
+  }catch(e){
+    if(_repairOK && /not_found|model:/i.test(e.message)){     // conta sem Haiku → usa o configurado
+      _repairOK = false;
+      return _aiJson(await aiChat(msgs)).itens || [];
+    }
+    throw e;
+  }
 }
 
 async function aiPairAuthorsEmails(names, emails, title){
@@ -2081,9 +2093,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "4.0";
+const VERSION = "4.1";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["4.1","2026-06-03","CUSTO ~8x menor: a IA de revisão de nomes/títulos passa a usar modelo BARATO (Haiku) — tarefa simples, mesma qualidade. Fallback automático pro modelo configurado se a conta não tiver Haiku. (O custo alto vinha dos papers SBIE, não dos acentos.)"],
   ["4.0","2026-06-03","EDITOR: agora dá pra editar título, nome E e-mail direto na tabela (clique na célula). Título de SBC/SBIE em várias linhas agora vem completo (era cortado na 1ª linha). Acentos LaTeX já eram resolvidos sem IA (v3.5)."],
   ["3.9","2026-06-03","Anais numerado (UFAC): captura TODOS os co-autores (era ~1,2/trabalho → ~3,7). Pula linhas de números (superscritos ¹²³) que quebravam o bloco de autores. Sem regressão no UNIARAXÁ/ARACÊ."],
   ["3.8","2026-06-03","Detecta TÍTULO CORTADO (termina em \":\" ou preposição como DE/DA/NO) e manda pra IA completar lendo o texto do trabalho. Resolve «TRIAGEM QUÍMICA:», «...UMA FRAÇÃO DE», «...NO ANO DE» (anais UFAC). Precisa da IA ligada."],
