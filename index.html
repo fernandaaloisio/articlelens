@@ -456,6 +456,22 @@ function consertarAcentos(s){
   s = s.replace(/([cC])¸/g,(m,c)=> c+"̧").replace(/¸([cC])/g,(m,c)=> c+"̧"); // cedilha
   return s;
 }
+// Índice de MARCADORES (bookmarks) do PDF — é o "sumário" que aparece na barra lateral do leitor.
+// Útil quando o anais não tem sumário no TEXTO (ex.: 366). Pega só as FOLHAS (títulos de artigo).
+let _pdfOutline = [];
+async function _lerOutline(pdf){
+  let ol; try{ ol = await pdf.getOutline(); }catch(e){ return []; }
+  if(!ol) return [];
+  const tit=[], seen=new Set();
+  const ok=t=>t.length>=10 && t.length<=180 && /\s/.test(t) && /[a-zà-ÿ]/i.test(t) && !/^[_\d]/.test(t);
+  const walk=arr=>arr.forEach(o=>{
+    if(o && o.items && o.items.length){ walk(o.items); return; }   // ramo (seção) → desce até as folhas
+    const t=((o&&o.title)||"").replace(/\s+/g," ").trim();
+    if(ok(t) && !seen.has(t.toLowerCase())){ seen.add(t.toLowerCase()); tit.push(t); }
+  });
+  walk(ol);
+  return tit;
+}
 async function extractTextFromPDF(file){
   const buf = await file.arrayBuffer();
   let pdf;
@@ -464,6 +480,7 @@ async function extractTextFromPDF(file){
   }catch(e){
     throw new Error("PDF corrompido ou protegido por senha");
   }
+  _pdfOutline = await _lerOutline(pdf);
   let out = "";
   for(let p=1; p<=pdf.numPages; p++){
     const page = await pdf.getPage(p);
@@ -970,13 +987,40 @@ function parseSumarioPontilhado(pages){
   }
   return {titulos, endPage};
 }
-/* Lê o sumário em QUALQUER formato conhecido: numerado ("N. TÍTULO") OU pontilhado ("TÍTULO …"). */
+/* Sumário PAGINADO: "TÍTULO (caixa alta, 2-3 linhas) <nº da página>" — SEM pontilhado (ex.: 366).
+   O título fecha na linha que termina com o número de página; pula cabeçalhos de seção ("1. SEÇÃO"). */
+function parseSumarioPaginado(pages){
+  let titulos=[], buf=[], inSum=false, endPage=0, started=false;
+  const secHdr=/^\d{1,2}\.\s+[A-ZÀ-Ÿ]/;
+  for(let p=0;p<pages.length;p++){
+    const plines = pages[p].split("\n").map(l=>l.trim()).filter(Boolean);
+    let teve=false;
+    for(const l of plines){
+      if(/^SUM[ÁA]RIO\s*$/.test(l)){ inSum=true; started=true; buf=[]; continue; }
+      if(!inSum) continue;
+      if(/^(grupo de trabalho|coordenador|debatedor)/i.test(l)){ inSum=false; continue; }   // acabou o sumário
+      if(secHdr.test(l) && !/\s\d{1,4}$/.test(l)){ buf=[]; continue; }                       // cabeçalho de seção
+      const m=l.match(/^(.*[A-Za-zÀ-ÿ].*?)\s+(\d{1,4})$/);                                   // termina com nº de página
+      if(m){ buf.push(m[1].trim()); const t=buf.join(" ").replace(/\s+/g," ").trim();
+             if(t.length>=12 && !_SUM_HDR.test(t)){ titulos.push(t); endPage=p; teve=true; } buf=[]; }
+      else if(_SUM_HDR.test(l)) buf=[];
+      else if(l.length>3) buf.push(l);
+    }
+    if(started && !teve && p>endPage && titulos.length){ break; }
+  }
+  return {titulos, endPage};
+}
+/* Lê o sumário em QUALQUER formato: numerado ("N. TÍTULO"), pontilhado ("TÍTULO …"),
+   paginado ("TÍTULO nº-página") ou, em último caso, os MARCADORES do PDF (bookmarks). */
 function lerSumario(pages){
   const num=parseSumarioNum(pages);
   if(num.entries.length>=8) return {titulos:num.entries.map(e=>e.title), endPage:num.endPage};
   const dot=parseSumarioPontilhado(pages);
   if(dot.titulos.length>=5) return {titulos:dot.titulos, endPage:dot.endPage};
+  const pag=parseSumarioPaginado(pages);
+  if(pag.titulos.length>=5) return {titulos:pag.titulos, endPage:pag.endPage};
   if(num.entries.length>=5) return {titulos:num.entries.map(e=>e.title), endPage:num.endPage};
+  if(typeof _pdfOutline!=="undefined" && _pdfOutline && _pdfOutline.length>=5) return {titulos:_pdfOutline.slice(), endPage:0};   // marcadores do PDF
   return null;
 }
 function cortarPorSumario(text){
@@ -2554,9 +2598,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "12.8";
+const VERSION = "12.9";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["12.9","2026-06-04","Você tinha razão de novo: o pdf_366 TEM sumário (pág 7), num 3º formato — título em CAIXA ALTA terminando com o NÚMERO DA PÁGINA (sem pontilhado, sem numeração). Agora o app lê esse formato também. E, se o anais não tiver sumário no texto, usa os MARCADORES (bookmarks) do PDF como índice. Resultado pdf_366: de 1 registro lixo → 23 trabalhos (7 com e‑mail). Sem regressão (2023 513, 2019 371, 336 18, mostra 78)."],
   ["12.8","2026-06-04","Você tinha razão: o pdf_345 TEM e-mail. Esse anais usa um layout incomum — AUTORES ACIMA do título e E-MAILS no FIM do resumo (notas «1 fulano@x», «2 beltrano@y»). Agora o app: (1) procura autores também ACIMA do título quando não acha abaixo; (2) pega os e-mails numerados do FIM do resumo e liga ao autor pelo número. Recuperou e-mails reais (ex.: Alessandra Magalhães → aemagalhaes@hotmail.com). Sem regressão (2023 513, 2019 371, 336 18). Obs.: nesse anais só ~3 resumos trazem e-mail — os outros realmente não têm."],
   ["12.7","2026-06-04","Teste pdf_345: (1) MODELO — sua conta não tem os Haiku que eu tentava (HTTP 404); agora o app cai sempre no seu modelo configurado (opus-4-8, que funciona) sem travar nem repetir erro. (2) NOMES-LIXO — rótulos de evento como «X SISA», «XVI SIS», «IX SEPS» (numeral romano + sigla) não viram mais «autor». Obs.: o pdf_345 é «Resumos Simples» e NÃO traz e-mail de autor por trabalho (só ~7 e-mails no PDF inteiro, da editora) — por isso dá ~0 e-mails: não é falha, é o anais que não tem o que coletar."],
   ["12.6","2026-06-04","Você perguntou qual foi excluído: dos 7 do pdf_336, 6 realmente não têm e-mail (revisões/relatos) e 1 («INDICADORES DE FARMÁCIA CLÍNICA…») TINHA — o e-mail não pareava porque os autores vinham separados por VÍRGULA e a afiliação («UNIVATES») não era reconhecida. Conserto geral: agora detecta a linha de autores separada por vírgula (sem confundir com afiliação). Recuperou esse e mais vários: 336 17→18, 2023 510→512, 2019 343→370 e-mails. Sem regressão."],
