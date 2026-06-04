@@ -843,8 +843,12 @@ function parseWork(lines, knownTitle){
   let ai=-1;
   // 1) Âncora preferida = AFILIAÇÃO → autores são a linha logo ACIMA (pega vírgula/;/Prof/qualquer formato)
   for(let i=aLines.length-1;i>=1;i--){ if(AFFIL.test(aLines[i]) && splitAuthorsSeg(aLines[i-1]).length){ ai=i-1; break; } }
-  // 2) senão, linha com sinal forte de autor (;/Prof)
-  if(ai<0) for(let i=aLines.length-1;i>=0;i--){ if(/;|\bprof\b/i.test(aLines[i])){ ai=i; break; } }
+  // 2) senão, linha com sinal forte de autor (;/Prof) OU lista separada por VÍRGULA com ≥2 nomes
+  //    de pessoa (ex.: "Stefani Stoll , Juliana de Souza , Luisa Martines") — desde que NÃO seja afiliação.
+  const _ehAfil = l => AFFIL.test(l) || /\b(centro|curso|ambulat|departament|laborat[óo]rio|hospital|campus|faculdade|n[úu]cleo|secretaria|prefeitura|escola)\b/i.test(l);
+  if(ai<0) for(let i=aLines.length-1;i>=0;i--){ const l=aLines[i];
+    if(/;|\bprof\b/i.test(l)){ ai=i; break; }
+    if(!/@/.test(l) && !_ehAfil(l) && splitAuthorsSeg(l).filter(n=>!_ehGrauJS(n)).length>=2){ ai=i; break; } }
   // 3) senão, a própria afiliação (autor na mesma linha) ou e-mail (último recurso)
   if(ai<0) for(let i=aLines.length-1;i>=0;i--){ if(AFFIL.test(aLines[i])||/@/.test(aLines[i])){ ai=i; break; } }
   const soNumeros = s => /^[\d\s.,]+$/.test((s||"").trim());   // linha só de números (superscritos ¹²³ / "4 5")
@@ -2526,9 +2530,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "12.5";
+const VERSION = "12.6";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["12.6","2026-06-04","Você perguntou qual foi excluído: dos 7 do pdf_336, 6 realmente não têm e-mail (revisões/relatos) e 1 («INDICADORES DE FARMÁCIA CLÍNICA…») TINHA — o e-mail não pareava porque os autores vinham separados por VÍRGULA e a afiliação («UNIVATES») não era reconhecida. Conserto geral: agora detecta a linha de autores separada por vírgula (sem confundir com afiliação). Recuperou esse e mais vários: 336 17→18, 2023 510→512, 2019 343→370 e-mails. Sem regressão."],
   ["12.5","2026-06-04","Custos em REAL (R$): todos os valores agora mostram R$ (com o US$ menorzinho ao lado), com uma cotação aproximada US$→R$ que você edita na aba Custos. E o custo deixou de ser «por trabalho» — virou «por E-MAIL» (custo da coleta ÷ e-mails coletados). Obs.: 1 e-mail veio cortado sem «.br» (o PDF quebrou o final em outra linha) — dá pra ajustar no editor."],
   ["12.4","2026-06-04","Consertos do teste: (1) TRAVA — a IA NUNCA pode reduzir os e-mails já coletados (ela estava «corrigindo» nomes e jogando e-mail fora: 17→13). Agora só troca se mantiver/aumentar os e-mails. (2) CUSTO — tenta vários modelos BARATOS (Haiku 3.5 → Haiku 3 → Haiku 4) antes de cair no Opus caro; o aviso final mostra QUAL modelo a IA usou. (3) Profissões-cargo (Farmacêutica/Enfermeira/Médica…) não viram mais «nome». (4) O painel 📊 Cobertura (com a verificação «realmente sem e-mail» + botão 🔍 Verificar incertos) agora abre sozinho após a coleta."],
   ["12.3","2026-06-04","Conserto do PDF novo (anais Univates): (1) o corte por SUMÁRIO agora lê também o sumário com PONTILHADO («TÍTULO ……… pág»), não só o numerado; (2) a IA de identificação NÃO rebaixa mais um anais (ela lia só a capa e achava que era «artigo único», quebrando tudo num registro só); (3) o app roda os dois métodos (sumário × página/RESUMO) e fica com o melhor, mas mantendo os títulos oficiais do sumário quando o ganho de e-mail é pequeno. Resultado: pdf_336 saiu de 1 registro lixo → 24 trabalhos/17 e-mails com títulos limpos; sem regressão nos outros."],
