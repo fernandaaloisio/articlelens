@@ -1584,16 +1584,23 @@ async function processBatch(){
     } else lastRun = { works: allResults.length, cost:0, perWork:0, hard:0, nEmail:0, nTit:0, nNomes:0, nFail:0, report:[] };
     _saveRun();
   }
-  const inic = completarIniciais(allResults);   // completa iniciais pelo e-mail + marca "revisar"
-  const ex = excluirSemEmail();          // ETAPA final do validador: remove autores sem e-mail
-  renderResults();
-  renderCobertura(ex);                   // transparência: o que entrou e o que saiu (e por quê)
+  // BLINDAGEM: cada passo final em try/catch — se um falhar, os DADOS continuam prontos
+  // (allResults) e o usuário ainda consegue gerar o Excel. Nada de tela em branco silenciosa.
+  let inic={nFlag:0,nComp:0}, ex={autRem:0,trabRem:0};
+  try{ inic = completarIniciais(allResults); }catch(e){ console.warn("completarIniciais:",e); }
+  try{ ex   = excluirSemEmail(); }catch(e){ console.warn("excluirSemEmail:",e); }
+  pipeStep(4,"done"); pipeStep(5,"active");
+  try{ renderResults(); }
+  catch(e){ console.warn("renderResults:",e);
+    toast("⚠️ A tabela teve um erro ao desenhar ("+e.message+"), mas os "+allResults.length
+          +" trabalhos estão prontos — clique em <b>Excel</b> para baixar.","warn"); }
+  try{ renderCobertura(ex); }catch(e){ console.warn("renderCobertura:",e); }
   const trab = allResults.length;
   const idxMsg = lastIndice ? " · índice esperava "+lastIndice.total : "";
-  const revMsg = inic.nFlag ? " · ⚠️ "+inic.nFlag+" nomes só com iniciais — REVISAR (marcados na tabela; "+inic.nComp+" completados pelo e‑mail)" : "";
+  const revMsg = inic.nFlag ? " · ⚠️ "+inic.nFlag+" nomes só com iniciais — REVISAR" : "";
   setStatus("Linha concluída: <b>"+trab+"</b> trabalhos com e‑mail"+idxMsg+" · "+ex.trabRem
-            +" trabalhos removidos (sem e‑mail)"+revMsg+". Veja a <b>Cobertura</b> abaixo. Depois gere o Excel.");
-  toast("Pronto: "+trab+" trabalhos · "+ex.trabRem+" removidos sem e‑mail (veja Cobertura).");
+            +" removidos (sem e‑mail)"+revMsg+". Gere o Excel quando quiser.");
+  toast("Pronto: "+trab+" trabalhos. Clique em Excel/CSV para baixar.");
 }
 
 /* =========================================================================
@@ -1924,7 +1931,9 @@ document.getElementById("clearResults").onclick = ()=>{
   setStatus("Resultados limpos.");
 };
 
-function _exp(fn){ if(!allResults.length){ toast("Nada para exportar.","warn"); return; } pipeStep(5,"done"); fn(allResults); }
+function _exp(fn){ if(!allResults.length){ toast("Nada para exportar.","warn"); return; }
+  try{ pipeStep(5,"done"); fn(allResults); }
+  catch(e){ console.warn("export:",e); toast("Erro ao exportar: "+e.message,"err"); } }
 document.getElementById("expCsv").onclick  = ()=>_exp(exportCSV);
 document.getElementById("expXlsx").onclick = ()=>_exp(exportXLSX);
 document.getElementById("expJson").onclick = ()=>_exp(exportJSON);
@@ -2093,9 +2102,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "4.1";
+const VERSION = "4.2";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["4.2","2026-06-03","Blindagem: se algo falhar DEPOIS da coleta (desenhar tabela etc.), os dados continuam prontos e o Excel/CSV ainda funciona — com aviso na tela em vez de ficar sem nada. Exportação também protegida."],
   ["4.1","2026-06-03","CUSTO ~8x menor: a IA de revisão de nomes/títulos passa a usar modelo BARATO (Haiku) — tarefa simples, mesma qualidade. Fallback automático pro modelo configurado se a conta não tiver Haiku. (O custo alto vinha dos papers SBIE, não dos acentos.)"],
   ["4.0","2026-06-03","EDITOR: agora dá pra editar título, nome E e-mail direto na tabela (clique na célula). Título de SBC/SBIE em várias linhas agora vem completo (era cortado na 1ª linha). Acentos LaTeX já eram resolvidos sem IA (v3.5)."],
   ["3.9","2026-06-03","Anais numerado (UFAC): captura TODOS os co-autores (era ~1,2/trabalho → ~3,7). Pula linhas de números (superscritos ¹²³) que quebravam o bloco de autores. Sem regressão no UNIARAXÁ/ARACÊ."],
