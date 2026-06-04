@@ -836,6 +836,68 @@ function detectAffiliations(lines){
   }
   return new Set(Object.keys(freq).filter(k=>freq[k]>=4));   // repete ≥4× = afiliação do evento
 }
+/* ===== CORTE PELO SUMÁRIO (gabarito) — para anais GRANDE com sumário numerado =====
+   O sumário lista "N. TÍTULO" (1..N, título em CAIXA ALTA, às vezes em 2-3 linhas), SEM pontilhado.
+   Lemos a lista oficial, localizamos cada título no corpo e cortamos ALI — assim nenhum trabalho é
+   pulado e o título sai oficial (de graça, sem IA). Devolve null se não houver sumário numerado. */
+function _semAcento(s){ return (s||"").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,""); }
+function parseSumarioNum(pages){
+  let entries=[], cur=null, expect=1, inSum=false, endPage=0, started=false;
+  for(let p=0;p<pages.length;p++){
+    const plines = pages[p].split("\n").map(l=>l.trim()).filter(Boolean);
+    let temEntrada=false;
+    for(const l of plines){
+      if(/^SUM[ÁA]RIO\b/i.test(l)){ inSum=true; continue; }
+      if(!inSum) continue;
+      const m=l.match(/^(\d{1,3})\.\s+(.+)/);
+      if(m && +m[1]===expect){ if(cur) entries.push(cur); cur={n:+m[1], title:m[2]}; expect++; endPage=p; started=true; temEntrada=true; }
+      else if(cur && !SECAO_JS.test(l) && /^[A-ZÀ-Ÿ0-9(]/.test(l) && l.length>2 && cur.title.length<200){ cur.title+=" "+l; } // continuação do título
+    }
+    if(started && !temEntrada && p>endPage) break;     // passou uma página inteira sem entrada → fim do sumário
+  }
+  if(cur) entries.push(cur);
+  entries.forEach(e=>{ e.title=e.title.replace(/\s+/g," ").trim(); });
+  return {entries, endPage};
+}
+function cortarPorSumario(text){
+  const pages = text.split("\f");
+  if(pages.length<8) return null;
+  const {entries, endPage} = parseSumarioNum(pages);
+  if(entries.length<10) return null;                   // sem sumário numerado de verdade
+  const bodyRaw = pages.slice(endPage+1).join("\n\f\n");
+  // normaliza o corpo mantendo o mapa p/ o offset original (p/ cortar no texto cru)
+  const nb=[], map=[];
+  for(let i=0;i<bodyRaw.length;i++){
+    const c=_semAcento(bodyRaw[i]);
+    if(/[a-z0-9]/.test(c)){ nb.push(c); map.push(i); }
+    else if(nb.length && nb[nb.length-1]!==" "){ nb.push(" "); map.push(i); }
+  }
+  const nbs=nb.join("");
+  let from=0; const found=[];
+  for(const e of entries){
+    const words=_semAcento(e.title).replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(Boolean);
+    let pos=-1;
+    for(let k=Math.min(8,words.length); k>=4 && pos<0; k--){ pos=nbs.indexOf(words.slice(0,k).join(" "), from); }
+    if(pos>=0){ found.push({e, off:map[pos]}); from=pos+1; }
+  }
+  if(found.length<10) return null;                     // não conseguiu localizar → usa método antigo
+  const works=[];
+  for(let i=0;i<found.length;i++){
+    const start=found[i].off;
+    const end = i+1<found.length ? found[i+1].off : Math.min(bodyRaw.length, start+6000);
+    const block=bodyRaw.slice(start, end);
+    let blines=block.split(/\n/).map(l=>l.trim()).filter(Boolean);
+    // CABEÇALHO: do título até RESUMO/ABSTRACT/PALAVRAS-CHAVE — é onde ficam autores+e-mails.
+    // (o corpo do resumo e as palavras-chave não são autores) — evita pegar "Palavras-chave" como nome.
+    const ri = blines.findIndex(l=>/^(resumo|abstract|resumen|palavras?[\s\-]*chave|keywords?)\b/i.test(l));
+    const head = ri>0 ? blines.slice(0, ri) : blines.slice(0, 14);
+    const w=parseWork(head) || {authors:[], all_emails:[]};
+    works.push({ title: found[i].e.title, authors:(w.authors||[]), all_emails:(w.all_emails||[]),
+                 _raw: block.slice(0,4500), _fromIndex:true });
+  }
+  works._sumario = {total:entries.length, localizados:found.length};
+  return works;
+}
 function separarAnais(text){
   const recs=[]; const seenT=new Set();
   // título que na verdade é uma NOTA DE RODAPÉ (cargo/grau + afiliação + "e-mail:") não é trabalho real
@@ -1480,9 +1542,16 @@ async function collectFromPDF(file, mode){
   modelosUsados[modelo.nome] = (modelosUsados[modelo.nome]||0) + 1;
   let recs = null;
   if(modelo.tipo==="anais"){
-    const works = separarAnais(text);                    // CORTA o anais em N trabalhos
+    // PRIMÁRIO: corte pelo SUMÁRIO numerado (gabarito) — não pula trabalho e título sai oficial.
+    let works = cortarPorSumario(text);
+    if(works && works.length){
+      lastIndice = {total: works._sumario.total, fixed: works._sumario.localizados, viaSumario:true};
+    } else {
+      // FALLBACK: método antigo (página/RESUMO + afiliação) p/ anais sem sumário numerado.
+      works = separarAnais(text);
+      lastIndice = aplicarIndice(works, text);            // títulos oficiais do sumário (grátis), se houver
+    }
     if(works.length){
-      lastIndice = aplicarIndice(works, text);           // títulos oficiais do sumário (grátis)
       recs = works.map(w=>({title:w.title, authors:w.authors, all_emails:w.all_emails,
                             _raw:w._raw, _fromIndex:w._fromIndex, source_file:file.name}));
     }
@@ -2173,9 +2242,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "5.0";
+const VERSION = "6.0";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["6.0","2026-06-03","Sua ideia do SUMÁRIO: em anais grande com sumário numerado (1. TÍTULO, 2. TÍTULO…), o corte agora se baseia NELE — lê a lista oficial, localiza cada título no corpo e corta ali. Nenhum trabalho é pulado e o título sai oficial (de graça, sem IA). No anais 2023: 273→524 trabalhos (sumário lista 540; recupera ~250 que eram pulados) e acabaram os «títulos que não existem». Quem não tem sumário numerado (artigo único, ou anais sem numeração) usa o método antigo — sem mudança."],
   ["5.0","2026-06-03","Sua ideia do «modelo por PDF»: o formato (anais numerado, título CAIXA ALTA, e-mail por número) já é detectado SEM IA e aparece na tela. A IA passa a conferir só uma AMOSTRA por formato — o 1º trabalho (sonda) + alguns — em vez de cada caso. No anais 2023: 182 casos difíceis → IA confere só 8 (~46→~2 chamadas, ~95% menos custo). Novo campo «todos os PDFs têm a mesma formatação» (marcado): sonda só o 1º PDF do lote. Desmarque «conferir só amostra» se um PDF vier bagunçado e quiser checar tudo."],
   ["4.6","2026-06-03","Sua regra do NÚMERO: quando o autor tem um número (¹²³) que liga a uma nota de rodapé com e-mail, agora linka autor↔e-mail PELO número (autor 1 ↔ nota «1. …e-mail»), não mais por ordem cega — mais preciso. Bônus: «autores» que são só titulação (Bolsista, Graduanda, Orientador…) deixam de ser puxados como nome → não vão pra IA (custo menor) e somem do resultado."],
   ["4.5","2026-06-03","Sua regra: descarta trabalhos-FANTASMA criados a partir de notas de rodapé numeradas (título = «...e-mail: x@y» ou «Bolsista/Graduanda...»). No anais 2023: 478→332 trabalhos reais. Bônus: corta MUITAS chamadas de IA (esses fantasmas iam pra IA) → custo menor."],
