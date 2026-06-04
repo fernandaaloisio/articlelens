@@ -694,7 +694,10 @@ function cleanAuthor(s){
 function validPname(n){
   if(!(n.length>=5 && n.length<=60 && n.includes(" ") && /^[A-ZÀ-Ý]/.test(n) && !INST_JS.test(n))) return false;
   if(LOC_JS.test(n)) return false;
-  return n.split(/\s+/).filter(w=>/^[A-ZÀ-Ý]/.test(w)).length >= 2;
+  const toks=n.split(/\s+/);
+  // rejeita rótulos de evento ("X SISA", "XVI SIS", "IX SEPS"): começa com numeral romano ou letra solta
+  if(/^([A-Z]|[IVXLCDM]{1,6})$/.test(toks[0])) return false;
+  return toks.filter(w=>/^[A-ZÀ-Ý]/.test(w)).length >= 2;
 }
 function splitAuthorsSeg(seg){
   seg = seg.split(INST_JS)[0];
@@ -1418,9 +1421,11 @@ async function aiFixHard(grupo){
   try{
     return _aiJson(await aiChat(msgs, _repairModelNow())).itens || [];
   }catch(e){
-    if(/not_found|model:/i.test(e.message)){
-      if(_repairOK && _repairIdx < _repairCands.length-1){ _repairIdx++; return aiFixHard(grupo); }  // tenta próximo Haiku barato
-      if(_repairOK){ _repairOK=false; return _aiJson(await aiChat(msgs)).itens || []; }                // só então o configurado (caro)
+    if(/\b404\b|not_found|model:/i.test(e.message)){
+      // modelo barato indisponível → tenta o próximo; esgotou → usa o modelo CONFIGURADO (que funciona).
+      if(_repairOK && _repairIdx < _repairCands.length-1){ _repairIdx++; try{ return await aiFixHard(grupo); }catch(_){ } }
+      _repairOK=false;
+      try{ return _aiJson(await aiChat(msgs, AI.model)).itens || []; }catch(_){ return []; }   // último recurso: não quebra
     }
     throw e;
   }
@@ -2530,9 +2535,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "12.6";
+const VERSION = "12.7";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["12.7","2026-06-04","Teste pdf_345: (1) MODELO — sua conta não tem os Haiku que eu tentava (HTTP 404); agora o app cai sempre no seu modelo configurado (opus-4-8, que funciona) sem travar nem repetir erro. (2) NOMES-LIXO — rótulos de evento como «X SISA», «XVI SIS», «IX SEPS» (numeral romano + sigla) não viram mais «autor». Obs.: o pdf_345 é «Resumos Simples» e NÃO traz e-mail de autor por trabalho (só ~7 e-mails no PDF inteiro, da editora) — por isso dá ~0 e-mails: não é falha, é o anais que não tem o que coletar."],
   ["12.6","2026-06-04","Você perguntou qual foi excluído: dos 7 do pdf_336, 6 realmente não têm e-mail (revisões/relatos) e 1 («INDICADORES DE FARMÁCIA CLÍNICA…») TINHA — o e-mail não pareava porque os autores vinham separados por VÍRGULA e a afiliação («UNIVATES») não era reconhecida. Conserto geral: agora detecta a linha de autores separada por vírgula (sem confundir com afiliação). Recuperou esse e mais vários: 336 17→18, 2023 510→512, 2019 343→370 e-mails. Sem regressão."],
   ["12.5","2026-06-04","Custos em REAL (R$): todos os valores agora mostram R$ (com o US$ menorzinho ao lado), com uma cotação aproximada US$→R$ que você edita na aba Custos. E o custo deixou de ser «por trabalho» — virou «por E-MAIL» (custo da coleta ÷ e-mails coletados). Obs.: 1 e-mail veio cortado sem «.br» (o PDF quebrou o final em outra linha) — dá pra ajustar no editor."],
   ["12.4","2026-06-04","Consertos do teste: (1) TRAVA — a IA NUNCA pode reduzir os e-mails já coletados (ela estava «corrigindo» nomes e jogando e-mail fora: 17→13). Agora só troca se mantiver/aumentar os e-mails. (2) CUSTO — tenta vários modelos BARATOS (Haiku 3.5 → Haiku 3 → Haiku 4) antes de cair no Opus caro; o aviso final mostra QUAL modelo a IA usou. (3) Profissões-cargo (Farmacêutica/Enfermeira/Médica…) não viram mais «nome». (4) O painel 📊 Cobertura (com a verificação «realmente sem e-mail» + botão 🔍 Verificar incertos) agora abre sozinho após a coleta."],
