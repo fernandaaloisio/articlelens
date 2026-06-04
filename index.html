@@ -1579,11 +1579,13 @@ async function processBatch(){
       lastRun = { works: allResults.length, cost: runCost,
                   perWork: allResults.length ? runCost/allResults.length : 0,
                   hard: alvos.length, nEmail, nTit, nNomes, nFail, report: relatorio };
+      const modeloIA = _repairOK ? "Haiku (barato)" : "Sonnet (caro — sua conta não tem Haiku!)";
+      lastRun.modeloIA = modeloIA;
       if(nFail && nFail*CHUNK>=alvos.length)
         toast("⚠️ IA NÃO funcionou — erro: "+lastErr+". Verifique login/modelo/Render.","warn");
       else
-        toast("🧠 IA: "+nNomes+" nomes · "+nTit+" títulos · "+nEmail+" e‑mails em "+alvos.length+" casos · US$ "
-              +runCost.toFixed(4)+" (US$ "+lastRun.perWork.toFixed(4)+"/trab)"+(nFail?" · "+nFail+" falhas":"")+".");
+        toast("🧠 IA ["+modeloIA+"]: "+nNomes+" nomes · "+nTit+" títulos · "+nEmail+" e‑mails em "+alvos.length
+              +" casos · US$ "+runCost.toFixed(4)+" (US$ "+lastRun.perWork.toFixed(4)+"/trab)"+(nFail?" · "+nFail+" falhas":"")+".");
     } else lastRun = { works: allResults.length, cost:0, perWork:0, hard:0, nEmail:0, nTit:0, nNomes:0, nFail:0, report:[] };
     _saveRun();
   }
@@ -2105,9 +2107,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "4.3";
+const VERSION = "4.4";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["4.4","2026-06-03","Mostra qual modelo a IA usou (Haiku barato vs Sonnet caro) no aviso final — pra diagnosticar custo. Se aparecer «Sonnet», sua conta não tem Haiku habilitado."],
   ["4.3","2026-06-03","CORREÇÃO IMPORTANTE: trabalhos eram removidos como «sem e-mail» quando NA VERDADE tinham e-mail (só o pareamento falhava). Agora, se ninguém pareou mas há e-mail no bloco, atribui por ordem (marca pra revisão). No anais 2023: 188 removidos→1. Recupera ~187 trabalhos."],
   ["4.2","2026-06-03","Blindagem: se algo falhar DEPOIS da coleta (desenhar tabela etc.), os dados continuam prontos e o Excel/CSV ainda funciona — com aviso na tela em vez de ficar sem nada. Exportação também protegida."],
   ["4.1","2026-06-03","CUSTO ~8x menor: a IA de revisão de nomes/títulos passa a usar modelo BARATO (Haiku) — tarefa simples, mesma qualidade. Fallback automático pro modelo configurado se a conta não tiver Haiku. (O custo alto vinha dos papers SBIE, não dos acentos.)"],
