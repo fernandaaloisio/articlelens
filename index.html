@@ -1328,6 +1328,20 @@ function amostrarPorFormato(alvos, porPdf){
 /* Tarefa simples (extrair nome/título do texto) → usa modelo BARATO (Haiku, ~8x menos).
    Se a conta não tiver Haiku, cai pro modelo configurado (uma vez) e segue. */
 let _repairModel = "claude-3-5-haiku-20241022", _repairOK = true;
+/* IA de IDENTIFICAÇÃO (1 chamada/PDF, barato): lê o COMEÇO do PDF e diz o tipo + estima quantos
+   trabalhos. É a rede de segurança p/ formatos NOVOS — a regra fixa decide; a IA confirma/corrige. */
+let _formatoIA = null, _lastFid = null;     // cache do lote + último resultado (p/ verificação)
+async function aiIdentificarFormato(amostra){
+  // A IA só diz o TIPO. A QUANTIDADE não é chute: anais → vem do SUMÁRIO; um-por-PDF → é 1.
+  const sys = "Você identifica o FORMATO de um PDF acadêmico pelo começo do texto. Responda SOMENTE JSON.";
+  const user = 'Começo do PDF:\n"""\n'+(amostra||"").slice(0,2600)+'\n"""\n\n'
+    + 'Responda {"tipo":"anais"|"periodico"|"artigo",'
+    + '"onde_email":"rodape_numerado"|"inline"|"bloco_instituicao"|"nenhum","confianca":<0 a 1>}. '
+    + 'REGRA: "anais" = VÁRIOS trabalhos no mesmo PDF (tem um SUMÁRIO/índice listando os trabalhos). '
+    + '"periodico"/"artigo" = UM único artigo no PDF.';
+  const j = _aiJson(await aiChat([{role:"system",content:sys},{role:"user",content:user}], _repairOK?_repairModel:undefined));
+  return (j && j.tipo) ? j : null;
+}
 async function aiFixHard(grupo){
   const sys = "Você confere extrações de artigos acadêmicos a partir do TEXTO CRU. Devolva, por item: "
     + "(a) o TÍTULO correto; (b) a lista de AUTORES, cada um com NOME COMPLETO e próprio — sem titulação "
@@ -1610,7 +1624,22 @@ let modelosUsados = {};   // {nomeModelo: contagem} da última coleta
 
 async function collectFromPDF(file, mode){
   const text = await extractTextFromPDF(file);
-  const modelo = detectarModelo(text, mode);
+  let modelo = detectarModelo(text, mode);
+  // IA de IDENTIFICAÇÃO (rede de segurança p/ formatos novos): só quando o usuário não forçou sim/não.
+  // Conservador: NUNCA quebra um anais já detectado; só RESGATA quando a regra ficou no chute "artigo"
+  // (ou quando a IA tem MUITA certeza que não é anais). Degreda sem erro se a IA estiver off.
+  if(AI.enabled && mode!=="sim" && mode!=="nao"){
+    try{
+      let fid = (AI.sameFormat!==false && _formatoIA) ? _formatoIA : await aiIdentificarFormato(text);
+      if(AI.sameFormat!==false && fid) _formatoIA = fid;
+      if(fid && fid.confianca>=0.6){
+        _lastFid = fid;
+        if(fid.tipo==="anais" && modelo.tipo!=="anais") modelo = modeloPorId("anais");           // resgata multi-trabalho
+        else if(fid.tipo!=="anais" && modelo.tipo==="anais" && fid.confianca>=0.85)               // corrige falso-anais (alta certeza)
+          modelo = modeloPorId(fid.tipo==="periodico"?"periodico":"artigo");
+      }
+    }catch(e){ console.warn("IA identificação indisponível, usando regra:", e.message); }
+  }
   modelosUsados[modelo.nome] = (modelosUsados[modelo.nome]||0) + 1;
   let recs = null;
   if(modelo.tipo==="anais"){
@@ -1660,10 +1689,14 @@ function excluirSemEmail(){
     autRem += antes - r.authors.length;
   }
   const fica = allResults.filter(r=>(r.authors||[]).length);
+  // Marca se o trabalho removido TINHA @ no bloco (extração falhou) ou REALMENTE não tinha e-mail.
+  // Isso responde, automaticamente e em todo PDF: "os sem e-mail realmente não têm?".
   lastRemovidos = allResults.filter(r=>!(r.authors||[]).length)
-                            .map(r=>({title:r.title||"(sem título)", source:r.source_file||""}));
+                            .map(r=>({title:r.title||"(sem título)", source:r.source_file||"",
+                                      temArroba: /@/.test(r._raw||"")}));
   allResults.length=0; allResults.push(...fica);
-  return {autRem, trabRem: lastRemovidos.length};
+  return {autRem, trabRem: lastRemovidos.length,
+          remComArroba: lastRemovidos.filter(r=>r.temArroba).length};
 }
 
 async function processBatch(){
@@ -1671,6 +1704,7 @@ async function processBatch(){
   const total = fileQueue.length; let done = 0;
   errorsThisRun = [];
   modelosUsados = {};
+  _formatoIA = null; _lastFid = null;     // zera a identificação da IA por lote
   const modo = sepMode();
   // ETAPA 1+2 — Cortar (separador) + Coletar
   pipeStep(1,"active");
@@ -2008,13 +2042,31 @@ function renderCobertura(ex){
     + (idxN!=null ? " · índice lista "+idxN : "");
   let html = "<b>"+allResults.length+"</b> trabalhos coletados (todos com pelo menos 1 e‑mail).";
   if(idxN!=null) html += " O sumário do PDF lista <b>"+idxN+"</b> trabalhos.";
+  // VERIFICAÇÃO (nunca falha em silêncio): identificação da IA + esperado vs coletado.
+  // A QUANTIDADE não é chute: anais → vem do SUMÁRIO (idxN); um‑por‑PDF → é 1 por arquivo.
+  if(_lastFid){
+    html += "<br><br><b>🔎 Identificação (IA):</b> tipo <b>"+escapeHtml(_lastFid.tipo||"?")+"</b>"
+         + (_lastFid.onde_email?" · e‑mail: "+escapeHtml(_lastFid.onde_email):"")
+         + (_lastFid.confianca!=null?" · confiança "+Math.round(_lastFid.confianca*100)+"%":"");
+  }
+  if(idxN!=null){     // anais: o SUMÁRIO é o gabarito da quantidade
+    const localizei = allResults.length + (ex.trabRem||0);
+    const fora = idxN - localizei;
+    html += "<br><b>Conferência:</b> sumário lista <b>"+idxN+"</b> · localizei "+localizei+" · com e‑mail "+allResults.length
+         + (fora>2?" · <b style='color:var(--danger)'>"+fora+" não localizados no corpo (revisar)</b>":" · cobertura ok");
+  }
   const mu = Object.entries(modelosUsados||{});
   if(mu.length) html += "<br><br><b>📐 Modelos usados:</b> " + mu.map(([n,c])=>escapeHtml(n)+" ("+c+")").join(" · ");
   if(ex.trabRem){
-    html += "<br><br><b style='color:var(--warn)'>"+ex.trabRem+" trabalhos removidos por NÃO ter e‑mail</b> "
-         + "(conforme sua regra). Eles existem no PDF, mas nenhum autor tinha e‑mail no texto:<ul style='margin:6px 0 0 18px'>"
-         + lastRemovidos.slice(0,40).map(r=>"<li>"+escapeHtml(r.title.slice(0,80))+"</li>").join("")
-         + (lastRemovidos.length>40?"<li>…+"+(lastRemovidos.length-40)+"</li>":"") + "</ul>";
+    const comA = ex.remComArroba||0, semA = ex.trabRem - comA;
+    html += "<br><br><b style='color:var(--warn)'>"+ex.trabRem+" trabalhos removidos por NÃO ter e‑mail</b> (conforme sua regra).";
+    html += "<br>Destes: <b>"+semA+"</b> realmente <b>não têm e‑mail</b> no PDF"
+         + (comA? " · <b style='color:var(--danger)'>"+comA+" TINHAM e‑mail no texto</b> mas a extração não conseguiu — formato difícil (vale conferir/usar IA)":"")+".";
+    // mostra primeiro os que TINHAM e-mail (são os que importam revisar)
+    const ord = lastRemovidos.slice().sort((a,b)=>(b.temArroba?1:0)-(a.temArroba?1:0));
+    html += "<ul style='margin:6px 0 0 18px'>"
+         + ord.slice(0,40).map(r=>"<li>"+(r.temArroba?"⚠️ ":"")+escapeHtml(r.title.slice(0,80))+(r.temArroba?" <i>(tinha e‑mail)</i>":"")+"</li>").join("")
+         + (ord.length>40?"<li>…+"+(ord.length-40)+"</li>":"") + "</ul>";
   } else html += "<br>Nenhum trabalho removido por falta de e‑mail.";
   document.getElementById("coberturaBody").innerHTML = html;
 }
@@ -2314,9 +2366,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "6.5";
+const VERSION = "7.0";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["7.0","2026-06-04","Foco em NUNCA errar a identificação no próximo PDF (sua diretriz): (1) a IA lê o começo do PDF e confirma o TIPO (anais com vários trabalhos × um‑por‑PDF) — é a rede de segurança pra formatos novos; a regra fixa continua como caminho rápido e a IA só corrige (nunca quebra um anais já certo). A QUANTIDADE não é chute: anais = nº de trabalhos do SUMÁRIO (índice); um‑por‑PDF = 1. (2) Verificação SEMPRE visível: o painel mostra «sumário lista N · localizei L · com e‑mail M» e, dos removidos sem e‑mail, separa quantos REALMENTE não têm e‑mail vs quantos TINHAM e‑mail mas a extração não pegou (⚠️) — fim do erro silencioso. Tudo degrada sem IA."],
   ["6.5","2026-06-04","Você perguntou de novo: dos trabalhos sem e-mail, quais REALMENTE não têm? Conferi numa janela ampla: dos 14, só 5 não têm e-mail nenhum no PDF (autores não informaram) — esses estão certos em ficar de fora. Os outros 9 TÊM e-mail, mas em formato bem irregular (número em linha própria, e-mail grudado na sigla, e-mail «inline» sem nota numerada). De quebra, recuperei mais 1 caso: rodapé que começa com «(» (ex.: «1. (PIBIC), … e-mail:»). Total: 510 trabalhos com e-mail, 759 e-mails únicos (de 803 = 94,5%). Os 9 irregulares são o caso do mapa por IA."],
   ["6.4","2026-06-04","Você reparou: o e-mail do «autor-lixo» (ex.: «Professor do ICIBE») pertencia a um autor REAL que estava no bloco (Antonio Thiago Madeira Beirão). Dois consertos: (1) captura autores que continuam na LINHA DE BAIXO (ex.: «Daniel; Katiane;» e na linha seguinte «Antonio Thiago…»); (2) «Professor/Professora», «Técnico», «Autor/Coautor» deixam de ser confundidos com nome. Resultado: autores-lixo 2→0, e o e-mail vai pro NOME certo. E-mails únicos 748→758 (de 803 = 94%), trabalhos com e-mail 507→509."],
   ["6.3","2026-06-03","Você perguntou se os «sem e-mail» realmente não tinham: a maioria TINHA e a gente perdia. Consertos: (1) autores em linhas isoladas/separados por vírgula (sem «;») agora são lidos e pareados; (2) rodapé com ponto SEM espaço («1.Bolsista») passou a ser reconhecido. No anais 2023: e-mails únicos 732→748 (de 803 no PDF = 93%), trabalhos com e-mail 500→507, autores-lixo 5→2. Sobram ~12 em formato bem irregular (e-mail inline / grudado na sigla) + ~5 que realmente não têm e-mail no PDF."],
