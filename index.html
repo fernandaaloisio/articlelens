@@ -937,11 +937,46 @@ function parseSumarioNum(pages){
   entries.forEach(e=>{ e.title=e.title.replace(/\s+/g," ").trim(); });
   return {entries, endPage};
 }
+/* Sumário com PONTILHADO: "TÍTULO ............... pág" (título às vezes em 2-3 linhas), comum em
+   anais (Univates etc.). Junta as linhas do título até o pontilhado; pula cabeçalhos de seção. */
+const _SUM_HDR=/^(resumos?\s+simples|resumos?\s+expandidos?|artigos?\s+completos?|artigos?|p[ôo]steres?|p[ôo]ster|comunica[çc][ãa]o|apresenta[çc][ãa]o|relato|mostra de trabalhos|[ivxlc]+\s+mostra|sum[áa]rio|anais\b|isbn|^[ivxlc]{1,5}$|^\d+$)/i;
+function parseSumarioPontilhado(pages){
+  let titulos=[], buf=[], inSum=false, endPage=0, started=false;
+  for(let p=0;p<pages.length;p++){
+    const plines = pages[p].split("\n").map(l=>l.trim()).filter(Boolean);
+    let teve=false;
+    for(const l of plines){
+      if(/^SUM[ÁA]RIO\s*$/.test(l)){ inSum=true; started=true; buf=[]; continue; }   // "SUMÁRIO" sozinho (não o rodapé "Sumário 12")
+      if(!inSum) continue;
+      if(/\.{4,}/.test(l)){                                   // pontilhado fecha um título
+        const antes=l.replace(/\.{2,}.*$/,"").trim();
+        if(antes && !_SUM_HDR.test(antes)) buf.push(antes);
+        const t=buf.join(" ").replace(/\s+/g," ").trim();
+        if(t.length>=10){ titulos.push(t); endPage=p; teve=true; }
+        buf=[];
+      } else if(_SUM_HDR.test(l)) buf=[];                     // cabeçalho de seção → reseta
+      else if(l.length>2) buf.push(l);
+    }
+    if(started && !teve && p>endPage && titulos.length){ break; }   // saiu do sumário
+  }
+  return {titulos, endPage};
+}
+/* Lê o sumário em QUALQUER formato conhecido: numerado ("N. TÍTULO") OU pontilhado ("TÍTULO …"). */
+function lerSumario(pages){
+  const num=parseSumarioNum(pages);
+  if(num.entries.length>=8) return {titulos:num.entries.map(e=>e.title), endPage:num.endPage};
+  const dot=parseSumarioPontilhado(pages);
+  if(dot.titulos.length>=5) return {titulos:dot.titulos, endPage:dot.endPage};
+  if(num.entries.length>=5) return {titulos:num.entries.map(e=>e.title), endPage:num.endPage};
+  return null;
+}
 function cortarPorSumario(text){
   const pages = text.split("\f");
   if(pages.length<8) return null;
-  const {entries, endPage} = parseSumarioNum(pages);
-  if(entries.length<10) return null;                   // sem sumário numerado de verdade
+  const sum = lerSumario(pages);
+  if(!sum) return null;                                 // sem sumário reconhecível
+  const entries = sum.titulos.map(t=>({title:t}));
+  const endPage = sum.endPage;
   const bodyRaw = pages.slice(endPage+1).join("\n\f\n");
   // normaliza o corpo mantendo o mapa p/ o offset original (p/ cortar no texto cru)
   const nb=[], map=[];
@@ -958,7 +993,7 @@ function cortarPorSumario(text){
     for(let k=Math.min(8,words.length); k>=4 && pos<0; k--){ pos=nbs.indexOf(words.slice(0,k).join(" "), from); }
     if(pos>=0){ found.push({e, off:map[pos]}); from=pos+1; }
   }
-  if(found.length<10) return null;                     // não conseguiu localizar → usa método antigo
+  if(found.length<5) return null;                      // não conseguiu localizar → usa método antigo
   const works=[];
   for(let i=0;i<found.length;i++){
     const start=found[i].off;
@@ -1657,31 +1692,37 @@ let modelosUsados = {};   // {nomeModelo: contagem} da última coleta
 async function collectFromPDF(file, mode){
   const text = await extractTextFromPDF(file);
   let modelo = detectarModelo(text, mode);
-  // IA de IDENTIFICAÇÃO (rede de segurança p/ formatos novos): só quando o usuário não forçou sim/não.
-  // Conservador: NUNCA quebra um anais já detectado; só RESGATA quando a regra ficou no chute "artigo"
-  // (ou quando a IA tem MUITA certeza que não é anais). Degreda sem erro se a IA estiver off.
-  if(AI.enabled && mode!=="sim" && mode!=="nao"){
+  // IA de IDENTIFICAÇÃO (rede de segurança): SÓ pode RESGATAR um anais que a regra não pegou.
+  // NUNCA rebaixa um anais detectado — a regra (conta RESUMO/palavras-chave no PDF inteiro) é confiável,
+  // e a IA, lendo só o começo (capa/comissão), confundia anais com "artigo único" e quebrava tudo.
+  if(AI.enabled && mode!=="sim" && mode!=="nao" && modelo.tipo!=="anais"){
     try{
       let fid = (AI.sameFormat!==false && _formatoIA) ? _formatoIA : await aiIdentificarFormato(text);
       if(AI.sameFormat!==false && fid) _formatoIA = fid;
       if(fid && fid.confianca>=0.6){
         _lastFid = fid;
-        if(fid.tipo==="anais" && modelo.tipo!=="anais") modelo = modeloPorId("anais");           // resgata multi-trabalho
-        else if(fid.tipo!=="anais" && modelo.tipo==="anais" && fid.confianca>=0.85)               // corrige falso-anais (alta certeza)
-          modelo = modeloPorId(fid.tipo==="periodico"?"periodico":"artigo");
+        if(fid.tipo==="anais") modelo = modeloPorId("anais");      // resgata multi-trabalho que a regra perdeu
       }
     }catch(e){ console.warn("IA identificação indisponível, usando regra:", e.message); }
   }
   modelosUsados[modelo.nome] = (modelosUsados[modelo.nome]||0) + 1;
   let recs = null;
   if(modelo.tipo==="anais"){
-    // PRIMÁRIO: corte pelo SUMÁRIO numerado (gabarito) — não pula trabalho e título sai oficial.
-    let works = cortarPorSumario(text);
-    if(works && works.length){
-      lastIndice = {total: works._sumario.total, fixed: works._sumario.localizados, viaSumario:true};
+    // Roda os DOIS métodos e escolhe o MELHOR (mais trabalhos COM e-mail) — assim nunca regride:
+    //  • corte pelo SUMÁRIO (numerado OU pontilhado): título oficial, não pula trabalho.
+    //  • método antigo (página/RESUMO + afiliação): melhor em alguns formatos.
+    const viaSum = cortarPorSumario(text);
+    const viaSep = separarAnais(text);
+    const comEmail = a => a ? a.filter(w=>(w.authors||[]).some(x=>x.email)).length : -1;
+    const eS = comEmail(viaSum), eP = comEmail(viaSep);
+    // Prefere o SUMÁRIO (títulos oficiais, limpos). Só troca pro método antigo quando ele pega
+    // MUITO mais e-mail (≥25% e +5) — aí o ganho compensa títulos um pouco menos limpos.
+    let works;
+    if(viaSum && viaSum.length && !(eP > eS*1.25 && eP > eS+5)){
+      works = viaSum;
+      lastIndice = {total: viaSum._sumario.total, fixed: viaSum._sumario.localizados, viaSumario:true};
     } else {
-      // FALLBACK: método antigo (página/RESUMO + afiliação) p/ anais sem sumário numerado.
-      works = separarAnais(text);
+      works = viaSep || [];
       lastIndice = aplicarIndice(works, text);            // títulos oficiais do sumário (grátis), se houver
     }
     if(works.length){
@@ -2462,9 +2503,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "12.2";
+const VERSION = "12.3";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["12.3","2026-06-04","Conserto do PDF novo (anais Univates): (1) o corte por SUMÁRIO agora lê também o sumário com PONTILHADO («TÍTULO ……… pág»), não só o numerado; (2) a IA de identificação NÃO rebaixa mais um anais (ela lia só a capa e achava que era «artigo único», quebrando tudo num registro só); (3) o app roda os dois métodos (sumário × página/RESUMO) e fica com o melhor, mas mantendo os títulos oficiais do sumário quando o ganho de e-mail é pequeno. Resultado: pdf_336 saiu de 1 registro lixo → 24 trabalhos/17 e-mails com títulos limpos; sem regressão nos outros."],
   ["12.2","2026-06-04","A linha de produção (Cortar → Coletar → Validar → Conferir → Excel) voltou — mas só na aba 📄 PDF (era pra sumir só da IA e Custos, não de vez)."],
   ["12.1","2026-06-04","Arrumação: o bloco do ✂️ separador, o botão Coletar, os resultados e o «Novidades & versões» agora aparecem SÓ na aba 📄 PDF. Some quando você está na aba 🧠 IA ou 💰 Custos — onde não faziam sentido."],
   ["12.0","2026-06-04","Custos reformulados: (1) GRÁFICO de gastos com totais de HOJE / mês / ano / TOTAL e barras por dia/mês/ano — e agora o histórico é salvo NO NAVEGADOR, então NÃO zera quando o Render reinicia; (2) custo por trabalho na «Última coleta»; (3) o «📋 Relatório da IA — o que ela fez» foi pra aba 🧠 IA (onde faz sentido); (4) removida a «linha de produção» (aquele desenho de etapas) — o botão agora é só «▶ Coletar». Adicionados preços do Opus/Sonnet/Haiku 4."],
