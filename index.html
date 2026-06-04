@@ -804,8 +804,11 @@ function parseWork(lines){
   const seen=new Set(); names=names.filter(n=>{const k=n.toLowerCase(); if(seen.has(k))return false; seen.add(k); return true;});
   if(!(title.length>10 && names.length)) return null;
   const authors=pairWork(names, emails); fixSwapsJS(authors);
-  // 1 só e-mail e ninguém pareou (e-mail é apelido, ex.: "petys02") → chuta no 1º autor (o aluno).
-  if(!authors.some(a=>a.email) && emails.length===1 && authors.length){ authors[0].email = emails[0]; authors[0]._guess=true; }
+  // Ninguém pareou mas HÁ e-mail(s) no bloco (apelidos/lista numerada) → atribui por ORDEM e
+  // marca _guess (pra IA/usuário conferir). Evita PERDER o trabalho por falha de pareamento.
+  if(!authors.some(a=>a.email) && emails.length && authors.length){
+    for(let i=0;i<authors.length && i<emails.length;i++){ authors[i].email = emails[i]; authors[i]._guess = true; }
+  }
   return {title, authors, all_emails:emails, _raw:block};
 }
 /* Detecta as linhas de AFILIAÇÃO que se repetem ~1× por trabalho (âncora robusta).
@@ -2102,9 +2105,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "4.2";
+const VERSION = "4.3";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["4.3","2026-06-03","CORREÇÃO IMPORTANTE: trabalhos eram removidos como «sem e-mail» quando NA VERDADE tinham e-mail (só o pareamento falhava). Agora, se ninguém pareou mas há e-mail no bloco, atribui por ordem (marca pra revisão). No anais 2023: 188 removidos→1. Recupera ~187 trabalhos."],
   ["4.2","2026-06-03","Blindagem: se algo falhar DEPOIS da coleta (desenhar tabela etc.), os dados continuam prontos e o Excel/CSV ainda funciona — com aviso na tela em vez de ficar sem nada. Exportação também protegida."],
   ["4.1","2026-06-03","CUSTO ~8x menor: a IA de revisão de nomes/títulos passa a usar modelo BARATO (Haiku) — tarefa simples, mesma qualidade. Fallback automático pro modelo configurado se a conta não tiver Haiku. (O custo alto vinha dos papers SBIE, não dos acentos.)"],
   ["4.0","2026-06-03","EDITOR: agora dá pra editar título, nome E e-mail direto na tabela (clique na célula). Título de SBC/SBIE em várias linhas agora vem completo (era cortado na 1ª linha). Acentos LaTeX já eram resolvidos sem IA (v3.5)."],
