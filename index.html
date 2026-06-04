@@ -380,8 +380,10 @@
       <summary style="cursor:pointer;font-weight:600">📊 Cobertura <span id="coberturaResumo" style="color:var(--muted);font-weight:400"></span></summary>
       <div id="coberturaBody" style="margin-top:10px;font-size:13px"></div>
       <div class="btn-bar" style="margin-top:8px">
+        <button class="btn" id="verificarIA">🔍 Verificar incertos com IA</button>
         <button class="btn ghost" id="coberturaDl">⬇️ Baixar removidos sem e‑mail (.csv)</button>
       </div>
+      <div id="verifBody" style="margin-top:10px;font-size:13px"></div>
     </details>
 
     <div class="row" style="gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
@@ -1685,7 +1687,8 @@ function validarTudo(){               // ETAPA 3 — corrige e-mails (validador)
   }
   return {corr, inv};
 }
-let lastRemovidos = [];   // trabalhos removidos por não ter e-mail (transparência)
+let lastRemovidos = [];       // trabalhos removidos por não ter e-mail (transparência)
+let lastRemovidosFull = [];   // os mesmos, registros COMPLETOS (p/ a IA tentar recuperar)
 /* No fim do validador: descarta autores SEM e-mail (sem utilidade) e trabalhos que ficaram vazios. */
 function excluirSemEmail(){
   let autRem=0;
@@ -1697,8 +1700,8 @@ function excluirSemEmail(){
   const fica = allResults.filter(r=>(r.authors||[]).length);
   // Marca se o trabalho removido TINHA @ no bloco (extração falhou) ou REALMENTE não tinha e-mail.
   // Isso responde, automaticamente e em todo PDF: "os sem e-mail realmente não têm?".
-  lastRemovidos = allResults.filter(r=>!(r.authors||[]).length)
-                            .map(r=>({title:r.title||"(sem título)", source:r.source_file||"",
+  lastRemovidosFull = allResults.filter(r=>!(r.authors||[]).length);     // registros completos (p/ recuperar via IA)
+  lastRemovidos = lastRemovidosFull.map(r=>({title:r.title||"(sem título)", source:r.source_file||"",
                                       temArroba: /@/.test(r._raw||"")}));
   allResults.length=0; allResults.push(...fica);
   return {autRem, trabRem: lastRemovidos.length,
@@ -2076,6 +2079,73 @@ function renderCobertura(ex){
   } else html += "<br>Nenhum trabalho removido por falta de e‑mail.";
   document.getElementById("coberturaBody").innerHTML = html;
 }
+/* VERIFICAÇÃO PELA IA — só nos casos INCERTOS (barato). Responde as 3 perguntas:
+   1) todos analisados? (determinístico, do sumário)  2) excluídos realmente sem e-mail? (IA tenta
+   RECUPERAR os que tinham @)  3) títulos/nomes certos? (IA confere só os MARCADOS como suspeitos). */
+async function _aiAplicarGrupo(grupo, modo, contador){
+  let fixes=[];
+  try{ fixes = await aiFixHard(grupo); }
+  catch(e){ for(let j=0;j<grupo.length;j++){ try{ const u=await aiFixHard([grupo[j]]); if(u[0]){ u[0].i=j; fixes.push(u[0]); } }catch(_){ } } }
+  grupo.forEach((r,gi)=>{
+    const f=(fixes||[]).find(x=>x.i===gi); if(!f) return;
+    const limpaAutores = arr => (arr||[])
+      .filter(a=>a&&a.name&&a.name.trim().split(/\s+/).length>=2 && !nomeQuebrado(a.name,a.email))
+      .map(a=>{ let em=(a.email||"").trim().toLowerCase();
+                if(em && (!/@/.test(em) || !(r._raw||"").toLowerCase().includes(em))) em="";
+                return {name:a.name.trim(), email:em}; });
+    if(modo==="recupera"){
+      const novos = limpaAutores(f.authors).filter(a=>a.email);    // só serve se vier com e-mail do texto
+      if(novos.length){ r.authors=novos;
+        if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)) r.title=f.title;
+        allResults.push(r); aprender(r); contador.rec++; }
+    } else {
+      if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)){ r.title=f.title; contador.tit++; }
+      if(temNomeQuebrado(r) && Array.isArray(f.authors) && f.authors.length){
+        const novos=limpaAutores(f.authors); if(novos.length){ r.authors=novos; contador.nome++; } }
+      (r.authors||[]).forEach(a=>delete a._guess); aprender(r);
+    }
+  });
+}
+async function verificarIncertosIA(){
+  const vb=document.getElementById("verifBody"), btn=document.getElementById("verificarIA");
+  if(!AI.enabled){ toast("Ligue a IA (aba 🧠 IA) antes de verificar.","warn"); return; }
+  if(btn){ btn.disabled=true; btn.textContent="🔍 Verificando…"; }
+  try{
+    const CAP=60;
+    let recuperaveis=(lastRemovidosFull||[]).filter(r=>/@/.test(r._raw||""));   // excluídos que TINHAM e-mail
+    let suspeitos=allResults.filter(r=>temNomeQuebrado(r) || (r.authors||[]).some(a=>a._guess)); // nomes marcados
+    const capInfo=(recuperaveis.length>CAP)||(suspeitos.length>CAP);
+    recuperaveis=recuperaveis.slice(0,CAP); suspeitos=suspeitos.slice(0,CAP);
+    const cont={rec:0,nome:0,tit:0}; const usdBefore=aiUsage.usd;
+    setStatus("🧠 IA verificando "+(recuperaveis.length+suspeitos.length)+" casos incertos…");
+    for(let i=0;i<recuperaveis.length;i+=4) await _aiAplicarGrupo(recuperaveis.slice(i,i+4),"recupera",cont);
+    for(let i=0;i<suspeitos.length;i+=4)   await _aiAplicarGrupo(suspeitos.slice(i,i+4),"confere",cont);
+    // tira da lista de removidos os que foram recuperados
+    const dentro=new Set(allResults);
+    lastRemovidosFull=(lastRemovidosFull||[]).filter(r=>!dentro.has(r));
+    lastRemovidos=lastRemovidosFull.map(r=>({title:r.title||"(sem título)",source:r.source_file||"",temArroba:/@/.test(r._raw||"")}));
+    const custo=aiUsage.usd-usdBefore;
+    // RELATÓRIO das 3 perguntas
+    const idxN=lastIndice?lastIndice.total:null;
+    const localizei=allResults.length+lastRemovidos.length;
+    const semA=lastRemovidos.filter(r=>!r.temArroba).length, comA=lastRemovidos.filter(r=>r.temArroba).length;
+    const q1 = idxN!=null
+      ? ("sumário lista <b>"+idxN+"</b>, localizei <b>"+localizei+"</b>"+((idxN-localizei)>2?" — <b style='color:var(--danger)'>faltam "+(idxN-localizei)+"</b>":" ✅"))
+      : "1 trabalho por PDF ✅";
+    const q2 = "<b>"+cont.rec+"</b> recuperados pela IA. Restam <b>"+lastRemovidos.length+"</b> sem e‑mail: <b>"+semA+"</b> realmente sem @"
+      + (comA?(" · <b style='color:var(--danger)'>"+comA+" ainda com @</b> (formato muito irregular)"):" ✅");
+    const q3 = "IA conferiu os marcados: <b>"+cont.nome+"</b> nomes corrigidos · <b>"+cont.tit+"</b> títulos"+(capInfo?" · ⚠️ limitado a "+CAP+"/grupo":"");
+    if(vb) vb.innerHTML = "<b>🔎 Relatório de verificação (IA)</b><ul style='margin:6px 0 0 18px'>"
+      + "<li><b>1. Todos analisados?</b> "+q1+"</li>"
+      + "<li><b>2. Excluídos realmente sem e‑mail?</b> "+q2+"</li>"
+      + "<li><b>3. Títulos/nomes certos?</b> "+q3+"</li></ul>"
+      + "<div style='color:var(--muted);margin-top:4px'>Custo desta verificação: US$ "+custo.toFixed(4)+"</div>";
+    try{ renderResults(); }catch(e){ console.warn(e); }
+    toast("Verificação IA: "+cont.rec+" recuperados · "+cont.nome+" nomes · "+cont.tit+" títulos · US$ "+custo.toFixed(4));
+  }catch(e){ toast("Falha na verificação: "+e.message,"warn"); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent="🔍 Verificar incertos com IA"; } }
+}
+document.getElementById("verificarIA").onclick = verificarIncertosIA;
 document.getElementById("coberturaDl").onclick = ()=>{
   if(!lastRemovidos.length){ toast("Nenhum trabalho removido nesta coleta.","warn"); return; }
   const esc=s=>'"'+String(s==null?"":s).replace(/"/g,'""')+'"';
@@ -2372,9 +2442,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "7.1";
+const VERSION = "8.0";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["8.0","2026-06-04","Sua ideia: botão «🔍 Verificar incertos com IA» (no painel Cobertura) que responde 3 perguntas — (1) todos analisados? (do sumário); (2) os excluídos realmente não têm e-mail? a IA TENTA RECUPERAR os que tinham @ no texto (formato irregular) e re-inclui; (3) títulos/nomes certos? a IA confere SÓ os marcados como suspeitos (nome quebrado/chute). Roda só quando você clica e SÓ nos casos incertos (~dezenas, não os 500) — barato. Mostra um relatório com as 3 respostas + o custo. Sem IA, o painel determinístico já responde 1 e 2."],
   ["7.1","2026-06-04","Pente-fino: 2 «autores» eram pedaços do TÍTULO que vazaram (ex.: «DE Bifidobacterium breve», «DO SOLO NA ATIVIDADE DE REFLORESTAMENTO» — a 2ª linha do título não toda em CAIXA ALTA). Conserto GERAL: no corte por sumário, como o título oficial é conhecido, nenhuma linha que faz parte dele pode virar autor. Bônus: isso realinhou o pareamento (ex.: GENÔMICA: Ronilson↔seu e-mail, Pablo↔o dele — antes estavam trocados). Resultado anais 2023: 0 nome-lixo, 0 nome com número, 0 e-mail inválido."],
   ["7.0","2026-06-04","Foco em NUNCA errar a identificação no próximo PDF (sua diretriz): (1) a IA lê o começo do PDF e confirma o TIPO (anais com vários trabalhos × um‑por‑PDF) — é a rede de segurança pra formatos novos; a regra fixa continua como caminho rápido e a IA só corrige (nunca quebra um anais já certo). A QUANTIDADE não é chute: anais = nº de trabalhos do SUMÁRIO (índice); um‑por‑PDF = 1. (2) Verificação SEMPRE visível: o painel mostra «sumário lista N · localizei L · com e‑mail M» e, dos removidos sem e‑mail, separa quantos REALMENTE não têm e‑mail vs quantos TINHAM e‑mail mas a extração não pegou (⚠️) — fim do erro silencioso. Tudo degrada sem IA."],
   ["6.5","2026-06-04","Você perguntou de novo: dos trabalhos sem e-mail, quais REALMENTE não têm? Conferi numa janela ampla: dos 14, só 5 não têm e-mail nenhum no PDF (autores não informaram) — esses estão certos em ficar de fora. Os outros 9 TÊM e-mail, mas em formato bem irregular (número em linha própria, e-mail grudado na sigla, e-mail «inline» sem nota numerada). De quebra, recuperei mais 1 caso: rodapé que começa com «(» (ex.: «1. (PIBIC), … e-mail:»). Total: 510 trabalhos com e-mail, 759 e-mails únicos (de 803 = 94,5%). Os 9 irregulares são o caso do mapa por IA."],
