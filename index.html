@@ -750,7 +750,7 @@ function pairWork(names, emails){
   return authors;
 }
 /* É titulação/cargo (não é nome próprio)? */
-const _ehGrauJS = n=>/^(ic\b|bic\b|pibi[ct]|bolsist|graduand|graduad[oa]|p[óo]s[\- ]?grad|mestrand|doutorand|orientador|coorientador|docente|discente|estagi|resid|especializ|zootecnist)/i.test((n||"").trim());
+const _ehGrauJS = n=>/^(ic\b|bic\b|pibi[ct]|bolsist|graduand|graduad[oa]|p[óo]s[\- ]?grad|mestrand|doutorand|orientador|coorientador|professora?\b|docente|discente|estagi|resid|especializ|zootecnist|t[ée]cnic[oa]\b|autor\b|coautor)/i.test((n||"").trim());
 /* Lê as NOTAS DE RODAPÉ numeradas ("1. Nome Completo, …, e-mail: x@y; 2. …") e devolve, por número,
    {name, email}. O nome só conta se for um nome próprio válido (senão fica ""). Usado para recuperar
    e-mails de autores que a linha de autores fundiu/truncou. */
@@ -876,9 +876,17 @@ function parseWork(lines){
   }
   let names=[];
   for(let i=topA;i<=ai;i++) if(!soNumeros(aLines[i])) names = names.concat(splitAuthorsSeg(aLines[i]));
+  // Estende PARA BAIXO: autores que continuam em linhas abaixo (ex.: "Daniel ; Katiane ;" e na linha
+  // seguinte, após o superscrito "3", "Antonio Thiago Madeira Beirão"). aLines já exclui os rodapés.
+  for(let i=ai+1;i<aLines.length;i++){ const l=aLines[i];
+    if(soNumeros(l)) continue;                                  // pula superscritos "3"
+    if(SECAO_JS.test(l)||TLINE_NOISE_JS.test(l)) break;
+    const letras=l.replace(/[^A-Za-zÀ-ÿ]/g,""); if(letras.length>3 && l===l.toUpperCase()) break; // CAIXA ALTA = não-autor
+    const segs=splitAuthorsSeg(l).filter(n=>!_ehGrauJS(n));
+    if(segs.length) names=names.concat(segs); else break; }
   const title=titleNear(aLines, topA, "");          // título fica ACIMA do bloco de autores
   // Tira "autores" que são na verdade titulação/cargo do rodapé (não são nomes) → não viram autor nem vão pra IA.
-  const ehGrau = n => /^(ic\b|bic\b|pibi[ct]|bolsist|graduand|graduad[oa]|p[óo]s[\- ]?grad|mestrand|doutorand|orientador|coorientador|docente|discente|estagi|resid|especializ|zootecnist)/i.test((n||"").trim());
+  const ehGrau = n => /^(ic\b|bic\b|pibi[ct]|bolsist|graduand|graduad[oa]|p[óo]s[\- ]?grad|mestrand|doutorand|orientador|coorientador|professora?\b|docente|discente|estagi|resid|especializ|zootecnist|t[ée]cnic[oa]\b|autor\b|coautor)/i.test((n||"").trim());
   names = names.filter(n=>!ehGrau(n));
   const seen=new Set(); names=names.filter(n=>{const k=n.toLowerCase(); if(seen.has(k))return false; seen.add(k); return true;});
   if(!(title.length>10 && names.length)) return null;
@@ -2306,9 +2314,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "6.3";
-const VERSION_DATE = "2026-06-03";
+const VERSION = "6.4";
+const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["6.4","2026-06-04","Você reparou: o e-mail do «autor-lixo» (ex.: «Professor do ICIBE») pertencia a um autor REAL que estava no bloco (Antonio Thiago Madeira Beirão). Dois consertos: (1) captura autores que continuam na LINHA DE BAIXO (ex.: «Daniel; Katiane;» e na linha seguinte «Antonio Thiago…»); (2) «Professor/Professora», «Técnico», «Autor/Coautor» deixam de ser confundidos com nome. Resultado: autores-lixo 2→0, e o e-mail vai pro NOME certo. E-mails únicos 748→758 (de 803 = 94%), trabalhos com e-mail 507→509."],
   ["6.3","2026-06-03","Você perguntou se os «sem e-mail» realmente não tinham: a maioria TINHA e a gente perdia. Consertos: (1) autores em linhas isoladas/separados por vírgula (sem «;») agora são lidos e pareados; (2) rodapé com ponto SEM espaço («1.Bolsista») passou a ser reconhecido. No anais 2023: e-mails únicos 732→748 (de 803 no PDF = 93%), trabalhos com e-mail 500→507, autores-lixo 5→2. Sobram ~12 em formato bem irregular (e-mail inline / grudado na sigla) + ~5 que realmente não têm e-mail no PDF."],
   ["6.2","2026-06-03","Recupera os e-mails que «sobravam»: (1) os autores agora são lidos SÓ acima das notas de rodapé — o texto do rodapé («Universidade…», «Energias Renováveis») não vira mais nome; isso ALÉM de limpar nomes, consertou nomes truncados (ex.: «Julia Rodrigues»→«Julia Isabella de Matos Rodrigues»). (2) Quando a linha de autores funde/perde nomes, o sistema ACRESCENTA o autor a partir do próprio rodapé numerado («N. Nome Completo, … e-mail:»), ligando nome↔e-mail corretos. No anais 2023: e-mails únicos 584→732 (de 803 no PDF = 91%) e trabalhos com e-mail 448→500. Sem regressão em 2019/mostra."],
   ["6.1","2026-06-03","Dois consertos do seu pente-fino: (1) NOMES com número colado (ex.: «Breno Pinto Rayol³») — agora tira os superscritos ¹²³ do nome. (2) MUITO mais e-mails pareados: antes, se o pareamento acertava 1-2 autores por nome, os outros 4-5 (que tinham e-mail no rodapé numerado) ficavam SEM e-mail; agora preenche TODOS os que faltam pelo número do rodapé. No anais 2023: e-mails pareados 456→584 (linhas autor+e-mail 728→855). Obs.: o PDF tem 803 e-mails únicos (não 1000+); ainda faltam ~200 em trabalhos onde nomes se fundem — próximo alvo."],
