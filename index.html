@@ -199,8 +199,6 @@
   <!-- Abas -->
   <div class="tabs" role="tablist">
     <div class="tab active" data-tab="pdf"  role="tab"><span class="ico">📄</span>PDF</div>
-    <div class="tab"        data-tab="html" role="tab"><span class="ico">🌐</span>HTML / URL</div>
-    <div class="tab"        data-tab="manual" role="tab"><span class="ico">✍️</span>Manual</div>
     <div class="tab"        data-tab="cost" data-admin="1" role="tab"><span class="ico">💰</span>Custos</div>
   </div>
 
@@ -221,34 +219,6 @@
     <div class="btn-bar">
       <button class="btn ghost" id="addMore">+ Adicionar mais</button>
       <button class="btn ghost" id="clearFiles">Remover todos</button>
-    </div>
-  </section>
-
-  <!-- Aba HTML / URL -->
-  <section class="panel" id="panel-html">
-    <label class="fld">Cole o HTML (código-fonte) ou o texto do artigo</label>
-    <textarea id="htmlInput" placeholder="<html> ... </html>  ou  texto puro do artigo"></textarea>
-
-    <label class="fld">Ou busque por URL (via proxy público)</label>
-    <div class="row">
-      <input type="url" id="urlInput" placeholder="https://exemplo.com/artigo">
-      <button class="btn" id="fetchUrl" style="flex:0 0 auto">🔎 Buscar</button>
-    </div>
-    <div class="hint">⚠️ Algumas páginas bloqueiam acesso externo (CORS / robots.txt). Se a busca falhar, copie o código-fonte da página e cole no campo acima.</div>
-
-    <div class="btn-bar">
-      <button class="btn primary" id="processHtml">Extrair deste HTML →</button>
-    </div>
-  </section>
-
-  <!-- Aba Manual -->
-  <section class="panel" id="panel-manual">
-    <label class="fld">Título do artigo</label>
-    <input type="text" id="mTitle" placeholder="Título completo do artigo">
-    <div id="mAuthors"></div>
-    <div class="btn-bar">
-      <button class="btn ghost" id="addAuthor">+ Adicionar autor</button>
-      <button class="btn primary" id="addManual">Adicionar registro →</button>
     </div>
   </section>
 
@@ -2211,76 +2181,6 @@ document.getElementById("coberturaDl").onclick = ()=>{
   download(new Blob([csv],{type:"text/csv;charset=utf-8;"}), "removidos_sem_email.csv");
 };
 
-/* =========================================================================
-   Aba Manual
-   ========================================================================= */
-function addAuthorRow(){
-  const div = document.createElement("div");
-  div.className = "row";
-  div.style.marginTop="8px";
-  div.innerHTML =
-    '<input type="text" class="m-name" placeholder="Nome completo do autor">'+
-    '<input type="text" class="m-email" placeholder="email@instituicao.br">'+
-    '<button class="btn ghost" style="flex:0 0 auto" title="Remover">✕</button>';
-  div.querySelector("button").onclick = ()=>div.remove();
-  document.getElementById("mAuthors").appendChild(div);
-}
-addAuthorRow();
-document.getElementById("addAuthor").onclick = addAuthorRow;
-
-document.getElementById("addManual").onclick = ()=>{
-  const title = document.getElementById("mTitle").value.trim();
-  const authors = [...document.querySelectorAll("#mAuthors .row")].map(row=>({
-    name: row.querySelector(".m-name").value.trim(),
-    email: row.querySelector(".m-email").value.trim()
-  })).filter(a=>a.name||a.email);
-  if(!title && !authors.length){ toast("Preencha ao menos um campo.", "warn"); return; }
-  allResults.push({title: title||"(sem título)", authors, source_file:"(entrada manual)"});
-  document.getElementById("mTitle").value="";
-  document.getElementById("mAuthors").innerHTML=""; addAuthorRow();
-  renderResults();
-  toast("Registro manual adicionado.");
-};
-
-/* =========================================================================
-   Aba HTML / URL
-   ========================================================================= */
-document.getElementById("processHtml").onclick = async ()=>{
-  const raw = document.getElementById("htmlInput").value.trim();
-  if(!raw){ toast("Cole um HTML ou texto primeiro.", "warn"); return; }
-  const rec = await extractFromHTML(raw, "(html colado)");
-  allResults.push(rec);
-  renderResults();
-  toast("HTML processado.");
-};
-
-document.getElementById("fetchUrl").onclick = async ()=>{
-  const url = document.getElementById("urlInput").value.trim();
-  if(!url){ toast("Informe uma URL.", "warn"); return; }
-  setStatus("Buscando <b>"+escapeHtml(url)+"</b> ...");
-  // proxies públicos (fallback em cascata)
-  const proxies = [
-    u => "https://api.allorigins.win/raw?url="+encodeURIComponent(u),
-    u => "https://corsproxy.io/?url="+encodeURIComponent(u),
-  ];
-  for(const make of proxies){
-    try{
-      const r = await fetch(make(url));
-      if(!r.ok) throw new Error("HTTP "+r.status);
-      const html = await r.text();
-      if(html && html.length>50){
-        const rec = await extractFromHTML(html, url);
-        allResults.push(rec);
-        renderResults();
-        setStatus("URL processada com sucesso.");
-        toast("Página buscada e processada.");
-        return;
-      }
-    }catch(e){ /* tenta próximo proxy */ }
-  }
-  setStatus("Não foi possível buscar a URL (CORS/robots.txt).");
-  toast("Falha ao buscar a URL. Cole o código-fonte manualmente.", "err");
-};
 
 /* =========================================================================
    Drag & drop + seleção de arquivos
@@ -2499,9 +2399,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "11.0";
+const VERSION = "11.1";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["11.1","2026-06-04","Removidas as abas «HTML / URL» e «Manual» (não faziam sentido pro uso real). Agora a entrada é direta pelo PDF (arrastar/soltar). Sobra a aba 📄 PDF e, pra admin, 💰 Custos."],
   ["11.0","2026-06-04","Cara nova: o app agora se chama «Seven Coleta de @», tema BRANCO e LARANJA. Foco só em COLETAR — removido o recurso de baixar/agente (varrer sites). Layout reorganizado: o topo agora é o fluxo principal (escolher fonte → coletar → resultados); as configurações (🧠 IA) e 📋 novidades foram pro rodapé e começam recolhidas."],
   ["10.2","2026-06-04","Formato RESUMO/ARTIGO do Even3 (amostra que você mandou) agora coletado certo: (1) TÍTULO — ignora o rótulo «RESUMO EXPANDIDO - ÁREA» / «ARTIGO - …» e pega o título real; (2) AUTORES — lê o formato «Nome Completo (email@dominio)» que vem após o título (antes pegava frases do corpo como «Poder Judiciário»). Ex.: título «AUDIÊNCIAS DE CUSTÓDIA…» + autor «Eduarda Rodrigues Rosa → eduardarosa@tjro.jus.br». Sem regressão (periódico ARACÊ 8/8, anais ok). Só frontend."],
   ["10.1","2026-06-04","Conserto do teste do agente: o Even3 expõe o MESMO PDF por vários links (download/rede/href), então vinham duplicados (33 links p/ ~14 trabalhos) + erros de links repetidos. Agora o download faz DEDUP POR CONTEÚDO (PDFs idênticos viram 1 só) e mostra «X duplicados ignorados». Falta ainda limpar o título dos resumos do Even3 («RESUMO EXPANDIDO - ÁREA - título») — preciso de uma amostra do PDF."],
