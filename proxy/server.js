@@ -122,5 +122,33 @@ app.get("/v1/models", async (req, res) => {
   } catch (e) { res.status(500).json({ error: { message: e.message } }); }
 });
 
+// Baixa um PDF de uma URL externa e devolve ao app (contorna o CORS). Protegido por token.
+app.get("/fetch", async (req, res) => {
+  if (!authOK(req, res)) return;
+  const url = (req.query.url || "").toString();
+  if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: { message: "URL inválida (use http/https)." } });
+  // SSRF básico: bloqueia hosts locais/privados
+  try {
+    const host = new URL(url).hostname;
+    if (/^(localhost$|127\.|10\.|192\.168\.|169\.254\.|0\.0\.0\.0$|\[?::1\]?$|172\.(1[6-9]|2\d|3[01])\.)/i.test(host))
+      return res.status(400).json({ error: { message: "Host não permitido." } });
+  } catch (_) { return res.status(400).json({ error: { message: "URL inválida." } }); }
+  try {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 60000);
+    const r = await fetch(url, { redirect: "follow", signal: ctrl.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (ArticleLens)" } });
+    clearTimeout(to);
+    if (!r.ok) return res.status(r.status).json({ error: { message: "HTTP " + r.status + " ao baixar o PDF." } });
+    const ct = (r.headers.get("content-type") || "").toLowerCase();
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > 60 * 1024 * 1024) return res.status(413).json({ error: { message: "PDF acima de 60 MB." } });
+    const ehPdf = ct.includes("application/pdf") || /%PDF-/.test(buf.slice(0, 8).toString("latin1")) || /\.pdf(\?|$)/i.test(url);
+    if (!ehPdf) return res.status(415).json({ error: { message: "O link não é um PDF (content-type: " + (ct || "?") + ")." } });
+    res.setHeader("Content-Type", "application/pdf");
+    res.send(buf);
+  } catch (e) { res.status(500).json({ error: { message: e.name === "AbortError" ? "tempo esgotado ao baixar" : e.message } }); }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("articlelens-proxy ouvindo na porta " + PORT));

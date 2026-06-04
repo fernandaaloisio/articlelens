@@ -233,6 +233,7 @@
   <!-- Abas -->
   <div class="tabs" role="tablist">
     <div class="tab active" data-tab="pdf"  role="tab"><span class="ico">📄</span>PDF</div>
+    <div class="tab"        data-tab="baixar" role="tab"><span class="ico">📥</span>Baixar PDFs</div>
     <div class="tab"        data-tab="html" role="tab"><span class="ico">🌐</span>HTML / URL</div>
     <div class="tab"        data-tab="manual" role="tab"><span class="ico">✍️</span>Manual</div>
     <div class="tab"        data-tab="cost" data-admin="1" role="tab"><span class="ico">💰</span>Custos</div>
@@ -256,6 +257,18 @@
       <button class="btn ghost" id="addMore">+ Adicionar mais</button>
       <button class="btn ghost" id="clearFiles">Remover todos</button>
     </div>
+  </section>
+
+  <!-- Aba Baixar PDFs -->
+  <section class="panel" id="panel-baixar">
+    <label class="fld">Cole os links de PDF — um por linha (gere com o <b>gerar_links_pdfs.py</b>)</label>
+    <textarea id="dlLinks" placeholder="https://.../trabalho1.pdf
+https://.../trabalho2.pdf"></textarea>
+    <div class="hint">⚠️ Baixa pelo <b>seu proxy do Render</b> (contorna o CORS). Configure a URL e o token na aba <b>🧠 IA</b> primeiro — é o mesmo Render. Os PDFs vão pra fila da aba 📄 PDF e são coletados.</div>
+    <div class="btn-bar">
+      <button class="btn primary" id="dlStart">📥 Baixar e coletar</button>
+    </div>
+    <div id="dlStatus" style="margin-top:8px;font-size:13px"></div>
   </section>
 
   <!-- Aba HTML / URL -->
@@ -1895,6 +1908,49 @@ document.querySelectorAll(".tab").forEach(tab=>{
   };
 });
 
+/* ABA 📥 BAIXAR PDFs — cola links → baixa pelo proxy (contorna CORS) → joga na fila e coleta. */
+function _proxyOrigin(){
+  const b=(AI.baseURL||"").trim().replace(/\/+$/,"");      // ex.: https://servico.onrender.com/v1
+  return b ? b.replace(/\/v1$/i,"") : "";                  // → https://servico.onrender.com
+}
+document.getElementById("dlStart").onclick = async ()=>{
+  const st=document.getElementById("dlStatus"), btn=document.getElementById("dlStart");
+  const origin=_proxyOrigin();
+  if(!origin){ toast("Configure o proxy na aba 🧠 IA (preciso da URL do seu Render).","warn"); return; }
+  const links=[...new Set((document.getElementById("dlLinks").value||"")
+      .split(/[\s,]+/).map(s=>s.trim()).filter(u=>/^https?:\/\//i.test(u)))];
+  if(!links.length){ toast("Cole pelo menos um link de PDF (um por linha).","warn"); return; }
+  btn.disabled=true; btn.textContent="📥 Baixando…";
+  let ok=0, fail=0; const novos=[]; const erros=[];
+  for(let i=0;i<links.length;i++){
+    const u=links[i];
+    st.innerHTML="Baixando <b>"+(i+1)+"</b> de "+links.length+"…"
+      +"<div style='height:8px;background:var(--border);border-radius:6px;margin-top:6px;overflow:hidden'>"
+      +"<div style='height:100%;width:"+Math.round(i/links.length*100)+"%;background:var(--accent)'></div></div>";
+    try{
+      const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(),70000);
+      const r=await fetch(origin+"/fetch?url="+encodeURIComponent(u),
+        { headers: AI.apiKey?{Authorization:"Bearer "+AI.apiKey}:{}, signal:ctrl.signal });
+      clearTimeout(t);
+      if(!r.ok){ fail++; let msg="HTTP "+r.status; try{ msg=(await r.json()).error.message||msg; }catch(_){ } erros.push(u.slice(-40)+" — "+msg); continue; }
+      const blob=await r.blob();
+      let base=((u.split("/").pop()||"trabalho").split("?")[0])||"trabalho"; if(!/\.pdf$/i.test(base)) base+=".pdf";
+      let nm=base, k=2; while(novos.some(f=>f.name===nm)||fileQueue.find(x=>x.file.name===nm)){ nm=base.replace(/\.pdf$/i,"")+"_"+(k++)+".pdf"; }
+      novos.push(new File([blob], nm, {type:"application/pdf"})); ok++;
+    }catch(e){ fail++; erros.push(u.slice(-40)+" — "+(e.name==="AbortError"?"tempo esgotado":e.message)); }
+  }
+  if(novos.length) addFilesToQueue(novos);
+  st.innerHTML="<b>"+ok+"</b> baixados · "+(fail?("<b style='color:var(--danger)'>"+fail+" falharam</b>"):"0 falhas")+"."
+    +(erros.length?"<div style='color:var(--muted);margin-top:4px'>Falhas: "+erros.slice(0,5).map(escapeHtml).join("; ")+(erros.length>5?" …":"")+"</div>":"");
+  btn.disabled=false; btn.textContent="📥 Baixar e coletar";
+  if(ok){
+    document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.tab==="pdf"));
+    document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
+    document.getElementById("panel-pdf").classList.add("active");
+    if(fileQueue.some(f=>f.status==="aguardando")) processBatch();
+  }
+};
+
 /* ===== Painel de custos (admin) ===== */
 async function loadUsage(){
   const root = (AI.baseURL||"").replace(/\/+$/,"").replace(/\/v1$/,"");
@@ -2476,9 +2532,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "8.2";
+const VERSION = "9.0";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["9.0","2026-06-04","Nova aba 📥 Baixar PDFs: você cola os links (gerados pelo gerar_links_pdfs.py), o app baixa cada PDF PELO SEU PROXY DO RENDER (contorna o CORS), joga na fila e já coleta. Barra de progresso «X de Y» + lista de falhas. ⚠️ EXIGE REDEPLOY DO RENDER (novo endpoint /fetch no proxy, com proteções: só http/https, bloqueia hosts privados, limite 60 MB, confere se é PDF). Use a MESMA URL/token da aba 🧠 IA."],
   ["8.2","2026-06-04","Testamos um PDF DIFERENTE (artigo único de periódico, revista ARACÊ) pra estressar a generalização — e achou 2 bugs, agora corrigidos: (1) TÍTULO multilíngue saía truncado (só a 1ª linha) — agora junta as linhas do título em português e PARA na tradução (inglês/espanhol); (2) último autor vinha como «Eng. Agronomo» (cargo) em vez do nome — adicionei agrônomo/eng./técnico/zootecnista à lista de cargos ignorados, então pega o nome real («André Bressiani Machado»). Resultado: 8/8 autores certos. Anais sem regressão."],
   ["8.1","2026-06-04","Conserto do «carregando infinito» na verificação por IA: (1) agora mostra BARRA DE PROGRESSO + «X de Y» e o que está fazendo («recuperando excluídos…», «conferindo nomes…»); (2) a lentidão vinha de marcar como incerto TODO e-mail ligado por chute — agora só checa nome quebrado/título suspeito + excluídos que tinham @ (no anais 2023: ~69 casos, ~18 chamadas, não 500); (3) TEMPO-LIMITE por lote (45s) — se a IA travar/cair, ele não fica preso, pula e continua; (4) se não houver nada incerto, avisa na hora."],
   ["8.0","2026-06-04","Sua ideia: botão «🔍 Verificar incertos com IA» (no painel Cobertura) que responde 3 perguntas — (1) todos analisados? (do sumário); (2) os excluídos realmente não têm e-mail? a IA TENTA RECUPERAR os que tinham @ no texto (formato irregular) e re-inclui; (3) títulos/nomes certos? a IA confere SÓ os marcados como suspeitos (nome quebrado/chute). Roda só quando você clica e SÓ nos casos incertos (~dezenas, não os 500) — barato. Mostra um relatório com as 3 respostas + o custo. Sem IA, o painel determinístico já responde 1 e 2."],
