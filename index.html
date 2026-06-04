@@ -317,8 +317,20 @@
     <p class="aihelp" style="margin-top:10px">⚠️ Valor estimado (preços padrão da tabela). O limite oficial e inquebrável você define no painel da Anthropic (Billing → Limits).</p>
   </section>
 
-  <!-- COLETA -->
+  <!-- LINHA DE PRODUÇÃO (só na aba PDF) -->
   <div class="action">
+    <div class="pipe" id="pipe">
+      <div class="step" data-s="1"><span class="dot">1</span> Cortar</div>
+      <div class="seta">→</div>
+      <div class="step" data-s="2"><span class="dot">2</span> Coletar</div>
+      <div class="seta">→</div>
+      <div class="step" data-s="3"><span class="dot">3</span> Validar e‑mail</div>
+      <div class="seta">→</div>
+      <div class="step" data-s="4"><span class="dot">4</span> Conferir</div>
+      <div class="seta">→</div>
+      <div class="step" data-s="5"><span class="dot">5</span> Excel</div>
+    </div>
+
     <div class="sepbox">
       <span class="seplbl">✂️ Passar pelo separador (anais com vários trabalhos por PDF)?</span>
       <label class="opt"><input type="radio" name="sepmode" value="auto" checked> Automático</label>
@@ -326,10 +338,10 @@
       <label class="opt"><input type="radio" name="sepmode" value="nao"> Nunca (1 artigo por PDF)</label>
     </div>
 
-    <div class="status-msg" id="statusMsg">Pronto. Selecione os PDFs e clique em Coletar.</div>
+    <div class="status-msg" id="statusMsg">Pronto. Selecione os PDFs e inicie a linha.</div>
     <div class="meter"><span id="progMeter"></span></div>
     <div class="btn-bar">
-      <button class="btn primary" id="extractBtn">▶ Coletar</button>
+      <button class="btn primary" id="extractBtn">▶ Iniciar linha de produção</button>
       <button class="btn ghost" id="clearAll">Limpar tudo</button>
     </div>
   </div>
@@ -2450,9 +2462,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "12.1";
+const VERSION = "12.2";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["12.2","2026-06-04","A linha de produção (Cortar → Coletar → Validar → Conferir → Excel) voltou — mas só na aba 📄 PDF (era pra sumir só da IA e Custos, não de vez)."],
   ["12.1","2026-06-04","Arrumação: o bloco do ✂️ separador, o botão Coletar, os resultados e o «Novidades & versões» agora aparecem SÓ na aba 📄 PDF. Some quando você está na aba 🧠 IA ou 💰 Custos — onde não faziam sentido."],
   ["12.0","2026-06-04","Custos reformulados: (1) GRÁFICO de gastos com totais de HOJE / mês / ano / TOTAL e barras por dia/mês/ano — e agora o histórico é salvo NO NAVEGADOR, então NÃO zera quando o Render reinicia; (2) custo por trabalho na «Última coleta»; (3) o «📋 Relatório da IA — o que ela fez» foi pra aba 🧠 IA (onde faz sentido); (4) removida a «linha de produção» (aquele desenho de etapas) — o botão agora é só «▶ Coletar». Adicionados preços do Opus/Sonnet/Haiku 4."],
   ["11.2","2026-06-04","A 🧠 IA virou uma ABA só de ADMIN (saiu do rodapé): só o administrador vê e mexe nas configurações da IA (ligar, modelo, token, proxy). Usuário comum nem enxerga a aba. As novidades/versões continuam no rodapé."],
