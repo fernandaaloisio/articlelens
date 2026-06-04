@@ -1964,7 +1964,10 @@ document.getElementById("dlStart").onclick = async ()=>{
     ? fetch(AGENTE+"/fetch?url="+encodeURIComponent(u))
     : fetch(origin+"/fetch?url="+encodeURIComponent(u), { headers: AI.apiKey?{Authorization:"Bearer "+AI.apiKey}:{} });
   btn.disabled=true; btn.textContent="📥 Baixando…";
-  let ok=0, fail=0; const novos=[]; const erros=[];
+  let ok=0, fail=0, dup=0; const novos=[]; const erros=[]; const vistos=new Set();
+  const _sig = async buf => { try{ const h=await crypto.subtle.digest("SHA-1",buf);
+      return buf.byteLength+"_"+[...new Uint8Array(h)].slice(0,8).map(b=>b.toString(16).padStart(2,"0")).join(""); }
+    catch(_){ return buf.byteLength+""; } };   // assinatura de conteúdo (tamanho + hash)
   for(let i=0;i<links.length;i++){
     const u=links[i];
     st.innerHTML="Baixando <b>"+(i+1)+"</b> de "+links.length+"… "+(usarAgente?"(agente local)":"(Render)")
@@ -1973,14 +1976,17 @@ document.getElementById("dlStart").onclick = async ()=>{
     try{
       const r=await baixarVia(u);
       if(!r.ok){ fail++; let msg="HTTP "+r.status; try{ const j=await r.json(); msg=(j.error&&j.error.message)||j.error||msg; }catch(_){ } erros.push(u.slice(-40)+" — "+msg); continue; }
-      const blob=await r.blob();
+      const buf=await r.arrayBuffer();
+      const sig=await _sig(buf);
+      if(vistos.has(sig)){ dup++; continue; }            // MESMO PDF (vindo por outro link) → ignora
+      vistos.add(sig);
       let base=((u.split("/").pop()||"trabalho").split("?")[0])||"trabalho"; if(!/\.pdf$/i.test(base)) base+=".pdf";
       let nm=base, k=2; while(novos.some(f=>f.name===nm)||fileQueue.find(x=>x.file.name===nm)){ nm=base.replace(/\.pdf$/i,"")+"_"+(k++)+".pdf"; }
-      novos.push(new File([blob], nm, {type:"application/pdf"})); ok++;
+      novos.push(new File([buf], nm, {type:"application/pdf"})); ok++;
     }catch(e){ fail++; erros.push(u.slice(-40)+" — "+(e.name==="AbortError"?"tempo esgotado":e.message)); }
   }
   if(novos.length) addFilesToQueue(novos);
-  st.innerHTML="<b>"+ok+"</b> baixados · "+(fail?("<b style='color:var(--danger)'>"+fail+" falharam</b>"):"0 falhas")+"."
+  st.innerHTML="<b>"+ok+"</b> baixados"+(dup?" · "+dup+" duplicados ignorados":"")+" · "+(fail?("<b style='color:var(--danger)'>"+fail+" falharam</b>"):"0 falhas")+"."
     +(erros.length?"<div style='color:var(--muted);margin-top:4px'>Falhas: "+erros.slice(0,5).map(escapeHtml).join("; ")+(erros.length>5?" …":"")+"</div>":"");
   btn.disabled=false; btn.textContent="📥 Baixar e coletar";
   if(ok){
@@ -2572,9 +2578,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "10.0";
+const VERSION = "10.1";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["10.1","2026-06-04","Conserto do teste do agente: o Even3 expõe o MESMO PDF por vários links (download/rede/href), então vinham duplicados (33 links p/ ~14 trabalhos) + erros de links repetidos. Agora o download faz DEDUP POR CONTEÚDO (PDFs idênticos viram 1 só) e mostra «X duplicados ignorados». Falta ainda limpar o título dos resumos do Even3 («RESUMO EXPANDIDO - ÁREA - título») — preciso de uma amostra do PDF."],
   ["10.0","2026-06-04","AGENTE LOCAL: agora dá pra fazer TUDO pela tela. Abra o Iniciar_Agente.bat (pasta Downloads) e, na aba 📥 Baixar PDFs, cole a URL do anais (Even3) e clique «Buscar do anais» — o agente, NA SUA MÁQUINA, varre o evento e traz os links; daí «Baixar e coletar». Com o agente aberto o download é 100% local (de graça, SEM Render). A aba mostra «● agente aberto/fechado». Sem o agente, ainda dá pra colar links e baixar pelo Render. Esta versão é só frontend — NÃO precisa redeploy do Render."],
   ["9.0","2026-06-04","Nova aba 📥 Baixar PDFs: você cola os links (gerados pelo gerar_links_pdfs.py), o app baixa cada PDF PELO SEU PROXY DO RENDER (contorna o CORS), joga na fila e já coleta. Barra de progresso «X de Y» + lista de falhas. ⚠️ EXIGE REDEPLOY DO RENDER (novo endpoint /fetch no proxy, com proteções: só http/https, bloqueia hosts privados, limite 60 MB, confere se é PDF). Use a MESMA URL/token da aba 🧠 IA."],
   ["8.2","2026-06-04","Testamos um PDF DIFERENTE (artigo único de periódico, revista ARACÊ) pra estressar a generalização — e achou 2 bugs, agora corrigidos: (1) TÍTULO multilíngue saía truncado (só a 1ª linha) — agora junta as linhas do título em português e PARA na tradução (inglês/espanhol); (2) último autor vinha como «Eng. Agronomo» (cargo) em vez do nome — adicionei agrônomo/eng./técnico/zootecnista à lista de cargos ignorados, então pega o nome real («André Bressiani Machado»). Resultado: 8/8 autores certos. Anais sem regressão."],
