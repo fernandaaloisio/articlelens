@@ -284,6 +284,8 @@
 
     <!-- Histórico de gastos (salvo no navegador → não zera quando o Render reinicia) -->
     <h4 style="margin:24px 0 8px">📈 Histórico de gastos <span class="aihelp" style="font-weight:400">— salvo no seu navegador (não zera)</span></h4>
+    <label class="fld" style="display:inline-flex;align-items:center;gap:8px;margin:0 0 6px">Cotação aprox. US$ → R$:
+      <input type="number" id="usdBrl" step="0.01" style="width:90px;padding:6px 8px" title="Quanto vale 1 dólar em reais (aproximado)"></label>
     <div class="row" style="gap:12px;flex-wrap:wrap">
       <div style="flex:1;min-width:110px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:12px"><div style="font-size:11px;color:var(--muted)">Hoje</div><div id="chToday" style="font-size:19px;font-weight:800;color:var(--accent)">—</div></div>
       <div style="flex:1;min-width:110px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:12px"><div style="font-size:11px;color:var(--muted)">Este mês</div><div id="chMonth" style="font-size:19px;font-weight:800">—</div></div>
@@ -309,8 +311,8 @@
         <div id="runCost" style="font-size:22px;font-weight:800;color:var(--accent)">—</div>
       </div>
       <div style="flex:1;min-width:120px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:14px">
-        <div style="font-size:12px;color:var(--muted)">Custo por trabalho</div>
-        <div id="runPer" style="font-size:22px;font-weight:800">—</div>
+        <div style="font-size:12px;color:var(--muted)">Custo por e‑mail</div>
+        <div id="runPer" style="font-size:18px;font-weight:800">—</div>
       </div>
     </div>
 
@@ -1234,6 +1236,11 @@ const AI = { enabled:false, orchestrate:false, sample:true, sameFormat:true, bas
 const AIPRICES = { "claude-3-5-sonnet":[3,15],"claude-3-7-sonnet":[3,15],"claude-3-5-haiku":[0.8,4],"claude-3-opus":[15,75],"claude-3-haiku":[0.25,1.25],
   "claude-opus-4":[15,75],"claude-sonnet-4":[3,15],"claude-haiku-4":[0.8,4] };
 function aiPriceFor(m){ const k=Object.keys(AIPRICES).find(k=>(m||"").includes(k)); return AIPRICES[k]||AIPRICES["claude-3-5-sonnet"]; }
+// Conversão US$ → R$ (aproximada, editável pelo admin na aba Custos).
+let USD_BRL = (()=>{ const v=parseFloat(localStorage.getItem("articlelens_usdbrl")); return (v>0?v:5.40); })();
+const fmtUSD = v => "US$ "+(v||0).toFixed((Math.abs(v||0)<1)?4:2);
+const fmtBRL = v => "R$ "+((v||0)*USD_BRL).toFixed(2).replace(".",",");
+const fmtMoney = v => fmtBRL(v)+" <span style='color:var(--muted);font-weight:400;font-size:.82em'>("+fmtUSD(v)+")</span>";  // R$ primeiro
 let aiUsage = (()=>{ try{ return JSON.parse(localStorage.getItem("articlelens_usage")) || {in:0,out:0,usd:0,calls:0}; }catch(e){ return {in:0,out:0,usd:0,calls:0}; } })();
 // Histórico de custo POR DIA (no navegador → não zera quando o Render reinicia). Dia → US$.
 let costHist = (()=>{ try{ return JSON.parse(localStorage.getItem("articlelens_costhist")) || {}; }catch(e){ return {}; } })();
@@ -1908,6 +1915,8 @@ async function processBatch(){
   let inic={nFlag:0,nComp:0}, ex={autRem:0,trabRem:0};
   try{ inic = completarIniciais(allResults); }catch(e){ console.warn("completarIniciais:",e); }
   try{ ex   = excluirSemEmail(); }catch(e){ console.warn("excluirSemEmail:",e); }
+  // guarda o nº de e-mails coletados (p/ o "custo por e-mail" persistir)
+  try{ if(lastRun){ lastRun.emails = allResults.reduce((s,w)=>s+(w.authors||[]).filter(a=>a.email).length,0); _saveRun(); } }catch(e){}
   pipeStep(4,"done"); pipeStep(5,"active");
   try{ renderResults(); }
   catch(e){ console.warn("renderResults:",e);
@@ -1975,10 +1984,9 @@ async function loadUsage(){
     const r = await fetch(root+"/usage", { headers:{ "Authorization":"Bearer "+AI.apiKey } });
     if(!r.ok) throw new Error("HTTP "+r.status);
     const u = await r.json();
-    const fmt = v => "US$ " + (v||0).toFixed(2);
-    document.getElementById("costSpent").textContent = fmt(u.usd);
-    document.getElementById("costLimit").textContent = u.limit ? fmt(u.limit) : "sem limite";
-    document.getElementById("costLeft").textContent  = (u.remaining==null) ? "—" : fmt(u.remaining);
+    document.getElementById("costSpent").innerHTML = fmtMoney(u.usd);
+    document.getElementById("costLimit").innerHTML = u.limit ? fmtMoney(u.limit) : "sem limite";
+    document.getElementById("costLeft").innerHTML  = (u.remaining==null) ? "—" : fmtMoney(u.remaining);
     const pct = (u.limit>0) ? Math.min(100, u.usd/u.limit*100) : 0;
     const bar = document.getElementById("costMeter");
     bar.style.width = pct.toFixed(1)+"%";
@@ -1988,7 +1996,7 @@ async function loadUsage(){
                   + (u.since? " · desde "+escapeHtml(String(u.since).slice(0,10)) : "");
   }catch(e){
     // servidor indisponível → mostra o acumulado LOCAL salvo (persiste ao fechar a web)
-    document.getElementById("costSpent").textContent = "US$ "+(aiUsage.usd||0).toFixed(2);
+    document.getElementById("costSpent").innerHTML = fmtMoney(aiUsage.usd||0);
     document.getElementById("costLimit").textContent = "—";
     document.getElementById("costLeft").textContent  = "—";
     det.textContent = "Total do servidor indisponível ("+e.message+"). Mostrando acumulado LOCAL salvo neste navegador: "
@@ -2009,7 +2017,7 @@ function renderCostChart(){
   const box=document.getElementById("costChart"); if(!box) return;
   const a=_aggCost(); const fmt=v=>"US$ "+(v||0).toFixed(v<1?4:2);
   const hoje=_diaHoje();
-  const set=(id,v)=>{const e=document.getElementById(id); if(e)e.textContent=fmt(v);};
+  const set=(id,v)=>{const e=document.getElementById(id); if(e)e.innerHTML=fmtBRL(v)+"<div style='font-size:10px;color:var(--muted);font-weight:400'>"+fmtUSD(v)+"</div>";};
   set("chToday",a.dia[hoje]||0); set("chMonth",a.mes[hoje.slice(0,7)]||0); set("chYear",a.ano[hoje.slice(0,4)]||0); set("chTotal",a.total);
   let entries;
   if(_chartPeriodo==="mes") entries=Object.entries(a.mes).sort();
@@ -2031,6 +2039,11 @@ document.querySelectorAll(".chper").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".chper").forEach(x=>x.classList.toggle("active",x===b));
   renderCostChart();
 });
+// cotação US$→R$ editável
+(function(){ const inp=document.getElementById("usdBrl"); if(!inp) return;
+  inp.value=USD_BRL;
+  inp.onchange=()=>{ const v=parseFloat(inp.value); if(v>0){ USD_BRL=v; try{localStorage.setItem("articlelens_usdbrl",String(v));}catch(e){} renderCostChart(); renderRun(); loadUsage(); } };
+})();
 /* Custo por trabalho + relatório da IA (da última coleta) */
 function renderRun(){
   const fmt = v => "US$ " + (v||0).toFixed(v<1?4:2);
@@ -2039,9 +2052,12 @@ function renderRun(){
   if(!lastRun){ document.getElementById("runWorks").textContent="—";
     document.getElementById("runCost").textContent="—"; document.getElementById("runPer").textContent="—";
     sum.textContent="Rode uma coleta com a IA ligada para ver o relatório."; box.innerHTML=""; return; }
+  // nº de e-mails coletados (pra custo POR E-MAIL): usa o salvo na coleta, senão conta ao vivo
+  const nmail = (lastRun.emails!=null) ? lastRun.emails
+              : (allResults||[]).reduce((s,w)=>s+(w.authors||[]).filter(a=>a.email).length,0);
   document.getElementById("runWorks").textContent = lastRun.works;
-  document.getElementById("runCost").textContent  = fmt(lastRun.cost);
-  document.getElementById("runPer").textContent   = fmt(lastRun.perWork);
+  document.getElementById("runCost").innerHTML  = fmtMoney(lastRun.cost);
+  document.getElementById("runPer").innerHTML   = nmail ? fmtMoney((lastRun.cost||0)/nmail)+" <span style='color:var(--muted);font-weight:400;font-size:.8em'>("+nmail+" e‑mails)</span>" : "—";
   sum.innerHTML = (lastRun.formato?"Formato (detectado sem IA): <b>"+escapeHtml(lastRun.formato)+"</b><br>":"")
     +"IA revisou <b>"+lastRun.hard+"</b> casos"
     +(lastRun.amostra?" <i>(amostra de "+lastRun.amostra.total+" — confere o 1º trabalho de cada formato + alguns)</i>":"")+" · "
@@ -2510,9 +2526,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "12.4";
+const VERSION = "12.5";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["12.5","2026-06-04","Custos em REAL (R$): todos os valores agora mostram R$ (com o US$ menorzinho ao lado), com uma cotação aproximada US$→R$ que você edita na aba Custos. E o custo deixou de ser «por trabalho» — virou «por E-MAIL» (custo da coleta ÷ e-mails coletados). Obs.: 1 e-mail veio cortado sem «.br» (o PDF quebrou o final em outra linha) — dá pra ajustar no editor."],
   ["12.4","2026-06-04","Consertos do teste: (1) TRAVA — a IA NUNCA pode reduzir os e-mails já coletados (ela estava «corrigindo» nomes e jogando e-mail fora: 17→13). Agora só troca se mantiver/aumentar os e-mails. (2) CUSTO — tenta vários modelos BARATOS (Haiku 3.5 → Haiku 3 → Haiku 4) antes de cair no Opus caro; o aviso final mostra QUAL modelo a IA usou. (3) Profissões-cargo (Farmacêutica/Enfermeira/Médica…) não viram mais «nome». (4) O painel 📊 Cobertura (com a verificação «realmente sem e-mail» + botão 🔍 Verificar incertos) agora abre sozinho após a coleta."],
   ["12.3","2026-06-04","Conserto do PDF novo (anais Univates): (1) o corte por SUMÁRIO agora lê também o sumário com PONTILHADO («TÍTULO ……… pág»), não só o numerado; (2) a IA de identificação NÃO rebaixa mais um anais (ela lia só a capa e achava que era «artigo único», quebrando tudo num registro só); (3) o app roda os dois métodos (sumário × página/RESUMO) e fica com o melhor, mas mantendo os títulos oficiais do sumário quando o ganho de e-mail é pequeno. Resultado: pdf_336 saiu de 1 registro lixo → 24 trabalhos/17 e-mails com títulos limpos; sem regressão nos outros."],
   ["12.2","2026-06-04","A linha de produção (Cortar → Coletar → Validar → Conferir → Excel) voltou — mas só na aba 📄 PDF (era pra sumir só da IA e Custos, não de vez)."],
