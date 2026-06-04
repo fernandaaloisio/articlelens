@@ -199,6 +199,7 @@
   <!-- Abas -->
   <div class="tabs" role="tablist">
     <div class="tab active" data-tab="pdf"  role="tab"><span class="ico">📄</span>PDF</div>
+    <div class="tab"        data-tab="ia"   data-admin="1" role="tab"><span class="ico">🧠</span>IA</div>
     <div class="tab"        data-tab="cost" data-admin="1" role="tab"><span class="ico">💰</span>Custos</div>
   </div>
 
@@ -220,6 +221,31 @@
       <button class="btn ghost" id="addMore">+ Adicionar mais</button>
       <button class="btn ghost" id="clearFiles">Remover todos</button>
     </div>
+  </section>
+
+  <!-- Aba IA (admin) -->
+  <section class="panel" id="panel-ia" data-admin="1">
+    <h3 style="margin:0 0 4px">🧠 IA (Claude via seu Render) <span class="aistate" id="aiState" style="font-weight:400;font-size:14px;color:var(--muted)">(desligada)</span></h3>
+    <p class="aihelp" style="margin:0 0 14px">Só o administrador mexe aqui. A IA orquestra a esteira (decide como cortar cada PDF e confere uma amostra). A conexão passa pelo seu <b>proxy no Render</b> — a chave da Anthropic fica escondida no servidor.</p>
+    <label class="fld"><input type="checkbox" id="aiEnabled"> Usar IA</label>
+    <label class="fld"><input type="checkbox" id="aiOrch"> 🧠 IA orquestra a esteira (decide o corte 1× por PDF + confere amostra)</label>
+    <label class="fld"><input type="checkbox" id="aiSample"> 💸 Conferir só uma AMOSTRA por formato (mais barato) — a IA aprende o padrão no 1º trabalho e confere poucos, em vez de cada caso</label>
+    <label class="fld"><input type="checkbox" id="aiSameFmt"> 📎 Todos os PDFs têm a MESMA formatação (sonda só o 1º e reusa nos demais)</label>
+    <div class="btn-bar" style="margin:4px 0">
+      <button class="btn ghost" id="aiPresetRender" type="button">Preencher dados do meu Render</button>
+    </div>
+    <div class="row">
+      <div style="flex:2"><label class="fld">Endpoint (URL do Render + /v1)</label><input type="text" id="aiBase" placeholder="https://articlelens-proxy.onrender.com/v1"></div>
+      <div style="flex:1"><label class="fld">Modelo</label><input type="text" id="aiModel" placeholder="claude-opus-4-8"></div>
+    </div>
+    <label class="fld">Token de acesso (ACCESS_TOKEN do Render)</label>
+    <input type="password" id="aiKey" placeholder="seu ACCESS_TOKEN (não é a chave sk-ant)">
+    <div class="btn-bar">
+      <button class="btn primary" id="aiSave">Salvar</button>
+      <button class="btn ghost" id="aiTest">Testar conexão</button>
+      <span class="aihelp" id="aiTestMsg" style="align-self:center"></span>
+    </div>
+    <p class="aihelp">🔒 O token fica só no seu navegador. A chave da Anthropic nunca aparece aqui — está só no Render.</p>
   </section>
 
   <!-- Aba Custos (admin) -->
@@ -359,41 +385,12 @@
     </div>
   </section>
 
-  <!-- ⚙️ Configurações & novidades (no rodapé) -->
-  <h3 style="margin:34px 0 10px;font-family:'Syne',sans-serif;color:var(--muted);font-size:15px">⚙️ Configurações & novidades</h3>
   <!-- Novidades / evolução -->
-  <details class="aibox" id="changelogBox">
+  <details class="aibox" id="changelogBox" style="margin-top:30px">
     <summary>📋 Novidades & versões <span class="aistate" id="verState"></span></summary>
     <div class="aibody"><div id="changelogList" style="font-size:13px;line-height:1.6"></div></div>
   </details>
 
-  <!-- IA (Render) — opcional, recolhida -->
-  <details class="aibox" id="aiBox">
-    <summary>🧠 IA (Claude via seu Render) <span class="aistate" id="aiState">(desligada)</span></summary>
-    <div class="aibody">
-      <p class="aihelp">A IA orquestra a esteira: decide como cortar cada PDF e confere uma amostra do que foi coletado.
-        A conexão passa pelo seu <b>proxy no Render</b> — a chave da Anthropic fica escondida no servidor.</p>
-      <label class="fld"><input type="checkbox" id="aiEnabled"> Usar IA</label>
-      <label class="fld"><input type="checkbox" id="aiOrch"> 🧠 IA orquestra a esteira (decide o corte 1× por PDF + confere amostra)</label>
-      <label class="fld"><input type="checkbox" id="aiSample"> 💸 Conferir só uma AMOSTRA por formato (mais barato) — a IA aprende o padrão no 1º trabalho e confere poucos, em vez de cada caso</label>
-      <label class="fld"><input type="checkbox" id="aiSameFmt"> 📎 Todos os PDFs têm a MESMA formatação (sonda só o 1º e reusa nos demais)</label>
-      <div class="btn-bar" style="margin:4px 0">
-        <button class="btn ghost" id="aiPresetRender" type="button">Preencher dados do meu Render</button>
-      </div>
-      <div class="row">
-        <div style="flex:2"><label class="fld">Endpoint (URL do Render + /v1)</label><input type="text" id="aiBase" placeholder="https://articlelens-proxy.onrender.com/v1"></div>
-        <div style="flex:1"><label class="fld">Modelo</label><input type="text" id="aiModel" placeholder="claude-3-5-sonnet-20240620"></div>
-      </div>
-      <label class="fld">Token de acesso (ACCESS_TOKEN do Render)</label>
-      <input type="password" id="aiKey" placeholder="seu ACCESS_TOKEN (não é a chave sk-ant)">
-      <div class="btn-bar">
-        <button class="btn" id="aiSave">Salvar</button>
-        <button class="btn ghost" id="aiTest">Testar conexão</button>
-        <span class="aihelp" id="aiTestMsg" style="align-self:center"></span>
-      </div>
-      <p class="aihelp">🔒 O token fica só no seu navegador. A chave da Anthropic nunca aparece aqui — está só no Render.</p>
-    </div>
-  </details>
   <footer>
     <b>Seven Coleta de @</b> — processamento local no navegador • <code>PDF.js</code> + <code>SheetJS</code> • nenhum dado é enviado a servidores.
   </footer>
@@ -2337,14 +2334,12 @@ function hideLogin(){ document.getElementById("loginOverlay").style.display = "n
 /* Aplica permissões conforme o perfil */
 function applyRole(role){
   const isUser = role === "user";
-  const box = document.getElementById("aiBox");
-  if(box) box.style.display = isUser ? "none" : "";   // usuário não vê o painel da IA
-  // usuário não vê a aba/painel de Custos
+  // usuário não vê as abas/painéis de admin (IA, Custos)
   document.querySelectorAll('[data-admin="1"]').forEach(el => el.style.display = isUser ? "none" : "");
   if(isUser){
-    const ct = document.getElementById("panel-cost");
-    if(ct && ct.classList.contains("active")){      // se estava na aba custos, volta pro PDF
-      ct.classList.remove("active");
+    const ativo = document.querySelector(".panel.active");
+    if(ativo && ativo.hasAttribute("data-admin")){   // estava numa aba de admin → volta pro PDF
+      document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
       document.getElementById("panel-pdf").classList.add("active");
       document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active", t.dataset.tab==="pdf"));
     }
@@ -2399,9 +2394,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "11.1";
+const VERSION = "11.2";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["11.2","2026-06-04","A 🧠 IA virou uma ABA só de ADMIN (saiu do rodapé): só o administrador vê e mexe nas configurações da IA (ligar, modelo, token, proxy). Usuário comum nem enxerga a aba. As novidades/versões continuam no rodapé."],
   ["11.1","2026-06-04","Removidas as abas «HTML / URL» e «Manual» (não faziam sentido pro uso real). Agora a entrada é direta pelo PDF (arrastar/soltar). Sobra a aba 📄 PDF e, pra admin, 💰 Custos."],
   ["11.0","2026-06-04","Cara nova: o app agora se chama «Seven Coleta de @», tema BRANCO e LARANJA. Foco só em COLETAR — removido o recurso de baixar/agente (varrer sites). Layout reorganizado: o topo agora é o fluxo principal (escolher fonte → coletar → resultados); as configurações (🧠 IA) e 📋 novidades foram pro rodapé e começam recolhidas."],
   ["10.2","2026-06-04","Formato RESUMO/ARTIGO do Even3 (amostra que você mandou) agora coletado certo: (1) TÍTULO — ignora o rótulo «RESUMO EXPANDIDO - ÁREA» / «ARTIGO - …» e pega o título real; (2) AUTORES — lê o formato «Nome Completo (email@dominio)» que vem após o título (antes pegava frases do corpo como «Poder Judiciário»). Ex.: título «AUDIÊNCIAS DE CUSTÓDIA…» + autor «Eduarda Rodrigues Rosa → eduardarosa@tjro.jus.br». Sem regressão (periódico ARACÊ 8/8, anais ok). Só frontend."],
