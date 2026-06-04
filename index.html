@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ArticleLens — Extrator de Publicações Acadêmicas</title>
+<title>Seven Coleta de @ — Extrator de Publicações Acadêmicas</title>
 
 <!-- Tipografia (opcional; cai para system fonts se offline) -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -16,10 +16,10 @@
 
 <style>
   :root{
-    --bg:#0a0a0f; --bg-soft:#12121b; --bg-card:#16161f; --border:#262633;
-    --text:#e8e8f0; --muted:#9a9ab0; --accent:#00e5a0; --accent-dim:#0a8a63;
-    --danger:#ff5d6c; --warn:#ffc14d; --blue:#1A56A4;
-    --radius:14px; --shadow:0 8px 30px rgba(0,0,0,.45);
+    --bg:#fff8f2; --bg-soft:#fff1e6; --bg-card:#ffffff; --border:#f0d9c4;
+    --text:#26201b; --muted:#8a7d72; --accent:#ff7a1a; --accent-dim:#e96500;
+    --danger:#e23b4e; --warn:#e08a00; --blue:#1A56A4;
+    --radius:14px; --shadow:0 8px 26px rgba(220,120,40,.12);
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
@@ -28,8 +28,8 @@
     font-family:"DM Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
     min-height:100vh; line-height:1.5;
     background-image:
-      linear-gradient(rgba(255,255,255,.022) 1px,transparent 1px),
-      linear-gradient(90deg,rgba(255,255,255,.022) 1px,transparent 1px);
+      linear-gradient(rgba(0,0,0,.035) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(0,0,0,.035) 1px,transparent 1px);
     background-size:34px 34px;
   }
   .wrap{max-width:1100px;margin:0 auto;padding:28px 20px 80px}
@@ -53,8 +53,8 @@
   @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
 
   /* ---------- Drop zone ---------- */
-  .drop{border:2px dashed var(--border);border-radius:var(--radius);padding:40px 20px;text-align:center;cursor:pointer;transition:.2s;background:repeating-linear-gradient(45deg,transparent,transparent 12px,rgba(255,255,255,.012) 12px,rgba(255,255,255,.012) 24px)}
-  .drop:hover,.drop.over{border-color:var(--accent);background:rgba(0,229,160,.05)}
+  .drop{border:2px dashed var(--border);border-radius:var(--radius);padding:40px 20px;text-align:center;cursor:pointer;transition:.2s;background:repeating-linear-gradient(45deg,transparent,transparent 12px,rgba(0,0,0,.02) 12px,rgba(0,0,0,.02) 24px)}
+  .drop:hover,.drop.over{border-color:var(--accent);background:rgba(255,122,26,.05)}
   .drop .big{font-size:40px;margin-bottom:8px}
   .drop p{margin:6px 0;color:var(--muted)}
   .drop b{color:var(--text)}
@@ -70,9 +70,9 @@
   .fileitem .fname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .fileitem .fsize{font-size:12px;color:var(--muted);font-family:"DM Mono",monospace}
   .fileitem .fstatus{font-size:11px;padding:3px 9px;border-radius:999px;white-space:nowrap}
-  .st-aguardando{background:#23232f;color:var(--muted)}
+  .st-aguardando{background:#f1e7dd;color:var(--muted)}
   .st-processando{background:rgba(255,193,77,.15);color:var(--warn)}
-  .st-concluido{background:rgba(0,229,160,.13);color:var(--accent)}
+  .st-concluido{background:rgba(255,122,26,.13);color:var(--accent)}
   .st-erro{background:rgba(255,93,108,.15);color:var(--danger)}
   .xbtn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:2px 6px;border-radius:6px}
   .xbtn:hover{color:var(--danger);background:rgba(255,93,108,.1)}
@@ -91,7 +91,7 @@
   /* ---------- Botões ---------- */
   .btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border);background:var(--bg-soft);color:var(--text);padding:11px 18px;border-radius:10px;cursor:pointer;font-family:inherit;font-weight:600;font-size:14px;transition:.15s}
   .btn:hover{border-color:var(--muted)}
-  .btn.primary{background:var(--accent);color:#04130d;border-color:var(--accent)}
+  .btn.primary{background:var(--accent);color:#ffffff;border-color:var(--accent)}
   .btn.primary:hover{filter:brightness(1.08)}
   .btn.ghost{background:transparent}
   .btn:disabled{opacity:.45;cursor:not-allowed}
@@ -107,17 +107,17 @@
   .step{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);padding:6px 11px;border:1px solid var(--border);border-radius:999px;background:var(--bg-soft);transition:.2s}
   .step .dot{display:inline-flex;width:20px;height:20px;border-radius:50%;background:var(--border);color:var(--text);align-items:center;justify-content:center;font-size:12px;font-weight:700}
   .step.active{color:var(--text);border-color:var(--accent)}
-  .step.active .dot{background:var(--accent);color:#04130d}
+  .step.active .dot{background:var(--accent);color:#ffffff}
   .step.done{color:var(--accent);border-color:var(--accent-dim)}
-  .step.done .dot{background:var(--accent-dim);color:#04130d}
+  .step.done .dot{background:var(--accent-dim);color:#ffffff}
   .seta{color:var(--border);font-size:14px}
   .sepbox{background:var(--bg-soft);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
   .sepbox .seplbl{color:var(--text);font-weight:500;width:100%}
   .sepbox .opt{color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:5px}
   .sepbox .opt input{accent-color:var(--accent)}
   td[contenteditable]{outline:none}
-  td[contenteditable]:focus{background:rgba(0,229,160,.08);box-shadow:inset 0 0 0 1px var(--accent)}
-  .badge-corr{background:rgba(0,229,160,.13);color:var(--accent);font-size:10px;padding:1px 6px;border-radius:999px;margin-left:6px}
+  td[contenteditable]:focus{background:rgba(255,122,26,.08);box-shadow:inset 0 0 0 1px var(--accent)}
+  .badge-corr{background:rgba(255,122,26,.13);color:var(--accent);font-size:10px;padding:1px 6px;border-radius:999px;margin-left:6px}
   .badge-inv{background:rgba(255,93,108,.15);color:var(--danger);font-size:10px;padding:1px 6px;border-radius:999px;margin-left:6px}
 
   /* ---- IA opcional ---- */
@@ -145,7 +145,7 @@
   th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--border);vertical-align:top}
   th{background:var(--bg-soft);color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px;position:sticky;top:0}
   tbody tr{transition:background .12s}
-  tbody tr:hover{background:rgba(255,255,255,.025)}
+  tbody tr:hover{background:rgba(255,122,26,.06)}
   td.idx{color:var(--muted);font-family:"DM Mono",monospace;width:48px}
   td.email a{color:var(--accent);text-decoration:none}
   .nd{background:rgba(255,93,108,.15);color:var(--danger);font-size:11px;padding:2px 8px;border-radius:999px;font-family:"DM Mono",monospace}
@@ -174,7 +174,7 @@
 <!-- TELA DE LOGIN (validada no proxy Render) -->
 <div id="loginOverlay" style="position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px">
   <div style="width:min(420px,94vw);background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:30px;box-shadow:0 12px 50px rgba(0,0,0,.5)">
-    <div style="font-size:26px;font-weight:800;letter-spacing:-.5px">Article<span style="color:var(--accent)">Lens</span></div>
+    <div style="font-size:26px;font-weight:800;letter-spacing:-.5px">Seven <span style="color:var(--accent)">Coleta de @</span></div>
     <p style="color:var(--muted);margin:6px 0 22px;font-size:14px">🔒 Acesso restrito. Entre com sua senha.</p>
     <label class="fld" style="display:block;margin-bottom:5px;font-size:13px;color:var(--muted)">Endpoint (URL do Render + /v1)</label>
     <input type="text" id="loginBase" placeholder="https://articlelens-proxy.onrender.com/v1" style="width:100%;box-sizing:border-box;margin-bottom:14px">
@@ -188,52 +188,17 @@
 <div class="wrap">
 
   <header class="top">
-    <div class="logo">Article<span class="lens">Lens</span></div>
-    <span class="badge">Extrator de Publicações</span>
+    <div class="logo">Seven <span class="lens">Coleta de @</span></div>
     <span class="badge" id="verBadge" title="Clique para ver as novidades" style="cursor:pointer;border-color:var(--accent);color:var(--accent)">v—</span>
-    <div class="tagline">Coleta título, autores e e-mails de artigos acadêmicos (PDF / HTML).</div>
     <span class="badge" id="roleBadge" style="margin-left:auto">🔑 Admin</span>
     <button class="btn ghost" id="logoutBtn" type="button" style="flex:0 0 auto">Sair</button>
+    <div class="tagline">Coleta <b>título</b>, <b>nome completo</b> e <b>e-mail</b> dos trabalhos em PDFs acadêmicos.</div>
   </header>
 
-  <!-- Novidades / evolução -->
-  <details class="aibox" id="changelogBox">
-    <summary>📋 Novidades & versões <span class="aistate" id="verState"></span></summary>
-    <div class="aibody"><div id="changelogList" style="font-size:13px;line-height:1.6"></div></div>
-  </details>
-
-  <!-- IA (Render) — no topo -->
-  <details class="aibox" id="aiBox" open>
-    <summary>🧠 IA (Claude via seu Render) <span class="aistate" id="aiState">(desligada)</span></summary>
-    <div class="aibody">
-      <p class="aihelp">A IA orquestra a esteira: decide como cortar cada PDF e confere uma amostra do que foi coletado.
-        A conexão passa pelo seu <b>proxy no Render</b> — a chave da Anthropic fica escondida no servidor.</p>
-      <label class="fld"><input type="checkbox" id="aiEnabled"> Usar IA</label>
-      <label class="fld"><input type="checkbox" id="aiOrch"> 🧠 IA orquestra a esteira (decide o corte 1× por PDF + confere amostra)</label>
-      <label class="fld"><input type="checkbox" id="aiSample"> 💸 Conferir só uma AMOSTRA por formato (mais barato) — a IA aprende o padrão no 1º trabalho e confere poucos, em vez de cada caso</label>
-      <label class="fld"><input type="checkbox" id="aiSameFmt"> 📎 Todos os PDFs têm a MESMA formatação (sonda só o 1º e reusa nos demais)</label>
-      <div class="btn-bar" style="margin:4px 0">
-        <button class="btn ghost" id="aiPresetRender" type="button">Preencher dados do meu Render</button>
-      </div>
-      <div class="row">
-        <div style="flex:2"><label class="fld">Endpoint (URL do Render + /v1)</label><input type="text" id="aiBase" placeholder="https://articlelens-proxy.onrender.com/v1"></div>
-        <div style="flex:1"><label class="fld">Modelo</label><input type="text" id="aiModel" placeholder="claude-3-5-sonnet-20240620"></div>
-      </div>
-      <label class="fld">Token de acesso (ACCESS_TOKEN do Render)</label>
-      <input type="password" id="aiKey" placeholder="seu ACCESS_TOKEN (não é a chave sk-ant)">
-      <div class="btn-bar">
-        <button class="btn" id="aiSave">Salvar</button>
-        <button class="btn ghost" id="aiTest">Testar conexão</button>
-        <span class="aihelp" id="aiTestMsg" style="align-self:center"></span>
-      </div>
-      <p class="aihelp">🔒 O token fica só no seu navegador. A chave da Anthropic nunca aparece aqui — está só no Render.</p>
-    </div>
-  </details>
 
   <!-- Abas -->
   <div class="tabs" role="tablist">
     <div class="tab active" data-tab="pdf"  role="tab"><span class="ico">📄</span>PDF</div>
-    <div class="tab"        data-tab="baixar" role="tab"><span class="ico">📥</span>Baixar PDFs</div>
     <div class="tab"        data-tab="html" role="tab"><span class="ico">🌐</span>HTML / URL</div>
     <div class="tab"        data-tab="manual" role="tab"><span class="ico">✍️</span>Manual</div>
     <div class="tab"        data-tab="cost" data-admin="1" role="tab"><span class="ico">💰</span>Custos</div>
@@ -257,25 +222,6 @@
       <button class="btn ghost" id="addMore">+ Adicionar mais</button>
       <button class="btn ghost" id="clearFiles">Remover todos</button>
     </div>
-  </section>
-
-  <!-- Aba Baixar PDFs -->
-  <section class="panel" id="panel-baixar">
-    <label class="fld">🔎 Buscar automaticamente de um anais (Even3) — precisa do <b>AGENTE LOCAL</b> aberto</label>
-    <div class="row">
-      <input type="url" id="dlAnaisUrl" placeholder="https://www.even3.com.br/anais/SEU-ANAIS/">
-      <button class="btn" id="dlCrawl" style="flex:0 0 auto">🔎 Buscar do anais</button>
-    </div>
-    <div class="hint">Abra o <b>Iniciar_Agente.bat</b> (pasta Downloads) e deixe a janela aberta. O agente varre o anais na sua máquina e traz os links abaixo — daí é só <b>Baixar e coletar</b>. <span id="dlAgenteStatus"></span></div>
-
-    <label class="fld" style="margin-top:10px">Ou cole os links de PDF — um por linha</label>
-    <textarea id="dlLinks" placeholder="https://.../trabalho1.pdf
-https://.../trabalho2.pdf"></textarea>
-    <div class="hint">Com o agente aberto, o download é 100% local (sem Render). Sem o agente, ele tenta pelo <b>proxy do Render</b> (configure na aba 🧠 IA). Os PDFs vão pra fila da aba 📄 PDF e são coletados.</div>
-    <div class="btn-bar">
-      <button class="btn primary" id="dlStart">📥 Baixar e coletar</button>
-    </div>
-    <div id="dlStatus" style="margin-top:8px;font-size:13px"></div>
   </section>
 
   <!-- Aba HTML / URL -->
@@ -443,8 +389,43 @@ https://.../trabalho2.pdf"></textarea>
     </div>
   </section>
 
+  <!-- ⚙️ Configurações & novidades (no rodapé) -->
+  <h3 style="margin:34px 0 10px;font-family:'Syne',sans-serif;color:var(--muted);font-size:15px">⚙️ Configurações & novidades</h3>
+  <!-- Novidades / evolução -->
+  <details class="aibox" id="changelogBox">
+    <summary>📋 Novidades & versões <span class="aistate" id="verState"></span></summary>
+    <div class="aibody"><div id="changelogList" style="font-size:13px;line-height:1.6"></div></div>
+  </details>
+
+  <!-- IA (Render) — opcional, recolhida -->
+  <details class="aibox" id="aiBox">
+    <summary>🧠 IA (Claude via seu Render) <span class="aistate" id="aiState">(desligada)</span></summary>
+    <div class="aibody">
+      <p class="aihelp">A IA orquestra a esteira: decide como cortar cada PDF e confere uma amostra do que foi coletado.
+        A conexão passa pelo seu <b>proxy no Render</b> — a chave da Anthropic fica escondida no servidor.</p>
+      <label class="fld"><input type="checkbox" id="aiEnabled"> Usar IA</label>
+      <label class="fld"><input type="checkbox" id="aiOrch"> 🧠 IA orquestra a esteira (decide o corte 1× por PDF + confere amostra)</label>
+      <label class="fld"><input type="checkbox" id="aiSample"> 💸 Conferir só uma AMOSTRA por formato (mais barato) — a IA aprende o padrão no 1º trabalho e confere poucos, em vez de cada caso</label>
+      <label class="fld"><input type="checkbox" id="aiSameFmt"> 📎 Todos os PDFs têm a MESMA formatação (sonda só o 1º e reusa nos demais)</label>
+      <div class="btn-bar" style="margin:4px 0">
+        <button class="btn ghost" id="aiPresetRender" type="button">Preencher dados do meu Render</button>
+      </div>
+      <div class="row">
+        <div style="flex:2"><label class="fld">Endpoint (URL do Render + /v1)</label><input type="text" id="aiBase" placeholder="https://articlelens-proxy.onrender.com/v1"></div>
+        <div style="flex:1"><label class="fld">Modelo</label><input type="text" id="aiModel" placeholder="claude-3-5-sonnet-20240620"></div>
+      </div>
+      <label class="fld">Token de acesso (ACCESS_TOKEN do Render)</label>
+      <input type="password" id="aiKey" placeholder="seu ACCESS_TOKEN (não é a chave sk-ant)">
+      <div class="btn-bar">
+        <button class="btn" id="aiSave">Salvar</button>
+        <button class="btn ghost" id="aiTest">Testar conexão</button>
+        <span class="aihelp" id="aiTestMsg" style="align-self:center"></span>
+      </div>
+      <p class="aihelp">🔒 O token fica só no seu navegador. A chave da Anthropic nunca aparece aqui — está só no Render.</p>
+    </div>
+  </details>
   <footer>
-    ArticleLens v1.0 — processamento local no navegador • <code>PDF.js</code> + <code>SheetJS</code> • nenhum dado é enviado a servidores.
+    <b>Seven Coleta de @</b> — processamento local no navegador • <code>PDF.js</code> + <code>SheetJS</code> • nenhum dado é enviado a servidores.
   </footer>
 </div>
 
@@ -1936,87 +1917,6 @@ document.querySelectorAll(".tab").forEach(tab=>{
   };
 });
 
-/* ABA 📥 BAIXAR PDFs — agente local varre o anais + baixa (sem CORS); Render é a reserva. */
-const AGENTE = "http://localhost:8765";
-function _proxyOrigin(){
-  const b=(AI.baseURL||"").trim().replace(/\/+$/,"");      // ex.: https://servico.onrender.com/v1
-  return b ? b.replace(/\/v1$/i,"") : "";                  // → https://servico.onrender.com
-}
-async function _agenteVivo(){
-  try{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),1500);
-    const r=await fetch(AGENTE+"/ping",{signal:c.signal}); clearTimeout(t); return r.ok;
-  }catch(_){ return false; }
-}
-// mostra na tela se o agente está aberto
-(async function _checaAgente(){ const el=document.getElementById("dlAgenteStatus"); if(!el) return;
-  const vivo=await _agenteVivo();
-  el.innerHTML = vivo ? "<b style='color:var(--accent)'>● agente aberto</b>" : "<b style='color:var(--muted)'>○ agente fechado</b>";
-})();
-document.getElementById("dlCrawl").onclick = async ()=>{
-  const url=(document.getElementById("dlAnaisUrl").value||"").trim();
-  const st=document.getElementById("dlStatus"), btn=document.getElementById("dlCrawl");
-  if(!/^https?:\/\//i.test(url)){ toast("Cole a URL do anais (Even3).","warn"); return; }
-  if(!(await _agenteVivo())){ toast("Agente fechado. Abra o Iniciar_Agente.bat (pasta Downloads).","warn");
-    document.getElementById("dlAgenteStatus").innerHTML="<b style='color:var(--danger)'>○ agente fechado — abra o Iniciar_Agente.bat</b>"; return; }
-  btn.disabled=true; btn.textContent="🔎 Varrendo…";
-  st.innerHTML="🔎 O agente está varrendo o anais na sua máquina… (pode levar alguns minutos; veja a janela do agente)";
-  try{
-    const r=await fetch(AGENTE+"/crawl?url="+encodeURIComponent(url));
-    const j=await r.json();
-    if(j.error) throw new Error(j.error);
-    const links=j.links||[];
-    document.getElementById("dlLinks").value = links.join("\n");
-    st.innerHTML="<b>"+links.length+"</b> links encontrados. Clique em <b>📥 Baixar e coletar</b>.";
-    if(links.length) toast(links.length+" links trazidos do anais.");
-    else toast("Nenhum link encontrado — o layout pode ser diferente; me avise.","warn");
-  }catch(e){ st.innerHTML="<b style='color:var(--danger)'>Falha ao varrer:</b> "+escapeHtml(e.message); toast("Falha: "+e.message,"warn"); }
-  finally{ btn.disabled=false; btn.textContent="🔎 Buscar do anais"; }
-};
-document.getElementById("dlStart").onclick = async ()=>{
-  const st=document.getElementById("dlStatus"), btn=document.getElementById("dlStart");
-  const links=[...new Set((document.getElementById("dlLinks").value||"")
-      .split(/[\s,]+/).map(s=>s.trim()).filter(u=>/^https?:\/\//i.test(u)))];
-  if(!links.length){ toast("Cole pelo menos um link de PDF (um por linha).","warn"); return; }
-  // Prefere o AGENTE LOCAL (sem Render); se fechado, usa o proxy do Render.
-  const usarAgente = await _agenteVivo();
-  const origin = _proxyOrigin();
-  if(!usarAgente && !origin){ toast("Abra o agente (Iniciar_Agente.bat) OU configure o proxy na aba 🧠 IA.","warn"); return; }
-  const baixarVia = u => usarAgente
-    ? fetch(AGENTE+"/fetch?url="+encodeURIComponent(u))
-    : fetch(origin+"/fetch?url="+encodeURIComponent(u), { headers: AI.apiKey?{Authorization:"Bearer "+AI.apiKey}:{} });
-  btn.disabled=true; btn.textContent="📥 Baixando…";
-  let ok=0, fail=0, dup=0; const novos=[]; const erros=[]; const vistos=new Set();
-  const _sig = async buf => { try{ const h=await crypto.subtle.digest("SHA-1",buf);
-      return buf.byteLength+"_"+[...new Uint8Array(h)].slice(0,8).map(b=>b.toString(16).padStart(2,"0")).join(""); }
-    catch(_){ return buf.byteLength+""; } };   // assinatura de conteúdo (tamanho + hash)
-  for(let i=0;i<links.length;i++){
-    const u=links[i];
-    st.innerHTML="Baixando <b>"+(i+1)+"</b> de "+links.length+"… "+(usarAgente?"(agente local)":"(Render)")
-      +"<div style='height:8px;background:var(--border);border-radius:6px;margin-top:6px;overflow:hidden'>"
-      +"<div style='height:100%;width:"+Math.round(i/links.length*100)+"%;background:var(--accent)'></div></div>";
-    try{
-      const r=await baixarVia(u);
-      if(!r.ok){ fail++; let msg="HTTP "+r.status; try{ const j=await r.json(); msg=(j.error&&j.error.message)||j.error||msg; }catch(_){ } erros.push(u.slice(-40)+" — "+msg); continue; }
-      const buf=await r.arrayBuffer();
-      const sig=await _sig(buf);
-      if(vistos.has(sig)){ dup++; continue; }            // MESMO PDF (vindo por outro link) → ignora
-      vistos.add(sig);
-      let base=((u.split("/").pop()||"trabalho").split("?")[0])||"trabalho"; if(!/\.pdf$/i.test(base)) base+=".pdf";
-      let nm=base, k=2; while(novos.some(f=>f.name===nm)||fileQueue.find(x=>x.file.name===nm)){ nm=base.replace(/\.pdf$/i,"")+"_"+(k++)+".pdf"; }
-      novos.push(new File([buf], nm, {type:"application/pdf"})); ok++;
-    }catch(e){ fail++; erros.push(u.slice(-40)+" — "+(e.name==="AbortError"?"tempo esgotado":e.message)); }
-  }
-  if(novos.length) addFilesToQueue(novos);
-  st.innerHTML="<b>"+ok+"</b> baixados"+(dup?" · "+dup+" duplicados ignorados":"")+" · "+(fail?("<b style='color:var(--danger)'>"+fail+" falharam</b>"):"0 falhas")+"."
-    +(erros.length?"<div style='color:var(--muted);margin-top:4px'>Falhas: "+erros.slice(0,5).map(escapeHtml).join("; ")+(erros.length>5?" …":"")+"</div>":"");
-  btn.disabled=false; btn.textContent="📥 Baixar e coletar";
-  if(ok){
-    document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.tab==="pdf"));
-    document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
-    document.getElementById("panel-pdf").classList.add("active");
-    if(fileQueue.some(f=>f.status==="aguardando")) processBatch();
-  }
-};
 
 /* ===== Painel de custos (admin) ===== */
 async function loadUsage(){
@@ -2599,9 +2499,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "10.2";
+const VERSION = "11.0";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["11.0","2026-06-04","Cara nova: o app agora se chama «Seven Coleta de @», tema BRANCO e LARANJA. Foco só em COLETAR — removido o recurso de baixar/agente (varrer sites). Layout reorganizado: o topo agora é o fluxo principal (escolher fonte → coletar → resultados); as configurações (🧠 IA) e 📋 novidades foram pro rodapé e começam recolhidas."],
   ["10.2","2026-06-04","Formato RESUMO/ARTIGO do Even3 (amostra que você mandou) agora coletado certo: (1) TÍTULO — ignora o rótulo «RESUMO EXPANDIDO - ÁREA» / «ARTIGO - …» e pega o título real; (2) AUTORES — lê o formato «Nome Completo (email@dominio)» que vem após o título (antes pegava frases do corpo como «Poder Judiciário»). Ex.: título «AUDIÊNCIAS DE CUSTÓDIA…» + autor «Eduarda Rodrigues Rosa → eduardarosa@tjro.jus.br». Sem regressão (periódico ARACÊ 8/8, anais ok). Só frontend."],
   ["10.1","2026-06-04","Conserto do teste do agente: o Even3 expõe o MESMO PDF por vários links (download/rede/href), então vinham duplicados (33 links p/ ~14 trabalhos) + erros de links repetidos. Agora o download faz DEDUP POR CONTEÚDO (PDFs idênticos viram 1 só) e mostra «X duplicados ignorados». Falta ainda limpar o título dos resumos do Even3 («RESUMO EXPANDIDO - ÁREA - título») — preciso de uma amostra do PDF."],
   ["10.0","2026-06-04","AGENTE LOCAL: agora dá pra fazer TUDO pela tela. Abra o Iniciar_Agente.bat (pasta Downloads) e, na aba 📥 Baixar PDFs, cole a URL do anais (Even3) e clique «Buscar do anais» — o agente, NA SUA MÁQUINA, varre o evento e traz os links; daí «Baixar e coletar». Com o agente aberto o download é 100% local (de graça, SEM Render). A aba mostra «● agente aberto/fechado». Sem o agente, ainda dá pra colar links e baixar pelo Render. Esta versão é só frontend — NÃO precisa redeploy do Render."],
