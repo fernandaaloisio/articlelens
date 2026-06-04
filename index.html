@@ -1070,10 +1070,13 @@ function cortarPorSumario(text){
     // E-MAILS NUMERADOS no FIM do resumo ("1 fulano@x", "2 beltrano@y") — completa autores sem e-mail
     // pelo número (autor i ↔ "i+1 e-mail"), usando o bloco INTEIRO (não só o cabeçalho).
     if(authors.length && authors.some(a=>!a.email)){
-      // o número da nota liga ao autor de mesmo superscrito; permite TEXTO entre o número e o e-mail
-      // (ex.: "1 Graduanda do curso de História… schmitt.gabriela@hotmail.com").
-      const numEmail={}; let mm; const reN=/(\d{1,2})\D{0,200}?([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/gi;
-      while((mm=reN.exec(block))){ if(!(mm[1] in numEmail)) numEmail[+mm[1]]=mm[2].toLowerCase().replace(/[.,;)]+$/,""); }
+      // O número da nota liga ao autor de mesmo superscrito. Lê o rodapé LINHA A LINHA (número no
+      // INÍCIO da linha), p/ um dígito DENTRO do e-mail (ex.: "andreiah2o@…") não virar nº de nota.
+      const numEmail={};
+      block.split(/\n/).forEach(line=>{
+        const m=line.trim().match(/^(\d{1,2})\b[^@]*?([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/i);
+        if(m && !(m[1] in numEmail)) numEmail[+m[1]]=m[2].toLowerCase().replace(/[.,;)]+$/,"");
+      });
       const usados=new Set(authors.map(a=>(a.email||"").toLowerCase()).filter(Boolean));
       authors.forEach((a,k)=>{ if(!a.email && numEmail[k+1] && !usados.has(numEmail[k+1])){ a.email=numEmail[k+1]; usados.add(numEmail[k+1]); a._guess=true; } });
       if(authors.some(a=>!a.email)){ const livres=[...new Set((block.match(ERX2)||[]).map(e=>e.toLowerCase()))].filter(e=>!usados.has(e));
@@ -2600,9 +2603,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "12.9";
+const VERSION = "13.0";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["13.0","2026-06-04","Sua regra do número↔rodapé (base: MENINAS NA CIÊNCIA): quando o autor tem um número (¹²³…), os dados dele estão na nota de rodapé com o MESMO número, na mesma página. Agora o app lê o rodapé LINHA A LINHA (número no início) e liga cada autor à sua nota — corrigindo o caso em que um dígito DENTRO do e‑mail atrapalhava (ex.: «andreiah2o@…» fazia sair «o@univates.br»). Resultado MENINAS: os 9 autores com os 9 e‑mails certos. Sem regressão."],
   ["12.9","2026-06-04","Você tinha razão de novo: o pdf_366 TEM sumário (pág 7), num 3º formato — título em CAIXA ALTA terminando com o NÚMERO DA PÁGINA (sem pontilhado, sem numeração). Agora o app lê esse formato também. E, se o anais não tiver sumário no texto, usa os MARCADORES (bookmarks) do PDF como índice. Resultado pdf_366: de 1 registro lixo → 23 trabalhos (7 com e‑mail). Sem regressão (2023 513, 2019 371, 336 18, mostra 78)."],
   ["12.8","2026-06-04","Você tinha razão: o pdf_345 TEM e-mail. Esse anais usa um layout incomum — AUTORES ACIMA do título e E-MAILS no FIM do resumo (notas «1 fulano@x», «2 beltrano@y»). Agora o app: (1) procura autores também ACIMA do título quando não acha abaixo; (2) pega os e-mails numerados do FIM do resumo e liga ao autor pelo número. Recuperou e-mails reais (ex.: Alessandra Magalhães → aemagalhaes@hotmail.com). Sem regressão (2023 513, 2019 371, 336 18). Obs.: nesse anais só ~3 resumos trazem e-mail — os outros realmente não têm."],
   ["12.7","2026-06-04","Teste pdf_345: (1) MODELO — sua conta não tem os Haiku que eu tentava (HTTP 404); agora o app cai sempre no seu modelo configurado (opus-4-8, que funciona) sem travar nem repetir erro. (2) NOMES-LIXO — rótulos de evento como «X SISA», «XVI SIS», «IX SEPS» (numeral romano + sigla) não viram mais «autor». Obs.: o pdf_345 é «Resumos Simples» e NÃO traz e-mail de autor por trabalho (só ~7 e-mails no PDF inteiro, da editora) — por isso dá ~0 e-mails: não é falha, é o anais que não tem o que coletar."],
