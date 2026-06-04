@@ -749,6 +749,40 @@ function pairWork(names, emails){
   for(const [s,i,e] of cand){ if(!authors[i].email && !used.has(e)){ authors[i].email=e; used.add(e); } }
   return authors;
 }
+/* É titulação/cargo (não é nome próprio)? */
+const _ehGrauJS = n=>/^(ic\b|bic\b|pibi[ct]|bolsist|graduand|graduad[oa]|p[óo]s[\- ]?grad|mestrand|doutorand|orientador|coorientador|docente|discente|estagi|resid|especializ|zootecnist)/i.test((n||"").trim());
+/* Lê as NOTAS DE RODAPÉ numeradas ("1. Nome Completo, …, e-mail: x@y; 2. …") e devolve, por número,
+   {name, email}. O nome só conta se for um nome próprio válido (senão fica ""). Usado para recuperar
+   e-mails de autores que a linha de autores fundiu/truncou. */
+function parseRodapesNum(block){
+  const mIni=block.match(/(^|[^0-9])1\.\s+(?=[A-ZÀ-Ÿ(]|Bolsist|Graduand|PIVIC|PIBIC|Doutor|Mestr|Discente|Orientad|Docente)/);
+  if(!mIni) return [];
+  let tail=block.slice(mIni.index).split(/\bRESUMO\b|\bABSTRACT\b|\bPALAVRAS[\s\-]*CHAVE\b/i)[0];
+  const idx=[]; const re=/(?:^|;|\s)(\d{1,2})\.\s+/g; let m;
+  while((m=re.exec(tail))){ idx.push({n:+m[1], pos:m.index+m[0].length}); }
+  const ent=[];
+  for(let i=0;i<idx.length;i++){ if(idx[i].n!==(ent.length+1)) continue;     // só sequência 1,2,3…
+    const segEnd=i+1<idx.length?idx[i+1].pos-(String(idx[i+1].n).length+2)-1:tail.length;
+    const seg=tail.slice(idx[i].pos, segEnd>idx[i].pos?segEnd:tail.length).trim();
+    const em=(seg.match(EMAIL_RE)||[""])[0].toLowerCase().replace(/[.,;)]+$/,"");
+    const nm=cleanAuthor(seg.split(/,|\(|\be-?mail\b|\d|\/|:/i)[0].trim());
+    ent.push({name:(validPname(nm)&&!_ehGrauJS(nm))?nm:"", email:em}); }
+  return ent;
+}
+/* ACRESCENTA (sem mexer nos existentes) autores do rodapé que tenham NOME válido E e-mail ainda não
+   usado neste trabalho. Recupera e-mails perdidos quando a linha de autores fundiu nomes. */
+function addFootAuthors(authors, block){
+  const foot=parseRodapesNum(block);
+  if(!foot.length) return authors;
+  const nn=s=>_norm(s).replace(/[^a-z ]/g,"").trim();
+  const mailU=new Set(authors.map(a=>(a.email||"").toLowerCase()).filter(Boolean));
+  const nomeU=new Set(authors.map(a=>nn(a.name)).filter(Boolean));
+  const add=[];
+  for(const f of foot){ if(!(f.name && f.email)) continue;
+    if(mailU.has(f.email) || nomeU.has(nn(f.name))) continue;
+    mailU.add(f.email); nomeU.add(nn(f.name)); add.push({name:f.name, email:f.email, _guess:true}); }
+  return add.length ? authors.concat(add) : authors;
+}
 function parseWork(lines){
   const block = lines.join(" ").replace(/\s+/g," ").trim();
   if(lines.some(l=>/\.{4,}/.test(l))) return null;   // pontilhado = janela do SUMÁRIO (índice), não é trabalho
@@ -775,14 +809,29 @@ function parseWork(lines){
   // confundida com a linha de autores → trabalho quebrava e o e-mail se perdia.
   // Estrutura típica: [título] [AUTORES] [AFILIAÇÃO] [e-mail] [RESUMO].
   const AFFIL=AFFIL_RE;
+  // Os AUTORES ficam ANTES das notas de rodapé numeradas ("1. Fulano, … e-mail:"). Procura a 1ª nota
+  // (linha "N." com @/afiliação/grau) e detecta os autores SÓ acima dela — senão o texto do rodapé
+  // (que tem "Universidade", ";", "Energias Renováveis"…) é confundido com a linha de autores.
+  let footStart = -1;
+  for(let i=1;i<lines.length;i++){ const l=lines[i].trim();
+    if(/^\d{1,2}\.\s+\S/.test(l) && (/@/.test(l)||AFFIL.test(l)||/bolsist|graduand|docente|discente|mestrand|doutorand|orientad|p[óo]s[\- ]?grad|pibic|pivic/i.test(l))){ footStart=i; break; } }
+  const aLines = footStart>0 ? lines.slice(0, footStart) : lines;   // janela só dos autores (sem rodapés)
   let ai=-1;
   // 1) Âncora preferida = AFILIAÇÃO → autores são a linha logo ACIMA (pega vírgula/;/Prof/qualquer formato)
-  for(let i=lines.length-1;i>=1;i--){ if(AFFIL.test(lines[i]) && splitAuthorsSeg(lines[i-1]).length){ ai=i-1; break; } }
+  for(let i=aLines.length-1;i>=1;i--){ if(AFFIL.test(aLines[i]) && splitAuthorsSeg(aLines[i-1]).length){ ai=i-1; break; } }
   // 2) senão, linha com sinal forte de autor (;/Prof)
-  if(ai<0) for(let i=lines.length-1;i>=0;i--){ if(/;|\bprof\b/i.test(lines[i])){ ai=i; break; } }
+  if(ai<0) for(let i=aLines.length-1;i>=0;i--){ if(/;|\bprof\b/i.test(aLines[i])){ ai=i; break; } }
   // 3) senão, a própria afiliação (autor na mesma linha) ou e-mail (último recurso)
-  if(ai<0) for(let i=lines.length-1;i>=0;i--){ if(AFFIL.test(lines[i])||/@/.test(lines[i])){ ai=i; break; } }
-  if(ai<0) return null;
+  if(ai<0) for(let i=aLines.length-1;i>=0;i--){ if(AFFIL.test(aLines[i])||/@/.test(aLines[i])){ ai=i; break; } }
+  // Não achou linha de autores (ex.: cada autor numa linha isolada, sinal só no rodapé) →
+  // constrói os autores A PARTIR DOS RODAPÉS numerados ("N. Nome…, e-mail:").
+  if(ai<0){
+    const fa = addFootAuthors([], block);
+    if(fa.length){ let t=titleNear(aLines, footStart>0?footStart:aLines.length, "");
+      if(!(t&&t.length>10)) t=(aLines[0]||"").trim();
+      return {title:t, authors:fa, all_emails:emails, _raw:block}; }
+    return null;
+  }
   // a lista de autores costuma QUEBRAR em várias linhas (alunos numa linha, orientador na
   // outra). Estende o bloco para CIMA enquanto a linha parecer de autores (;/Prof), para não
   // confundir a linha dos alunos com o título.
@@ -795,33 +844,38 @@ function parseWork(lines){
   const soNumeros = s => /^[\d\s.,]+$/.test((s||"").trim());   // linha só de números (superscritos ¹²³ / "4 5")
   let topA = ai;
   while(topA-1>=0){
-    const prev = lines[topA-1];
+    const prev = aLines[topA-1];
     if(soNumeros(prev)){ topA--; continue; }        // pula superscritos entre as linhas de autores
     if(ehAutorLine(prev)){ topA--; continue; }
     break;
   }
   let names=[];
-  for(let i=topA;i<=ai;i++) if(!soNumeros(lines[i])) names = names.concat(splitAuthorsSeg(lines[i]));
-  const title=titleNear(lines, topA, "");          // título fica ACIMA do bloco de autores
+  for(let i=topA;i<=ai;i++) if(!soNumeros(aLines[i])) names = names.concat(splitAuthorsSeg(aLines[i]));
+  const title=titleNear(aLines, topA, "");          // título fica ACIMA do bloco de autores
   // Tira "autores" que são na verdade titulação/cargo do rodapé (não são nomes) → não viram autor nem vão pra IA.
   const ehGrau = n => /^(ic\b|bic\b|pibi[ct]|bolsist|graduand|graduad[oa]|p[óo]s[\- ]?grad|mestrand|doutorand|orientador|coorientador|docente|discente|estagi|resid|especializ|zootecnist)/i.test((n||"").trim());
   names = names.filter(n=>!ehGrau(n));
   const seen=new Set(); names=names.filter(n=>{const k=n.toLowerCase(); if(seen.has(k))return false; seen.add(k); return true;});
   if(!(title.length>10 && names.length)) return null;
   const authors=pairWork(names, emails); fixSwapsJS(authors);
-  // Preenche os e-mails que FALTARAM (não só quando TODOS faltam — antes, se o pairWork acertava 1-2
-  // por nome, os outros 4-5 com e-mail no rodapé ficavam sem). 1º pelo NÚMERO do rodapé (autor i ↔ "i+1."),
-  // 2º por ORDEM com os e-mails ainda não usados. Marca _guess (pra IA/usuário conferir).
+  // 1) Preenche e-mails faltantes pelo NÚMERO do rodapé (autor i ↔ "i+1. …e-mail") — confiável.
   if(authors.some(a=>!a.email) && authors.length){
     const numEmail={}; let mm; const reN=/(\d{1,2})\D{0,200}?([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})/gi;
     while((mm=reN.exec(block))){ if(!(mm[1] in numEmail)) numEmail[+mm[1]] = mm[2].toLowerCase().replace(/[.,;)]+$/,""); }
     const usados=new Set(authors.map(a=>(a.email||"").toLowerCase()).filter(Boolean));
-    if(Object.keys(numEmail).length)                       // 1) pelo NÚMERO do rodapé
+    if(Object.keys(numEmail).length)
       authors.forEach((a,i)=>{ if(!a.email && numEmail[i+1] && !usados.has(numEmail[i+1])){ a.email=numEmail[i+1]; usados.add(numEmail[i+1]); a._guess=true; } });
-    const livres=emails.map(e=>e.toLowerCase()).filter(e=>!usados.has(e));   // 2) sobra por ORDEM
-    let j=0; for(const a of authors){ if(!a.email && j<livres.length){ a.email=livres[j++]; a._guess=true; } }
   }
-  return {title, authors, all_emails:emails, _raw:block};
+  // 2) ACRESCENTA autores limpos do rodapé (nome+e-mail) que a linha de autores fundiu/perdeu —
+  //    ANTES do chute por ordem, pra o e-mail ir pro NOME certo (não pro slot errado).
+  let result = addFootAuthors(authors, block);
+  // 3) Último recurso: e-mails que ninguém pegou vão por ORDEM pros autores ainda vazios (marca _guess).
+  if(result.some(a=>!a.email) && emails.length){
+    const usados=new Set(result.map(a=>(a.email||"").toLowerCase()).filter(Boolean));
+    const livres=emails.map(e=>e.toLowerCase()).filter(e=>!usados.has(e));
+    let j=0; for(const a of result){ if(!a.email && j<livres.length){ a.email=livres[j++]; a._guess=true; } }
+  }
+  return {title, authors:result, all_emails:emails, _raw:block};
 }
 /* Detecta as linhas de AFILIAÇÃO que se repetem ~1× por trabalho (âncora robusta).
    Em muitos anais cada trabalho repete a mesma instituição do evento; isso delimita
@@ -2244,9 +2298,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "6.1";
+const VERSION = "6.2";
 const VERSION_DATE = "2026-06-03";
 const CHANGELOG = [
+  ["6.2","2026-06-03","Recupera os e-mails que «sobravam»: (1) os autores agora são lidos SÓ acima das notas de rodapé — o texto do rodapé («Universidade…», «Energias Renováveis») não vira mais nome; isso ALÉM de limpar nomes, consertou nomes truncados (ex.: «Julia Rodrigues»→«Julia Isabella de Matos Rodrigues»). (2) Quando a linha de autores funde/perde nomes, o sistema ACRESCENTA o autor a partir do próprio rodapé numerado («N. Nome Completo, … e-mail:»), ligando nome↔e-mail corretos. No anais 2023: e-mails únicos 584→732 (de 803 no PDF = 91%) e trabalhos com e-mail 448→500. Sem regressão em 2019/mostra."],
   ["6.1","2026-06-03","Dois consertos do seu pente-fino: (1) NOMES com número colado (ex.: «Breno Pinto Rayol³») — agora tira os superscritos ¹²³ do nome. (2) MUITO mais e-mails pareados: antes, se o pareamento acertava 1-2 autores por nome, os outros 4-5 (que tinham e-mail no rodapé numerado) ficavam SEM e-mail; agora preenche TODOS os que faltam pelo número do rodapé. No anais 2023: e-mails pareados 456→584 (linhas autor+e-mail 728→855). Obs.: o PDF tem 803 e-mails únicos (não 1000+); ainda faltam ~200 em trabalhos onde nomes se fundem — próximo alvo."],
   ["6.0","2026-06-03","Sua ideia do SUMÁRIO: em anais grande com sumário numerado (1. TÍTULO, 2. TÍTULO…), o corte agora se baseia NELE — lê a lista oficial, localiza cada título no corpo e corta ali. Nenhum trabalho é pulado e o título sai oficial (de graça, sem IA). No anais 2023: 273→524 trabalhos (sumário lista 540; recupera ~250 que eram pulados) e acabaram os «títulos que não existem». Quem não tem sumário numerado (artigo único, ou anais sem numeração) usa o método antigo — sem mudança."],
   ["5.0","2026-06-03","Sua ideia do «modelo por PDF»: o formato (anais numerado, título CAIXA ALTA, e-mail por número) já é detectado SEM IA e aparece na tela. A IA passa a conferir só uma AMOSTRA por formato — o 1º trabalho (sonda) + alguns — em vez de cada caso. No anais 2023: 182 casos difíceis → IA confere só 8 (~46→~2 chamadas, ~95% menos custo). Novo campo «todos os PDFs têm a mesma formatação» (marcado): sonda só o 1º PDF do lote. Desmarque «conferir só amostra» se um PDF vier bagunçado e quiser checar tudo."],
