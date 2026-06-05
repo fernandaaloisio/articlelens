@@ -545,6 +545,23 @@ function _reusarNomesPorEmail(){
     }
   }));
 }
+// PAREAMENTO dentro do trabalho: autor que tem NOME mas ficou SEM e-mail recebe um e-mail SOLTO
+// do mesmo trabalho (1º por conteúdo do nome, depois por ordem). Conserta o caso em que nomes e
+// e-mails foram extraídos mas não pareados (ex.: e-mail no rodapé além do trecho lido pela IA).
+function _parearNomesComEmails(works){
+  (works||[]).forEach(r=>{
+    if(!Array.isArray(r.authors)) return;
+    const usados=new Set(r.authors.map(a=>(a.email||"").toLowerCase().trim()).filter(Boolean));
+    let livres=[...new Set((r.all_emails||[]).map(e=>(e||"").trim()).filter(Boolean))]
+      .filter(e=>!usados.has(e.toLowerCase()) && !_emailInstitucional(e));
+    if(!livres.length) return;
+    const sem=r.authors.filter(a=>a.name && !a.email);
+    if(!sem.length) return;
+    for(const a of sem){ const h=livres.find(e=>_emailBate(a.name,e)); if(h){ a.email=h; usados.add(h.toLowerCase()); livres=livres.filter(x=>x!==h); } }   // conteúdo
+    const ainda=r.authors.filter(a=>a.name && !a.email);
+    let j=0; for(const a of ainda){ if(j<livres.length){ a.email=livres[j++]; } }   // ordem (rodapé costuma seguir a ordem dos autores)
+  });
+}
 // adiciona os órfãos como autores reais (nome vazio + _orphan) — 1x por registro
 function _materializarOrfaos(){
   (allResults||[]).forEach(r=>{
@@ -2429,6 +2446,7 @@ async function processBatch(){
     _saveRun();
   }
   // MEMÓRIA: aprende os pares confiáveis desta coleta (IA = forte; demais só se batem por conteúdo).
+  try{ _parearNomesComEmails(allResults); }catch(e){ console.warn("parear:",e); }   // pareia nome↔e-mail solto ANTES de excluir/aprender
   try{ _aprenderMemoria(allResults); }catch(e){ console.warn("aprenderMemoria:",e); }
   // BLINDAGEM: cada passo final em try/catch — se um falhar, os DADOS continuam prontos
   // (allResults) e o usuário ainda consegue gerar o Excel. Nada de tela em branco silenciosa.
@@ -2623,6 +2641,7 @@ function renderResults(){
   if(!allResults.length){ res.classList.remove("show"); return; }
   res.classList.add("show");
   _limparInstitucional();        // remove e-mail de setor (callcenter@, secretaria@…) que virou autor
+  _parearNomesComEmails(allResults);   // pareia autor‑só‑nome com e‑mail solto do mesmo trabalho
   _materializarOrfaos();         // órfãos viram autores reais ANTES de contar/listar
   _reusarNomesPorEmail();        // reusa nome de e-mail já pareado com sucesso em outro artigo
 
@@ -3190,9 +3209,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.23";
+const VERSION = "13.24";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.24","2026-06-05","Conserto GRAVE: trabalhos apareciam com o NOME do autor mas SEM e‑mail (o nome e o e‑mail eram extraídos, mas ficavam em linhas separadas, sem parear). Agora, dentro de cada trabalho, o autor que ficou só com nome recebe o e‑mail solto do mesmo trabalho (1º pelo conteúdo do nome, depois pela ordem do rodapé). Roda antes de excluir/exportar. Isso junta as duas metades e tira os «nome sem e‑mail» da pré‑visualização."],
   ["13.23","2026-06-05","Botão 🔎 «Recuperar faltantes (IA)» no painel 📊 Cobertura (substituiu o antigo «Baixar removidos», ultrapassado). Quando a conferência mostra que faltaram e‑mails, é só clicar: o app pega CADA @ que não entrou, recorta o trecho do PDF em volta dele (com autores e título) e manda a IA achar o autor + título daquele e‑mail — recuperando o que escapou da coleta. Fecha a esteira na ponta final, como você desenhou (IA caçando os faltantes). Custo baixo (só os que faltaram)."],
   ["13.22","2026-06-05","Menos amarelo à toa: o aviso «⚠ e‑mail não confere» agora entende e‑mail de «primeiro nome + iniciais» (anna.pm = Ana Paula Monteiro, leandro.pr = Leandro Pereira Rezende) como CERTO — antes acendia amarelo mesmo estando correto. No 1D5B7CCC os avisos de e‑mail caíram de 11 → 3 (sobram só os realmente ambíguos). Sem mexer em nada que já funcionava."],
   ["13.21","2026-06-05","ESTEIRA FECHADA — conferência por META de e‑mail: no fim da coleta, o painel 📊 Cobertura agora mostra «o PDF tem X e‑mails · capturei Y (Z%)» com ✅ (≥90%) / ⚠️ (70‑89%) / ❌ (<70%). O alvo de @ vem do TEXTO do PDF (à prova de formato, sem IA). Assim você SEMPRE sabe se a coleta veio completa — e nunca recebe incompleto em silêncio. Ex.: 1D5B7CCC mostra «239/251 (95%) ✅». Soma o % também no resumo do painel pra ver de relance."],
