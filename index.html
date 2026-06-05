@@ -261,6 +261,16 @@
     </div>
     <p class="aihelp">🔒 O token fica só no seu navegador. A chave da Anthropic nunca aparece aqui — está só no Render.</p>
 
+    <!-- Memória permanente de aprendizado -->
+    <h4 style="margin:24px 0 6px">📚 Memória de aprendizado (e‑mail → nome)</h4>
+    <p class="aihelp" id="memInfo">—</p>
+    <p class="aihelp">Cada e‑mail que a IA confirma, que bate por conteúdo, ou que você corrige na mão fica guardado. Nos próximos PDFs o nome vem na hora, <b>sem IA</b>. Faça backup (Exportar) de vez em quando.</p>
+    <div class="btn-bar">
+      <button class="btn ghost" id="memExport" type="button">⬇️ Exportar memória</button>
+      <label class="btn ghost" style="cursor:pointer">⬆️ Importar<input type="file" id="memImport" accept=".json" style="display:none"></label>
+      <button class="btn ghost" id="memClear" type="button">🗑️ Limpar memória</button>
+    </div>
+
     <!-- Relatório da IA (o que ela fez na última coleta) -->
     <h4 style="margin:24px 0 6px">📋 Relatório da IA — o que ela fez</h4>
     <div id="aiReportSummary" class="aihelp" style="margin-bottom:8px">Rode uma coleta com a IA ligada para ver o relatório.</div>
@@ -460,6 +470,48 @@ function _ehAdmin(){ try{ return localStorage.getItem(AUTH_KEY) !== "user"; }cat
 // e-mail INSTITUCIONAL (caixa de setor, não de autor) — call center, secretaria, ouvidoria, etc.
 const _EMAIL_INST=/^(callcenter|contato|secretaria|secretariado|ouvidoria|atendimento|sac|imprensa|comunica[çc][ãa]o|coordena[çc][ãa]o|reitoria|diretoria|webmaster|biblioteca|n[úu]cleo|faen|den|revista|editora|anais|evento|congresso|simp[óo]sio|semin[áa]rio)\b/i;
 function _emailInstitucional(e){ return _EMAIL_INST.test((String(e).split("@")[0]||"")); }
+
+/* ===== MEMÓRIA PERMANENTE DE APRENDIZADO (e-mail → nome) =====
+   O e-mail é uma chave ÚNICA e estável. Quando um par e-mail↔nome é CONFIÁVEL (a IA confirmou, ou
+   o nome bate por conteúdo, ou você editou na mão), guardamos PARA SEMPRE (localStorage + exportável).
+   Nos próximos PDFs, qualquer e-mail já conhecido recebe o nome na hora, SEM IA → menos custo, menos erro.
+   Marca _memOk (= conferido pela memória → some o ⚠). */
+const MEM_KEY = "articlelens_memoria";
+let _memEmailNome = {};
+function _memCarregar(){ try{ _memEmailNome = JSON.parse(localStorage.getItem(MEM_KEY)||"{}")||{}; }catch(_){ _memEmailNome={}; } }
+function _memSalvar(){ try{ localStorage.setItem(MEM_KEY, JSON.stringify(_memEmailNome)); }catch(_){ } }
+_memCarregar();
+function _memNome(email){ return _memEmailNome[(email||"").toLowerCase().trim()] || ""; }
+function _memAprender(email, nome, forte){          // forte = edição manual ou IA (sempre grava); senão só se bate por conteúdo
+  email=(email||"").toLowerCase().trim(); nome=(nome||"").trim();
+  if(!email || !/@/.test(email) || _emailInstitucional(email)) return false;
+  if(nome.length<5 || !nome.includes(" ")) return false;
+  if(!forte && !_emailBate(nome, email)) return false;   // auto-aprende só pareamento que bate (não chute por ordem)
+  const atual=_memEmailNome[email];
+  if(forte || !atual || nome.length>atual.length){
+    if(_memEmailNome[email]!==nome){ _memEmailNome[email]=nome; _memSalvar(); }
+    return true;
+  }
+  return false;
+}
+// aplica a memória aos resultados: preenche nome de e-mail conhecido + materializa órfão conhecido
+function _aplicarMemoria(works){
+  let n=0;
+  (works||[]).forEach(r=>{
+    if(!Array.isArray(r.authors)) r.authors=[];
+    const ja=new Set(r.authors.map(a=>(a.email||"").toLowerCase().trim()).filter(Boolean));
+    r.authors.forEach(a=>{ if(!a.email) return; const nm=_memNome(a.email);
+      if(nm && (!a.name || (!_emailBate(a.name,a.email) && nm!==a.name))){ a.name=nm; a._memOk=true; a._orphan=false; n++; } });
+    (r.all_emails||[]).forEach(e=>{ e=(e||"").trim(); const k=e.toLowerCase(); if(!e||ja.has(k))return;
+      const nm=_memNome(e); if(nm){ r.authors.push({name:nm, email:e, _memOk:true}); ja.add(k); n++; } });
+  });
+  return n;
+}
+// aprende com os resultados: pares confiáveis (IA = forte; demais só se batem por conteúdo)
+function _aprenderMemoria(works){
+  (works||[]).forEach(r=>(r.authors||[]).forEach(a=>{ if(a.email && a.name) _memAprender(a.email, a.name, !!a._aiOk); }));
+}
+function _conferido(a){ return !!(a && (a._aiOk || a._memOk)); }
 // e-mails de um registro que NÃO foram pareados a nenhum autor (ignora institucionais)
 function _orfaosDoRec(r){
   const jaAtrib=new Set((r.authors||[]).map(a=>(a.email||"").toLowerCase().trim()).filter(Boolean));
@@ -504,7 +556,7 @@ function _materializarOrfaos(){
 }
 // uma linha precisa de verificação? (e-mail não confere com nome, inválido, revisar, ou órfão)
 function _precisaVerificar(a){
-  if(a._aiOk) return false;                      // conferido pela IA → não precisa
+  if(_conferido(a)) return false;                // conferido pela IA ou pela memória → não precisa
   const mm=!!(a.email && a.name && !_emailBate(a.name,a.email));
   return mm || a._inv || a._revisar || a._orphan;
 }
@@ -2248,6 +2300,8 @@ async function processBatch(){
   await new Promise(r=>setTimeout(r,30));
   const v = validarTudo();
   pipeStep(3,"done");
+  // MEMÓRIA: preenche nomes de e-mails já conhecidos ANTES da IA (assim a IA é chamada bem menos).
+  try{ const m=_aplicarMemoria(allResults); if(m) setStatus("📚 Memória preencheu "+m+" nome(s) de e‑mails já conhecidos (sem IA)."); }catch(e){ console.warn("memória:",e); }
   // ETAPA 4 — IA só nos casos incertos (título suspeito OU e-mail chutado/não pareado). Mínimo de IA.
   pipeStep(4,"active");
   if(AI.enabled && AI.orchestrate && allResults.length){
@@ -2348,6 +2402,8 @@ async function processBatch(){
     } else lastRun = { works: allResults.length, cost:0, perWork:0, hard:0, nEmail:0, nTit:0, nNomes:0, nFail:0, report:[] };
     _saveRun();
   }
+  // MEMÓRIA: aprende os pares confiáveis desta coleta (IA = forte; demais só se batem por conteúdo).
+  try{ _aprenderMemoria(allResults); }catch(e){ console.warn("aprenderMemoria:",e); }
   // BLINDAGEM: cada passo final em try/catch — se um falhar, os DADOS continuam prontos
   // (allResults) e o usuário ainda consegue gerar o Excel. Nada de tela em branco silenciosa.
   let inic={nFlag:0,nComp:0}, ex={autRem:0,trabRem:0};
@@ -2558,8 +2614,8 @@ function renderResults(){
     const auths = (r.authors&&r.authors.length)?r.authors:[{name:"",email:""}];
     auths.forEach((a,ai)=>flat.push({ri,ai,hasA:!!(r.authors&&r.authors.length),
       title:r.title||"(sem título)", name:a.name||"", email:a.email||"",
-      src:r.source_file||"", corr:a._corr, inv:a._inv, rev:(a._revisar&&!a._aiOk), _orphan:(!!a._orphan&&!a._aiOk),
-      mismatch:!!(a.email && a.name && !a._aiOk && !_emailBate(a.name, a.email))}));
+      src:r.source_file||"", corr:a._corr, inv:a._inv, rev:(a._revisar&&!_conferido(a)), _orphan:(!!a._orphan&&!_conferido(a)),
+      mismatch:!!(a.email && a.name && !_conferido(a) && !_emailBate(a.name, a.email))}));
   });
   const totalFlat = flat.length;
   const adminMode = _ehAdmin();    // admin: vê ⚠ na frente e botão OK, mas baixa SEM bloqueio
@@ -2854,6 +2910,9 @@ document.getElementById("resultBody").addEventListener("input", e=>{
   else if(r.authors && r.authors[ai]){
     if(field==="name") r.authors[ai].name = val;
     else if(field==="email"){ r.authors[ai].email = val; td.classList.remove("einv","ecorr"); }
+    // edição manual = VERDADE: grava na memória permanente (forte) p/ nunca mais errar esse e-mail
+    const a=r.authors[ai];
+    if(a.email && a.name){ a._memOk=true; try{ _memAprender(a.email, a.name, true); }catch(_){} }
   }
   aprender(r);                              // edição manual vira aprendizado (não repete o erro)
 });
@@ -2876,8 +2935,32 @@ function initAIUI(){
   document.getElementById("aiModel").value = AI.model || "";
   document.getElementById("aiKey").value   = AI.apiKey || "";
   _syncModelPreset();
+  _memAtualizarInfo();
   updateAIState();
 }
+function _memAtualizarInfo(){
+  const el=document.getElementById("memInfo"); if(!el) return;
+  const n=Object.keys(_memEmailNome).length;
+  el.innerHTML = n ? ("📚 <b>"+n+"</b> e‑mail"+(n>1?"s":"")+" na memória (preenchidos sem IA).") : "Memória vazia — ela se enche sozinha conforme você coleta.";
+}
+(function(){
+  const exp=document.getElementById("memExport"); if(exp) exp.onclick=()=>{
+    const blob=new Blob([JSON.stringify(_memEmailNome,null,1)],{type:"application/json"});
+    download(blob, "memoria_articlelens.json"); toast("Memória exportada ("+Object.keys(_memEmailNome).length+" e‑mails).");
+  };
+  const imp=document.getElementById("memImport"); if(imp) imp.onchange=async(e)=>{
+    const f=e.target.files[0]; if(!f) return;
+    try{ const o=JSON.parse(await f.text()); let add=0;
+      for(const k in o){ if(typeof o[k]==="string" && _memAprender(k,o[k],true)) add++; }
+      _memAtualizarInfo(); toast("Memória importada: +"+add+" e‑mails (total "+Object.keys(_memEmailNome).length+").");
+    }catch(err){ toast("Arquivo inválido: "+err.message,"err"); }
+    e.target.value="";
+  };
+  const clr=document.getElementById("memClear"); if(clr) clr.onclick=()=>{
+    if(!confirm("Apagar TODA a memória de aprendizado? (faça Exportar antes se quiser backup)")) return;
+    _memEmailNome={}; _memSalvar(); _memAtualizarInfo(); toast("Memória apagada.");
+  };
+})();
 // mantém o seletor em sincronia com o nome do modelo digitado
 function _syncModelPreset(){
   const sel=document.getElementById("aiModelPreset"); if(!sel) return;
@@ -3026,9 +3109,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.16";
+const VERSION = "13.17";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.17","2026-06-05","📚 MEMÓRIA PERMANENTE DE APRENDIZADO: o app agora LEMBRA, pra sempre, o nome de cada e‑mail que já foi acertado (pela IA, por bater com o nome, ou por você corrigir na mão). Nos próximos PDFs, qualquer e‑mail já conhecido recebe o nome NA HORA, sem IA — então a IA é usada cada vez MENOS e o custo cai com o tempo (é o «aprende sozinho»). A memória aparece na aba 🧠 IA (quantos e‑mails sabe) com Exportar/Importar (backup) e Limpar. Trava: só aprende par confiável (nunca um chute por ordem) e ignora e‑mail institucional. Funciona até com a IA desligada."],
   ["13.16","2026-06-05","A IA agora RESOLVE os trabalhos com ⚠ (sua ideia: regra faz o fácil, IA faz o difícil). Com a IA ligada, todo trabalho que sobrou com problema (nome≠e‑mail, e‑mail sem dono, nome quebrado, e‑mail órfão) é enviado ao Haiku (barato), que lê o texto cru e devolve os pares autor↔e‑mail certos — imune ao formato (com/sem traço, número, ; etc.). O resultado vira autoritativo e some o ⚠ (marca «conferido pela IA»). Travas: nunca reduz a quantidade de e‑mails já coletados, só usa e‑mail que está no texto, e ignora e‑mail institucional. Agora processa TODOS os casos (sem amostrar) porque o Haiku é barato. Se a IA estiver desligada, nada muda (regras como antes)."],
   ["13.15","2026-06-05","Trocar de modelo (custo) ficou fácil: na aba 🧠 IA tem agora um SELETOR de modelo com o custo do lado — 🟢 Haiku (barato, recomendado) · 🟡 Sonnet · 🔴 Opus (caro). Escolher já salva. O padrão do app passou a ser o Haiku (≈20× mais barato que o Opus) — basta pro app ler texto e achar autor/e‑mail. NÃO precisa de chave nova: a MESMA chave da Anthropic acessa todos os modelos. Para sair do Opus: aba IA → Modelo (custo) → 🟢 Haiku 3.5."],
   ["13.14","2026-06-05","Menos lixo nos avisos: (1) e‑mail INSTITUCIONAL (callcenter@, secretaria@, ouvidoria@, faen@…) não entra mais como se fosse do autor — é descartado. (2) «Nome» que na verdade é frase/texto do corpo («Segundo a Organização Mundial…», «UTI. Os recém…», «Unidade de Cuidados…») é rejeitado. (3) Parênteses vazios «()» que sobravam do «(N)» são limpos do nome. No 56dbda os avisos caíram de ~25 para ~16 (a maioria do que sobra é apelido de e‑mail correto, ex.: thatig=Thatiane, que só precisa do seu OK). Sem regressão (filtro institucional remove 0 e‑mails reais nos outros anais)."],
