@@ -1049,6 +1049,44 @@ function lerSumario(pages){
   if(typeof _pdfOutline!=="undefined" && _pdfOutline && _pdfOutline.length>=5) return {titulos:_pdfOutline.slice(), endPage:0};   // marcadores do PDF
   return null;
 }
+/* REGRA GERAL — layout "autores numerados + traço + notas" (ex.: anais SMENF/UERN):
+   os números (¹²³) dos autores caem em LINHAS próprias (sobrescritos) e os NOMES quebram de
+   linha; abaixo de um traço "______" vêm as notas "N <afiliação>, e-mail". O split simples por
+   vírgula quebrava os nomes ("Medeiros Mesa", "Pereira Lima") e trocava o e-mail. Aqui: junta a
+   região dos autores (tirando as linhas só-número e o título), separa por vírgula, e liga cada
+   autor à nota de MESMO número (com reforço por conteúdo do nome). */
+function parseAutoresTraco(block, titulo){
+  const lines=block.split(/\n/).map(l=>l.trim()).filter(Boolean);
+  const sep=lines.findIndex(l=>/^_{5,}$/.test(l.replace(/[\s.]/g,"")));   // linha do traço
+  if(sep<1) return null;
+  const bodyAt=lines.findIndex((l,i)=> i>sep && /^(resumo|abstract|resumen|introdu|palavras?[\s\-]*chave|objetivo|metodolog)\b/i.test(l));
+  const numEmail=_notasNumeradas(lines.slice(sep+1, bodyAt>sep?bodyAt:undefined));
+  if(Object.keys(numEmail).length<2) return null;          // precisa ≥2 notas com e-mail (assinatura do formato)
+  const _ntit=titulo?_norm(titulo):"";
+  const aLines=lines.slice(0,sep).filter(l=>{
+    if(/^[\d\s]+$/.test(l)) return false;                                  // linha só de números ("1 2 3", "4")
+    if(_ntit){ const nl=_norm(l); if(nl.length>=6 && _ntit.includes(nl)) return false; }   // pedaço do título
+    return true;
+  });
+  const names=aLines.join(" ").replace(/\s+/g," ").trim().split(/,|;|\se\s/).map(s=>cleanAuthor(s)).filter(validPname);
+  if(!names.length) return null;
+  const authors=names.map(n=>({name:n}));
+  const ordem=Object.keys(numEmail).map(Number).sort((a,b)=>a-b).map(k=>numEmail[k]);   // e-mails na ordem das notas
+  const usados=new Set();
+  const _bate=(name,email)=>{ const loc=(email.split("@")[0]||"").toLowerCase();
+    const toks=_norm(name).split(/\s+/).filter(t=>t.length>=3);
+    if(toks.some(t=>loc.includes(t))) return true;
+    const ini=_norm(name).split(/\s+/).filter(Boolean).map(t=>t[0]).join("");
+    return ini.length>=2 && loc.replace(/[^a-z]/g,"").startsWith(ini); };
+  // 1) por CONTEÚDO do nome (mais confiável — a ordem dos nomes às vezes ≠ ordem das notas)
+  for(const a of authors){ const hit=ordem.find(m=>!usados.has(m)&&_bate(a.name,m)); if(hit){ a.email=hit; usados.add(hit); } }
+  // 2) por NÚMERO (autor k ↔ nota k+1) para quem sobrou
+  authors.forEach((a,k)=>{ if(!a.email && numEmail[k+1] && !usados.has(numEmail[k+1])){ a.email=numEmail[k+1]; usados.add(numEmail[k+1]); }});
+  // 3) por ORDEM no restante
+  let j=0; const rest=ordem.filter(m=>!usados.has(m));
+  for(const a of authors){ if(!a.email && j<rest.length){ a.email=rest[j++]; usados.add(a.email); } }
+  return {title:titulo, authors, _fromIndex:true};
+}
 function cortarPorSumario(text){
   const pages = text.split("\f");
   if(pages.length<8) return null;
@@ -1078,6 +1116,8 @@ function cortarPorSumario(text){
   const _markBody=/^(resumo|abstract|resumen|introdu|objetivo|metodolog|palavras?[\s\-]*chave|keywords?)\b/i;
   function _extrair(from, end, titulo){
     const block=bodyRaw.slice(from, end);
+    const u=parseAutoresTraco(block, titulo);            // layout "numerados + traço" (SMENF/UERN)
+    if(u && u.authors.length) return {block, authors:u.authors};
     const blines=block.split(/\n/).map(l=>l.trim()).filter(Boolean);
     const ri = blines.findIndex(l=>_markBody.test(l));
     const head = ri>2 ? blines.slice(0, ri) : blines.slice(0, 16);
@@ -2763,9 +2803,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.5";
-const VERSION_DATE = "2026-06-04";
+const VERSION = "13.6";
+const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.6","2026-06-05","Conserto de NOMES no formato «autores numerados + traço» (anais SMENF/UERN e similares): os números (¹²³) dos autores ficam em linhas próprias e os NOMES quebram de linha; abaixo de um traço «______» vêm as notas «N afiliação, e‑mail». Antes, o nome quebrado virava pedaço solto com e‑mail errado («Medeiros Mesa», «Pereira Lima», «Mendes Carvalho»). Agora o app junta a região dos autores, ignora as linhas só‑número, separa por vírgula e liga cada autor ao seu e‑mail PELO CONTEÚDO do nome (e por número/ordem no que sobrar). Resultado SMENF: nomes COMPLETOS (ex.: «Mercedes Eduarda de Medeiros Mesa», «Jéssica Luana da Silva Mendes Carvalho»), 0 nome truncado, e‑mails certos. Sem regressão (449 35, 366 19, 380 13, 2023 estável)."],
   ["13.5","2026-06-04","pdf_449 fechou os 35/35 e‑mails. Sobre a v13.4: na seção EXPANDIDA o app agora também (a) MONTA os autores que o leitor não conseguia (formato «Sobrenome, Nome» com o número sobrescrito numa linha à parte — aceita sobrenome em CAIXA ALTA ou Capitalizado, incl. acento maiúsculo «CORRÊA»), e (b) completa pela ORDEM do rodapé dentro do MESMO trabalho. Pra não estragar anais de seção única (ex.: 2023), esse modo agressivo só liga quando é mesmo uma 2ª seção (2ª ocorrência do título) ou o trabalho veio sem nenhum autor — nunca reprocessando um bloco que o app já leu. O corte do bloco em «Resumo:» evita pegar e‑mail do trabalho vizinho, e o «de‑duplica» agora junta as 2 versões mesmo com título variando por aspas/pontuação ou autor com sobrenome truncado, e quando compartilham um autor/e‑mail. Resultado pdf_449: 35 e‑mails (os 35 do PDF), 30 endereços únicos, 0 e‑mail trocado, 0 duplicado. Sem regressão (2019, 366, 336, 345, 380 melhorou 7→13, 2023 estável)."],
   ["13.4","2026-06-04","Conserto do pdf_449 («erro grotesco»): esse anais TEM sumário (formato paginado), mas o leitor do sumário não PARAVA no fim dele — o buffer «vazava» de uma página pra outra e ele continuava inventando títulos-fantasma corpo adentro (211 títulos, ia até a pág 90). Resultado: o corte falhava e caía no modo «artigo único», cuspindo lixo («Tema: Educação», «Programa de Pós‑Graduação»…). Agora o sumário para quando a densidade de títulos despenca (fim real do índice) e reconhece cabeçalhos «GT 1.», «GT 2.». Além disso: (1) anais que lista cada trabalho 2× (Resumos SEM e‑mail + seção Expandida COM e‑mail) — o app vai buscar os e‑mails na seção expandida e PAREIA POR CONTEÚDO do nome (robusto à numeração trocada da fonte); (2) inclui coautores/orientadores que só aparecem na seção expandida; (3) aceita e‑mail com vírgula no domínio («gmail,com»→«gmail.com»); (4) rótulos de seção («Tema:», «Eixo», «GT») não viram mais «autor»; (5) dedup junta as 2 versões mesmo com título levemente diferente. Resultado pdf_449: de 5 registros‑lixo → 121 trabalhos, 28 e‑mails, 0 com nome≠e‑mail. Sem regressão (2019 425, 366 19)."],
   ["13.3","2026-06-04","(1) AVISO «⚠ e‑mail não confere com o nome» na tabela quando o e‑mail não parece ser do autor (o nome não bate com o e‑mail) — entra também no filtro «só problemas» pra você revisar rápido. (2) DEDUP: trabalho que aparece 2× (seção Resumos + seção Artigos do mesmo anais) vira 1 só, mantendo a versão cujo e‑mail BATE com o nome (ex.: pdf_380 «CONSIDERAÇÕES SOBRE A MATERNIDADE» ficou só com rrossigali@…, sem a duplicata com e‑mail errado). Sem regressão."],
