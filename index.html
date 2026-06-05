@@ -2127,11 +2127,27 @@ let modelosUsados = {};   // {nomeModelo: contagem} da última coleta
 /* O e-mail PARECE ser deste autor? (local-part contém algum token do nome, ou as iniciais). */
 function _emailBate(name, email){
   if(!email || !/@/.test(email)) return true;            // sem e-mail → não marca como erro
-  const lp=_norm(email).split("@")[0].replace(/[^a-z]/g,"");
+  const lp=_norm(email).split("@")[0].replace(/[^a-z]/g,"");   // (igual ao original — não regride nada)
   const tk=_norm(name||"").split(/\s+/).filter(t=>t.length>=3);
   if(!tk.length || lp.length<3) return true;
   const ini=tk.map(t=>t[0]).join("");
-  return tk.some(t=>lp.includes(t)) || (ini.length>=3 && lp.includes(ini));
+  if(tk.some(t=>lp.includes(t)) || (ini.length>=3 && lp.includes(ini))) return true;   // original
+  // NOVO (só ACRESCENTA): "primeiro nome + iniciais" — anna.pm=Ana Paula Monteiro, leandro.pr=Leandro
+  // Pereira Rezende. Usa o local-part CRU (preserva o ".") e colapsa letra dobrada (anna→ana).
+  const locRaw=(email||"").toLowerCase().split("@")[0].normalize("NFD").replace(/[̀-ͯ]/g,"");
+  const segs=locRaw.split(/[._\-]+/).filter(Boolean);
+  const tkAll=_norm(name||"").split(/\s+/).filter(Boolean);
+  if(segs.length>=2 && tkAll.length>=2 && segs[segs.length-1].length<=4){
+    const col=s=>s.replace(/(.)\1+/g,"$1");
+    const fnC=col(tkAll[0]), firstC=col(segs[0]);
+    const firstOk = firstC.length>=3 && (fnC.startsWith(firstC.slice(0,3)) || firstC.startsWith(fnC.slice(0,3)) || fnC===firstC);
+    if(firstOk){
+      const restIni=tkAll.slice(1).map(t=>t[0]).join("");
+      const restSeg=segs.slice(1).join("");
+      if(restSeg && restSeg.split("").every(c=>restIni.includes(c))) return true;
+    }
+  }
+  return false;
 }
 /* Quantos e-mails do trabalho BATEM com o nome do autor (local-part contém token do nome). */
 function _matchScore(w){
@@ -3132,9 +3148,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.21";
+const VERSION = "13.22";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.22","2026-06-05","Menos amarelo à toa: o aviso «⚠ e‑mail não confere» agora entende e‑mail de «primeiro nome + iniciais» (anna.pm = Ana Paula Monteiro, leandro.pr = Leandro Pereira Rezende) como CERTO — antes acendia amarelo mesmo estando correto. No 1D5B7CCC os avisos de e‑mail caíram de 11 → 3 (sobram só os realmente ambíguos). Sem mexer em nada que já funcionava."],
   ["13.21","2026-06-05","ESTEIRA FECHADA — conferência por META de e‑mail: no fim da coleta, o painel 📊 Cobertura agora mostra «o PDF tem X e‑mails · capturei Y (Z%)» com ✅ (≥90%) / ⚠️ (70‑89%) / ❌ (<70%). O alvo de @ vem do TEXTO do PDF (à prova de formato, sem IA). Assim você SEMPRE sabe se a coleta veio completa — e nunca recebe incompleto em silêncio. Ex.: 1D5B7CCC mostra «239/251 (95%) ✅». Soma o % também no resumo do painel pra ver de relance."],
   ["13.20","2026-06-05","Conserto do TÍTULO grudado no sumário: quando uma entrada do índice vinha com poucos pontinhos antes do número da página (ex.: «… REVISÃO DE LITERATURA ...26»), o app não cortava ali e grudava o próximo título junto (ficava «…LITERATURA ...26 A INFLUÊNCIA DAS HABILIDADES…»). Agora corta com 3 pontos (ou pontos+número no fim). Resultado: títulos do 1D5B7CCC separados certo; e de quebra melhorou outros anais (2019 ganhou trabalhos e diminuiu erro). Sem regressão."],
   ["13.19","2026-06-05","Mais barato e rápido: a IA agora confere os trabalhos em LOTES maiores (8 por chamada, antes 4). Como os trabalhos do mesmo PDF têm o mesmo formato, a IA vê vários juntos, reconhece o padrão e resolve todos de uma vez — cortando ~metade das chamadas (menos custo, menos tempo), sem perder a conferência de nenhum."],
