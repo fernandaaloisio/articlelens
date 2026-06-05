@@ -1105,7 +1105,9 @@ function parseAutoresPV(block, titulo){
   let i=0; while(i<head.length && ((_ntit && _norm(head[i]).length>=6 && _ntit.includes(_norm(head[i]))) || /^[\d\s]+$/.test(head[i]))) i++;
   const AFF=/@|e-?mail|enfermeir|graduand|docente|discente|mestrand|doutorand|resid[êe]ncia|universidad|faculdad|instituto|acad[êe]mic|bolsist|professor|t[ée]cnic|especialista|disciplina|p[óo]s[\- ]?grad|orientad|secretaria|hospital/i;
   const aLines=[]; for(; i<head.length; i++){ if(AFF.test(head[i])) break; aLines.push(head[i]); if(aLines.length>=6) break; }
-  const seg=aLines.join(" ");
+  // marcadores de chamada "(1)", "(2)", "( )" entre/depois dos nomes viram separador (alguns anais
+  // numeram o autor com "(N)" em vez de ";"). Depois conta os separadores.
+  const seg=aLines.join(" ").replace(/\(\s*\d*\s*\)/g, ";");
   const nSemi=(seg.match(/;/g)||[]).length, nVirg=(seg.match(/,/g)||[]).length;
   // assinatura: lista separada por ";" com NOMES sem vírgula interna (≥2 ";", e ";" predominando
   // sobre ","). Se houver mais "," que ";", é "Sobrenome, Nome; …" (ex.: 449) — NÃO é este formato.
@@ -2844,9 +2846,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.8";
+const VERSION = "13.9";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.9","2026-06-05","Mais um formato de lista de autores: quando os autores são numerados com «(1) (2) (3)…» em vez de «;» (ex.: «Fulano (1) Beltrano (2) …» + notas «(N) … E‑mail: x»), o app agora separa os nomes por esses marcadores e liga cada um ao e‑mail por conteúdo. Recuperou os e‑mails do trabalho «EDUCAÇÃO EM SAÚDE NA ESCOLA: UMA DISCUSSÃO SOBRE CORPO…» (8 autores). Sem regressão (449/SMENF/366/380/336/2023 iguais)."],
   ["13.8","2026-06-05","Mais e‑mails em anais de saúde com MUITOS autores por trabalho (lista separada por «;» + afiliação com «E‑mail:» embutido, ex.: UERN‑PMM). Antes, em trabalhos de 8‑9 autores o app confundia o nome com a linha de afiliação e perdia metade dos e‑mails. Agora reconhece a lista por «;», junta os nomes (mesmo quebrados em 2 linhas) e liga cada autor ao e‑mail pelo CONTEÚDO do nome. Também ignora e‑mails institucionais (callcenter@, secretaria@, faen@…). Só dispara nesse formato (nomes sem vírgula interna), então não mexe nos outros (449 segue 35, SMENF 166, 366/380/336 iguais; 2023 ganhou alguns). Obs.: nesse tipo de anais, trabalhos com texto muito bagunçado (frase do corpo no lugar do autor) ainda saem com o aviso ⚠ pra você revisar."],
   ["13.7","2026-06-05","SMENF fechou 166/166 e‑mails. Faltavam 2 (hemilyevellyn, deivsonwendell) num trabalho onde o número da nota de rodapé sai COLADO na afiliação («1Universidade do Estado…, email») — o leitor de notas exigia um espaço/limite depois do número e por isso não lia essas notas. Agora aceita o número colado («1Universidade», «1 Universidade» e «1»+linha seguinte), sem confundir com ano («2024»). Resultado: o trabalho «O PAPEL DA MONITORIA…» saiu com os 4 autores certos (Jorgivan, Hemily Evellyn, Deivson Wendell, Kalidia). Sem regressão (efeito ZERO em 449/2019/2023; SMENF 164→166)."],
   ["13.6","2026-06-05","Conserto de NOMES no formato «autores numerados + traço» (anais SMENF/UERN e similares): os números (¹²³) dos autores ficam em linhas próprias e os NOMES quebram de linha; abaixo de um traço «______» vêm as notas «N afiliação, e‑mail». Antes, o nome quebrado virava pedaço solto com e‑mail errado («Medeiros Mesa», «Pereira Lima», «Mendes Carvalho»). Agora o app junta a região dos autores, ignora as linhas só‑número, separa por vírgula e liga cada autor ao seu e‑mail PELO CONTEÚDO do nome (e por número/ordem no que sobrar). Resultado SMENF: nomes COMPLETOS (ex.: «Mercedes Eduarda de Medeiros Mesa», «Jéssica Luana da Silva Mendes Carvalho»), 0 nome truncado, e‑mails certos. Sem regressão (449 35, 366 19, 380 13, 2023 estável)."],
