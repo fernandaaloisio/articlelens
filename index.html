@@ -1515,6 +1515,8 @@ function aplicarIndice(works, text){
   return {total:idx.length, fixed};
 }
 let lastIndice = null;   // {total, fixed} da última coleta de anais
+// META de cobertura por e-mail: quantos @ existem no(s) PDF(s) do lote (alvo p/ conferir no fim)
+let _emailAlvo = { tot:0, uni:new Set() };
 
 /* APRENDIZADO: lembra correções (título/e-mail) por trabalho p/ NÃO repetir o erro em re-execuções.
    Guarda no navegador (localStorage). Alimentado pelas correções da IA e pelas edições manuais. */
@@ -2181,6 +2183,10 @@ function _dedupWorks(works){
 
 async function collectFromPDF(file, mode){
   const text = await extractTextFromPDF(file);
+  // META: conta os @ do PDF (alvo de cobertura) — à prova de formato, sem IA. Ignora institucional.
+  try{ const ats=(text.match(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/gi)||[])
+        .map(e=>e.toLowerCase().replace(/[.,;)]+$/,"")).filter(e=>!_emailInstitucional(e));
+    _emailAlvo.tot+=ats.length; ats.forEach(e=>_emailAlvo.uni.add(e)); }catch(_){}
   let modelo = detectarModelo(text, mode);
   // IA de IDENTIFICAÇÃO (rede de segurança): SÓ pode RESGATAR um anais que a regra não pegou.
   // NUNCA rebaixa um anais detectado — a regra (conta RESUMO/palavras-chave no PDF inteiro) é confiável,
@@ -2272,6 +2278,7 @@ async function processBatch(){
   errorsThisRun = [];
   modelosUsados = {};
   _formatoIA = null; _lastFid = null;     // zera a identificação da IA por lote
+  _emailAlvo = { tot:0, uni:new Set() };  // zera a meta de @ do lote
   const modo = sepMode();
   // ETAPA 1+2 — Cortar (separador) + Coletar
   pipeStep(1,"active");
@@ -2713,9 +2720,15 @@ function renderCobertura(ex){
   const box=document.getElementById("coberturaBox"); if(!box) return;
   box.style.display=""; box.open=true;          // já abre o painel (com a verificação) após a coleta
   const idxN = lastIndice ? lastIndice.total : null;
+  let _resAt="";
+  if(_emailAlvo && _emailAlvo.uni.size>0){
+    const cu=new Set(); allResults.forEach(w=>(w.authors||[]).forEach(a=>{if(a.email)cu.add(a.email.toLowerCase().trim());}));
+    const p=Math.round(100*cu.size/_emailAlvo.uni.size);
+    _resAt=" · @ "+cu.size+"/"+_emailAlvo.uni.size+" ("+p+"%) "+(p>=90?"✅":p>=70?"⚠️":"❌");
+  }
   document.getElementById("coberturaResumo").textContent =
-    "· "+allResults.length+" com e‑mail · "+ex.trabRem+" removidos (sem e‑mail)"
-    + (idxN!=null ? " · índice lista "+idxN : "");
+    "· "+allResults.length+" com e‑mail · "+ex.trabRem+" removidos"
+    + (idxN!=null ? " · índice "+idxN : "") + _resAt;
   let html = "<b>"+allResults.length+"</b> trabalhos coletados (todos com pelo menos 1 e‑mail).";
   if(idxN!=null) html += " O sumário do PDF lista <b>"+idxN+"</b> trabalhos.";
   // VERIFICAÇÃO (nunca falha em silêncio): identificação da IA + esperado vs coletado.
@@ -2728,8 +2741,19 @@ function renderCobertura(ex){
   if(idxN!=null){     // anais: o SUMÁRIO é o gabarito da quantidade
     const localizei = allResults.length + (ex.trabRem||0);
     const fora = idxN - localizei;
-    html += "<br><b>Conferência:</b> sumário lista <b>"+idxN+"</b> · localizei "+localizei+" · com e‑mail "+allResults.length
-         + (fora>2?" · <b style='color:var(--danger)'>"+fora+" não localizados no corpo (revisar)</b>":" · cobertura ok");
+    html += "<br><b>Conferência (trabalhos):</b> sumário lista <b>"+idxN+"</b> · localizei "+localizei+" · com e‑mail "+allResults.length
+         + (fora>2?" · <b style='color:var(--danger)'>"+fora+" não localizados no corpo (revisar)</b>":" · ok");
+  }
+  // META de e-mail: @ no PDF (alvo) × @ capturados. Fecha a esteira — avisa se faltou muito.
+  if(_emailAlvo && _emailAlvo.uni.size>0){
+    const alvoUni=_emailAlvo.uni.size;
+    const captUni=new Set();
+    allResults.forEach(w=>(w.authors||[]).forEach(a=>{ if(a.email) captUni.add(a.email.toLowerCase().trim()); }));
+    const c=captUni.size, pct=Math.round(100*c/alvoUni);
+    const cor = pct>=90?"var(--ok,#28a745)" : pct>=70?"var(--warn,#b8860b)" : "var(--danger)";
+    const sinal = pct>=90?"✅" : pct>=70?"⚠️" : "❌";
+    html += "<br><b>Conferência (e‑mails):</b> o PDF tem <b>"+alvoUni+"</b> e‑mails (únicos) · capturei <b style='color:"+cor+"'>"+c+" ("+pct+"%)</b> "+sinal
+         + (pct<90?" · <b style='color:"+cor+"'>faltou recuperar "+(alvoUni-c)+"</b> — revise os ⚠ / rode a IA":" · cobertura completa");
   }
   const mu = Object.entries(modelosUsados||{});
   if(mu.length) html += "<br><br><b>📐 Modelos usados:</b> " + mu.map(([n,c])=>escapeHtml(n)+" ("+c+")").join(" · ");
@@ -3108,9 +3132,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.20";
+const VERSION = "13.21";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.21","2026-06-05","ESTEIRA FECHADA — conferência por META de e‑mail: no fim da coleta, o painel 📊 Cobertura agora mostra «o PDF tem X e‑mails · capturei Y (Z%)» com ✅ (≥90%) / ⚠️ (70‑89%) / ❌ (<70%). O alvo de @ vem do TEXTO do PDF (à prova de formato, sem IA). Assim você SEMPRE sabe se a coleta veio completa — e nunca recebe incompleto em silêncio. Ex.: 1D5B7CCC mostra «239/251 (95%) ✅». Soma o % também no resumo do painel pra ver de relance."],
   ["13.20","2026-06-05","Conserto do TÍTULO grudado no sumário: quando uma entrada do índice vinha com poucos pontinhos antes do número da página (ex.: «… REVISÃO DE LITERATURA ...26»), o app não cortava ali e grudava o próximo título junto (ficava «…LITERATURA ...26 A INFLUÊNCIA DAS HABILIDADES…»). Agora corta com 3 pontos (ou pontos+número no fim). Resultado: títulos do 1D5B7CCC separados certo; e de quebra melhorou outros anais (2019 ganhou trabalhos e diminuiu erro). Sem regressão."],
   ["13.19","2026-06-05","Mais barato e rápido: a IA agora confere os trabalhos em LOTES maiores (8 por chamada, antes 4). Como os trabalhos do mesmo PDF têm o mesmo formato, a IA vê vários juntos, reconhece o padrão e resolve todos de uma vez — cortando ~metade das chamadas (menos custo, menos tempo), sem perder a conferência de nenhum."],
   ["13.18","2026-06-05","Conserto importante: a IA estava AMOSTRANDO (conferia só alguns trabalhos) em PDFs grandes — por isso o 1º trabalho saía perfeito e o resto ficava com lixo (afiliação «Câmpus … UNITINS» no lugar do nome, nomes vazios). Agora a IA confere TODOS os trabalhos com ⚠ (Haiku é barato), então o erro não fica só num pedaço. Também: afiliação («Câmpus…», «Universidade…») nunca mais vira nome de autor. Obs.: em PDFs grandes a coleta com IA demora mais (1‑3 min) — é a IA conferindo trabalho por trabalho."],
