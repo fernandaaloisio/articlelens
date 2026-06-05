@@ -2317,7 +2317,9 @@ async function processBatch(){
       let nTit=0, nEmail=0, nNomes=0, nFail=0, lastErr="";
       const usdBefore = aiUsage.usd;
       const relatorio = [];
-      const CHUNK = 4;
+      // LOTE maior: a IA vê vários trabalhos do MESMO formato juntos → parseia consistente, em menos
+      // chamadas (mais barato/rápido). Se a resposta longa cortar o JSON, o catch re-tenta 1 a 1.
+      const CHUNK = 8;
       for(let i=0;i<alvos.length;i+=CHUNK){
         let grupo = alvos.slice(i, i+CHUNK);
         let fixes = null;
@@ -3104,9 +3106,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.18";
+const VERSION = "13.19";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.19","2026-06-05","Mais barato e rápido: a IA agora confere os trabalhos em LOTES maiores (8 por chamada, antes 4). Como os trabalhos do mesmo PDF têm o mesmo formato, a IA vê vários juntos, reconhece o padrão e resolve todos de uma vez — cortando ~metade das chamadas (menos custo, menos tempo), sem perder a conferência de nenhum."],
   ["13.18","2026-06-05","Conserto importante: a IA estava AMOSTRANDO (conferia só alguns trabalhos) em PDFs grandes — por isso o 1º trabalho saía perfeito e o resto ficava com lixo (afiliação «Câmpus … UNITINS» no lugar do nome, nomes vazios). Agora a IA confere TODOS os trabalhos com ⚠ (Haiku é barato), então o erro não fica só num pedaço. Também: afiliação («Câmpus…», «Universidade…») nunca mais vira nome de autor. Obs.: em PDFs grandes a coleta com IA demora mais (1‑3 min) — é a IA conferindo trabalho por trabalho."],
   ["13.17","2026-06-05","📚 MEMÓRIA PERMANENTE DE APRENDIZADO: o app agora LEMBRA, pra sempre, o nome de cada e‑mail que já foi acertado (pela IA, por bater com o nome, ou por você corrigir na mão). Nos próximos PDFs, qualquer e‑mail já conhecido recebe o nome NA HORA, sem IA — então a IA é usada cada vez MENOS e o custo cai com o tempo (é o «aprende sozinho»). A memória aparece na aba 🧠 IA (quantos e‑mails sabe) com Exportar/Importar (backup) e Limpar. Trava: só aprende par confiável (nunca um chute por ordem) e ignora e‑mail institucional. Funciona até com a IA desligada."],
   ["13.16","2026-06-05","A IA agora RESOLVE os trabalhos com ⚠ (sua ideia: regra faz o fácil, IA faz o difícil). Com a IA ligada, todo trabalho que sobrou com problema (nome≠e‑mail, e‑mail sem dono, nome quebrado, e‑mail órfão) é enviado ao Haiku (barato), que lê o texto cru e devolve os pares autor↔e‑mail certos — imune ao formato (com/sem traço, número, ; etc.). O resultado vira autoritativo e some o ⚠ (marca «conferido pela IA»). Travas: nunca reduz a quantidade de e‑mails já coletados, só usa e‑mail que está no texto, e ignora e‑mail institucional. Agora processa TODOS os casos (sem amostrar) porque o Haiku é barato. Se a IA estiver desligada, nada muda (regras como antes)."],
