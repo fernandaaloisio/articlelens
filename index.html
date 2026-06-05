@@ -1789,6 +1789,44 @@ function detectarModelo(text, mode){
   return modeloPorId("artigo");
 }
 let modelosUsados = {};   // {nomeModelo: contagem} da última coleta
+/* O e-mail PARECE ser deste autor? (local-part contém algum token do nome, ou as iniciais). */
+function _emailBate(name, email){
+  if(!email || !/@/.test(email)) return true;            // sem e-mail → não marca como erro
+  const lp=_norm(email).split("@")[0].replace(/[^a-z]/g,"");
+  const tk=_norm(name||"").split(/\s+/).filter(t=>t.length>=3);
+  if(!tk.length || lp.length<3) return true;
+  const ini=tk.map(t=>t[0]).join("");
+  return tk.some(t=>lp.includes(t)) || (ini.length>=3 && lp.includes(ini));
+}
+/* Quantos e-mails do trabalho BATEM com o nome do autor (local-part contém token do nome). */
+function _matchScore(w){
+  return (w.authors||[]).reduce((s,a)=>{
+    if(!a.email) return s;
+    const lp=_norm(a.email).split("@")[0].replace(/[^a-z]/g,"");
+    const tk=_norm(a.name).split(/\s+/).filter(t=>t.length>=3);
+    return s + (tk.some(t=>lp.includes(t))?1:0);
+  },0);
+}
+/* DEDUP por título: o mesmo trabalho às vezes aparece 2× (seção Resumos + seção Artigos).
+   Mantém a versão melhor: e-mail que BATE com o nome > mais e-mails > primeira. */
+function _dedupWorks(works){
+  // chave = título COMPLETO + 1º autor → só junta o MESMO trabalho (mesmo título E mesmo autor),
+  // não trabalhos diferentes que por acaso têm o mesmo título.
+  const grupos={}, ordem=[];
+  for(const w of works){
+    const a1=(w.authors&&w.authors[0]&&w.authors[0].name)||"";
+    const k=_norm(w.title||"")+"|"+_norm(a1);
+    if(!_norm(w.title||"")){ ordem.push([w]); continue; }   // título vazio = nunca junta
+    if(!grupos[k]){ grupos[k]=[]; ordem.push(grupos[k]); }
+    grupos[k].push(w);
+  }
+  return ordem.map(g=>{
+    if(g.length>1) g.sort((a,b)=> _matchScore(b)-_matchScore(a)
+      || (b.authors||[]).filter(x=>x.email).length-(a.authors||[]).filter(x=>x.email).length
+      || (b.authors||[]).length-(a.authors||[]).length );
+    return g[0];
+  });
+}
 
 async function collectFromPDF(file, mode){
   const text = await extractTextFromPDF(file);
@@ -1826,6 +1864,7 @@ async function collectFromPDF(file, mode){
       works = viaSep || [];
       lastIndice = aplicarIndice(works, text);            // títulos oficiais do sumário (grátis), se houver
     }
+    works = _dedupWorks(works);     // tira trabalhos repetidos (mesmo título em 2 seções: Resumos + Artigos)
     if(works.length){
       recs = works.map(w=>({title:w.title, authors:w.authors, all_emails:w.all_emails,
                             _raw:w._raw, _fromIndex:w._fromIndex, source_file:file.name}));
@@ -2208,13 +2247,14 @@ function renderResults(){
     const auths = (r.authors&&r.authors.length)?r.authors:[{name:"",email:""}];
     auths.forEach((a,ai)=>flat.push({ri,ai,hasA:!!(r.authors&&r.authors.length),
       title:r.title||"(sem título)", name:a.name||"", email:a.email||"",
-      src:r.source_file||"", corr:a._corr, inv:a._inv, rev:a._revisar}));
+      src:r.source_file||"", corr:a._corr, inv:a._inv, rev:a._revisar,
+      mismatch:!!(a.email && a.name && !_emailBate(a.name, a.email))}));
   });
   const totalFlat = flat.length;
   // 🔍 filtro: busca + "só problemas"
   const q = _norm((document.getElementById("resSearch")||{}).value||"").trim();
   const onlyProb = !!(document.getElementById("resOnlyProb")||{}).checked;
-  const ehProblema = x => x.inv || x.rev || tituloSuspeito(x.title) || nomeQuebrado(x.name, x.email)
+  const ehProblema = x => x.inv || x.rev || x.mismatch || tituloSuspeito(x.title) || nomeQuebrado(x.name, x.email)
                           || /\b(de|da|do|e|em|para|com|no|na)$/i.test((x.title||"").trim());  // título cortado no fim
   if(q) flat = flat.filter(x=>_norm(x.title+" "+x.name+" "+x.email).includes(q));
   if(onlyProb) flat = flat.filter(ehProblema);
@@ -2227,7 +2267,8 @@ function renderResults(){
   const body = document.getElementById("resultBody");
   body.innerHTML = "";
   slice.forEach((r,i)=>{
-    const badge = (r.rev ? '<span class="badge-inv" title="nome só com iniciais — confira o 1º nome">⚠ revisar</span> ' : '')
+    const badge = (r.mismatch ? '<span class="badge-inv" title="O e‑mail não parece ser deste autor (o nome não bate com o e‑mail). Confira/edite.">⚠ e‑mail não confere com o nome</span> ' : '')
+                 + (r.rev ? '<span class="badge-inv" title="nome só com iniciais — confira o 1º nome">⚠ revisar</span> ' : '')
                  + (r.corr ? '<span class="badge-corr" title="corrigido pelo validador">corrigido</span>'
                  : r.inv ? '<span class="badge-inv" title="formato inválido — revise">inválido</span>' : '');
     const cls = r.inv ? 'email einv' : (r.corr ? 'email ecorr' : 'email');
@@ -2617,9 +2658,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.2";
+const VERSION = "13.3";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["13.3","2026-06-04","(1) AVISO «⚠ e‑mail não confere com o nome» na tabela quando o e‑mail não parece ser do autor (o nome não bate com o e‑mail) — entra também no filtro «só problemas» pra você revisar rápido. (2) DEDUP: trabalho que aparece 2× (seção Resumos + seção Artigos do mesmo anais) vira 1 só, mantendo a versão cujo e‑mail BATE com o nome (ex.: pdf_380 «CONSIDERAÇÕES SOBRE A MATERNIDADE» ficou só com rrossigali@…, sem a duplicata com e‑mail errado). Sem regressão."],
   ["13.2","2026-06-04","Dois consertos: (1) GRAVE — autor SEM e-mail nunca mais vai pro Excel/CSV (a exportação agora filtra: só sai quem tem e-mail, sempre). (2) A nota de rodapé de cada autor vai do NÚMERO dele até o PRÓXIMO número (bloco inteiro), então o e-mail é pego mesmo quando QUEBRA de linha (ex.: «1 … E-mail» / «bruna.ehlert@…»). Ex. «A EXPERIÊNCIA CARTOGRÁFICA»: Bruna→bruna.ehlert, Claudete→crempel. Sem regressão."],
   ["13.1","2026-06-04","A regra do número↔rodapé virou GERAL: agora vale pra TODOS os artigos de qualquer PDF (corte por sumário, método antigo e artigo único) — sempre que o autor tiver um número (¹²³…) e a nota com o mesmo número trouxer o e-mail, ele é ligado corretamente, mesmo com dígito dentro do e-mail. Centralizei num único leitor de notas (linha a linha). Sem regressão."],
   ["13.0","2026-06-04","Sua regra do número↔rodapé (base: MENINAS NA CIÊNCIA): quando o autor tem um número (¹²³…), os dados dele estão na nota de rodapé com o MESMO número, na mesma página. Agora o app lê o rodapé LINHA A LINHA (número no início) e liga cada autor à sua nota — corrigindo o caso em que um dígito DENTRO do e‑mail atrapalhava (ex.: «andreiah2o@…» fazia sair «o@univates.br»). Resultado MENINAS: os 9 autores com os 9 e‑mails certos. Sem regressão."],
