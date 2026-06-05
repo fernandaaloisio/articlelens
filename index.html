@@ -385,6 +385,7 @@
       <div class="btn-bar" style="margin-top:8px">
         <button class="btn" id="verificarIA">🔍 Verificar incertos com IA</button>
         <button class="btn primary" id="recupFalta">🔎 Recuperar faltantes (IA)</button>
+        <button class="btn ghost" id="coberturaDl">⬇️ Baixar relatório (.csv)</button>
       </div>
       <div id="verifBody" style="margin-top:10px;font-size:13px"></div>
     </details>
@@ -2959,6 +2960,34 @@ async function verificarIncertosIA(){
 }
 document.getElementById("verificarIA").onclick = verificarIncertosIA;
 { const _rf=document.getElementById("recupFalta"); if(_rf) _rf.onclick = recuperarFaltantesIA; }
+{ const _cd=document.getElementById("coberturaDl"); if(_cd) _cd.onclick = ()=>{
+  if(!allResults.length){ toast("Rode uma coleta primeiro.","warn"); return; }
+  const esc=s=>'"'+String(s==null?"":s).replace(/"/g,'""')+'"';
+  const captUni=new Set(); allResults.forEach(w=>(w.authors||[]).forEach(a=>{ if(a.email) captUni.add(a.email.toLowerCase().trim()); }));
+  const alvo=_emailAlvo?_emailAlvo.uni.size:0;
+  const idxN=lastIndice?lastIndice.total:null;
+  const nmail=(allResults||[]).reduce((s,w)=>s+(w.authors||[]).filter(a=>a.email).length,0);
+  const custoBRL=(lastRun?lastRun.cost:0)*USD_BRL, perBRL=nmail?custoBRL/nmail:0;
+  const L=[];
+  L.push(["RELATÓRIO DE COBERTURA",""]);
+  L.push(["Trabalhos coletados (com e-mail)", allResults.length]);
+  if(idxN!=null) L.push(["Trabalhos listados no sumário", idxN]);
+  L.push(["E-mails coletados (linhas)", nmail]);
+  L.push(["E-mails únicos no PDF (alvo)", alvo]);
+  L.push(["E-mails únicos capturados", captUni.size]);
+  if(alvo) L.push(["Cobertura de e-mail", Math.round(100*captUni.size/alvo)+"%"]);
+  L.push(["Custo total (R$)", custoBRL.toFixed(2).replace(".",",")]);
+  L.push(["Custo por e-mail (R$)", perBRL.toFixed(4).replace(".",",")+(perBRL<=0.06?" (OK, meta R$0,06)":" (ACIMA da meta R$0,06)")]);
+  const faltam = alvo ? [..._emailAlvo.uni].filter(e=>!captUni.has(e)) : [];
+  L.push([]); L.push(["E-MAILS DO PDF QUE NÃO ENTRARAM ("+faltam.length+")",""]);
+  faltam.forEach(e=>L.push([e,""]));
+  const rem=(typeof lastRemovidos!=="undefined" && lastRemovidos)?lastRemovidos:[];
+  L.push([]); L.push(["TRABALHOS REMOVIDOS (sem e-mail) ("+rem.length+")","Fonte"]);
+  rem.forEach(r=>L.push([r.title, r.source]));
+  const csv="﻿"+L.map(r=>r.map(esc).join(",")).join("\r\n");
+  download(new Blob([csv],{type:"text/csv;charset=utf-8;"}), "relatorio_cobertura.csv");
+  toast("Relatório de cobertura baixado.");
+};}
 
 
 /* =========================================================================
@@ -3225,9 +3254,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.25";
+const VERSION = "13.26";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.26","2026-06-05","Voltou o download na Cobertura: botão «⬇️ Baixar relatório (.csv)» no painel 📊 Cobertura. O relatório traz tudo: trabalhos coletados × sumário, e‑mails únicos no PDF × capturados (com a %), custo total e por e‑mail (vs meta R$ 0,06), a LISTA dos e‑mails que não entraram e os trabalhos removidos sem e‑mail. (Substituiu, com vantagem, o antigo «baixar removidos».)"],
   ["13.25","2026-06-05","Custo por e‑mail com META: o «Custo por e‑mail» (Última coleta) agora mostra ✅ se ficou ≤ R$ 0,06 ou ❌ se passou — e PASSOU a incluir o gasto da VERIFICAÇÃO (🔍 lupa) e da RECUPERAÇÃO (🔎), não só o da coleta. Assim o número reflete o custo real por e‑mail, somando tudo que a IA gastou naquela coleta."],
   ["13.24","2026-06-05","Conserto GRAVE: trabalhos apareciam com o NOME do autor mas SEM e‑mail (o nome e o e‑mail eram extraídos, mas ficavam em linhas separadas, sem parear). Agora, dentro de cada trabalho, o autor que ficou só com nome recebe o e‑mail solto do mesmo trabalho (1º pelo conteúdo do nome, depois pela ordem do rodapé). Roda antes de excluir/exportar. Isso junta as duas metades e tira os «nome sem e‑mail» da pré‑visualização."],
   ["13.23","2026-06-05","Botão 🔎 «Recuperar faltantes (IA)» no painel 📊 Cobertura (substituiu o antigo «Baixar removidos», ultrapassado). Quando a conferência mostra que faltaram e‑mails, é só clicar: o app pega CADA @ que não entrou, recorta o trecho do PDF em volta dele (com autores e título) e manda a IA achar o autor + título daquele e‑mail — recuperando o que escapou da coleta. Fecha a esteira na ponta final, como você desenhou (IA caçando os faltantes). Custo baixo (só os que faltaram)."],
