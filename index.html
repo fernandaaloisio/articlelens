@@ -2769,7 +2769,12 @@ function renderCobertura(ex){
     const cor = pct>=90?"var(--ok,#28a745)" : pct>=70?"var(--warn,#b8860b)" : "var(--danger)";
     const sinal = pct>=90?"✅" : pct>=70?"⚠️" : "❌";
     html += "<br><b>Conferência (e‑mails):</b> o PDF tem <b>"+alvoUni+"</b> e‑mails (únicos) · capturei <b style='color:"+cor+"'>"+c+" ("+pct+"%)</b> "+sinal
-         + (pct<90?" · <b style='color:"+cor+"'>faltou recuperar "+(alvoUni-c)+"</b> — revise os ⚠ / rode a IA":" · cobertura completa");
+         + (pct<90?" · <b style='color:"+cor+"'>faltou recuperar "+(alvoUni-c)+"</b>":" · cobertura completa");
+    if(pct<100){   // LISTA os @ que escaparam (você vê exatamente o que falta — nada some em silêncio)
+      const faltam=[..._emailAlvo.uni].filter(e=>!captUni.has(e));
+      if(faltam.length) html += "<br><span style='color:var(--muted)'>e‑mails do PDF que NÃO entraram ("+faltam.length+"): "
+        + faltam.slice(0,40).map(e=>escapeHtml(e)).join(" · ") + (faltam.length>40?" …":"") + "</span>";
+    }
   }
   const mu = Object.entries(modelosUsados||{});
   if(mu.length) html += "<br><br><b>📐 Modelos usados:</b> " + mu.map(([n,c])=>escapeHtml(n)+" ("+c+")").join(" · ");
