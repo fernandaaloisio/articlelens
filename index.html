@@ -714,6 +714,8 @@ function validPname(n){
   const toks=n.split(/\s+/);
   // rejeita rótulos de evento ("X SISA", "XVI SIS", "IX SEPS"): começa com numeral romano ou letra solta
   if(/^([A-Z]|[IVXLCDM]{1,6})$/.test(toks[0])) return false;
+  // rejeita rótulos de SEÇÃO/eixo temático que se passam por autor ("Tema: Educação", "Eixo 2", "GT 3 …")
+  if(/^(tema|eixo|grupo|sess[ãa]o|modalidade|[áa]rea|gt|categoria|subtema|linha de pesquisa|p[óo]ster|resumo|sum[áa]rio|anais)\b/i.test(n)) return false;
   return toks.filter(w=>/^[A-ZÀ-Ý]/.test(w)).length >= 2;
 }
 function splitAuthorsSeg(seg){
@@ -1009,10 +1011,13 @@ function parseSumarioPontilhado(pages){
    O título fecha na linha que termina com o número de página; pula cabeçalhos de seção ("1. SEÇÃO"). */
 function parseSumarioPaginado(pages){
   let titulos=[], buf=[], inSum=false, endPage=0, started=false;
-  const secHdr=/^\d{1,2}\.\s+[A-ZÀ-Ÿ]/;
+  // cabeçalho de seção: "1. ALGO", "12. ALGO" ou "GT 1. ALGO" / "GT1 ALGO" (eixos temáticos)
+  const secHdr=/^(?:\d{1,2}|GT\s*\d{1,2})\.?\s+[A-ZÀ-Ÿ]/;
   for(let p=0;p<pages.length;p++){
     const plines = pages[p].split("\n").map(l=>l.trim()).filter(Boolean);
-    let teve=false;
+    let teve=false, cnt=0;
+    buf=[];   // GERAL: o sumário é contíguo — nunca deixa o buffer "vazar" de uma página p/ outra
+              // (senão linhas do corpo acumulam e fecham títulos-fantasma a cada nº solto).
     for(const l of plines){
       if(/^SUM[ÁA]RIO\s*$/.test(l)){ inSum=true; started=true; buf=[]; continue; }
       if(!inSum) continue;
@@ -1020,10 +1025,13 @@ function parseSumarioPaginado(pages){
       if(secHdr.test(l) && !/\s\d{1,4}$/.test(l)){ buf=[]; continue; }                       // cabeçalho de seção
       const m=l.match(/^(.*[A-Za-zÀ-ÿ].*?)\s+(\d{1,4})$/);                                   // termina com nº de página
       if(m){ buf.push(m[1].trim()); const t=buf.join(" ").replace(/\s+/g," ").trim();
-             if(t.length>=12 && !_SUM_HDR.test(t)){ titulos.push(t); endPage=p; teve=true; } buf=[]; }
+             if(t.length>=12 && !_SUM_HDR.test(t)){ titulos.push(t); endPage=p; teve=true; cnt++; } buf=[]; }
       else if(_SUM_HDR.test(l)) buf=[];
       else if(l.length>3) buf.push(l);
     }
+    // GERAL: o sumário tem MUITAS entradas por página; o corpo gera no máx. 1–2 falsas
+    // (cabeçalho/ano/referência terminando em nº). Quando a densidade despenca, o sumário acabou.
+    if(started && titulos.length>=5 && cnt<3){ break; }
     if(started && !teve && p>endPage && titulos.length){ break; }
   }
   return {titulos, endPage};
@@ -1096,6 +1104,85 @@ function cortarPorSumario(text){
     }
     works.push({ title: found[i].e.title, authors, all_emails:[...new Set((block.match(ERX2)||[]).map(e=>e.toLowerCase()))],
                  _raw: block.slice(0,4500), _fromIndex:true });
+  }
+  // ----- 2ª passada (REGRA GERAL): anais que listam cada trabalho DUAS vezes — uma seção de
+  // RESUMOS (sem e-mail) e outra seção EXPANDIDA/COMPLETA (com e-mail em rodapé numerado).
+  // O sumário aponta a 1ª (sem e-mail). Para cada trabalho com autores mas SEM e-mail, procura
+  // OUTRA ocorrência do mesmo título adiante e colhe os e-mails de lá, pareando por CONTEÚDO do
+  // nome (ex.: "giseled" ↔ "Gisele Dhein") — robusto a numeração trocada na fonte.
+  const _bate=(name,email)=>{ const loc=(String(email).split("@")[0]||"").toLowerCase();
+    const toks=_semAcento(name).split(/\s+/).filter(t=>t.length>=3);
+    if(toks.some(t=>loc.includes(t))) return true;
+    const ini=_semAcento(name).split(/\s+/).filter(Boolean).map(t=>t[0]).join("");
+    return ini.length>=2 && loc.replace(/[^a-z]/g,"").startsWith(ini); };
+  const _LIXOMAIL=/editora@|noreply|no-reply|exemplo|example|\/editora/i;
+  // Colhe nomes "Sobrenome, Nome" do bloco expandido (ignora afiliação e linhas com @). Aceita o
+  // sobrenome em CAIXA ALTA ("KESSLER, Arthur") OU em caixa título ("Neuenfeldt, Derli") — o formato
+  // varia no mesmo PDF. Remove superscritos grudados ("Kowalski, Rafael³").
+  const _nomesBloco=blk=>{ const out=[];
+    String(blk).split(/\n/).forEach(l=>{ l=l.trim().replace(/[¹²³⁰-⁹]+/g,"").trim(); if(!l || /@/.test(l)) return;
+      const m=l.match(/^([A-ZÀ-Ý][A-Za-zÀ-ÿ'’\-]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'’\-]+)*)\s*,\s*([A-ZÀ-Ý][A-Za-zÀ-ÿ'’]+(?:\s+(?:d[aeo]s?\s+)?[A-Za-zÀ-ÿ'’]+){0,3})\s*;?\s*$/);
+      if(!m) return;
+      if(/^(universidad|institut|faculdad|centro|univates|ufrgs|ifma|departament|programa|campus|funda[çc]|escola|secretaria|prefeitura|grupo|laborat[óo]rio|n[úu]cleo)/i.test(m[1])) return;
+      const sob=m[1].split(/\s+/).map(p=>p.charAt(0)+p.slice(1).toLowerCase()).join(" ");
+      out.push((m[2]+" "+sob).replace(/\s+/g," ").trim()); });
+    return out; };
+  for(const wk of works){
+    if(wk.authors.length && wk.authors.every(a=>a.email)) continue;   // já completo
+    const ws=_semAcento(wk.title).replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(Boolean);
+    if(ws.length<4) continue;
+    const key=ws.slice(0, Math.min(8, ws.length)).join(" ");
+    let pos=nbs.indexOf(key), mails=[], blkOk="", occ=0, occUsada=0;
+    while(pos>=0){                                       // varre as ocorrências; usa a 1ª que tenha e-mail
+      occ++;
+      let blk=bodyRaw.slice(map[pos], Math.min(bodyRaw.length, map[pos]+1800))
+                       .replace(/(@[a-z0-9.\-]+),([a-z]{2,})/gi, "$1.$2");   // OCR: "gmail,com" → "gmail.com"
+      // os e-mails do trabalho ficam no CABEÇALHO (título→autores→rodapé), ANTES do "Resumo:".
+      // Cortar ali impede a janela de vazar e-mails do PRÓXIMO trabalho. (Mantém o cabeçalho inteiro.)
+      const cut=blk.search(/\b(resumo|resumen|abstract)\s*:/i); if(cut>40) blk=blk.slice(0,cut);
+      const ms=[...new Set((blk.match(ERX2)||[]).map(e=>e.toLowerCase().replace(/[.,;)]+$/,"")))].filter(e=>!_LIXOMAIL.test(e));
+      if(ms.length){ mails=ms; blkOk=blk; occUsada=occ; break; }
+      pos=nbs.indexOf(key, pos+key.length+40);
+    }
+    // Passos agressivos (por ordem / colher coautores) SÓ quando: (a) achamos uma 2ª ocorrência do
+    // título (seção expandida separada), OU (b) o trabalho veio SEM autor (versão expandida que o
+    // parseWork não leu — formato "SOBRENOME, Nome" + nº solto). Em anais de seção ÚNICA, com autores
+    // já lidos, o bloco JÁ foi tratado pelo loop principal — reprocessar agressivo só erraria e-mail.
+    const segundaSecao = occUsada>=2 || wk.authors.length===0;
+    if(!mails.length) continue;
+    // 1) pareia por CONTEÚDO do nome (giseled↔Gisele) — sempre confiável.
+    const usados=new Set(); let contentHits=0;
+    for(const a of wk.authors){ if(a.email) continue;
+      const hit=mails.find(m=>!usados.has(m) && _bate(a.name,m));
+      if(hit){ a.email=hit; usados.add(hit); a._guess=true; contentHits++; } }
+    // 2) completa o RESTO por ORDEM do rodapé — só quando CONFIRMOU que é o MESMO trabalho
+    //    (≥1 e-mail bateu por conteúdo) e o nº de e-mails não excede o de autores (não vazou do vizinho).
+    if(segundaSecao && contentHits>=1 && mails.length<=wk.authors.length){
+      let j=0; const rest=mails.filter(m=>!usados.has(m));
+      for(const a of wk.authors){ if(!a.email && j<rest.length){ a.email=rest[j++]; usados.add(a.email); a._guess=true; } }
+    }
+    // Confirmado = ≥1 e-mail bateu por conteúdo, OU o trabalho não tinha NENHUM autor (versão
+    // expandida que o parseWork não conseguiu ler — "SOBRENOME, Nome" + nº sobrescrito solto).
+    const confirmado = contentHits>=1 || wk.authors.length===0;
+    if(segundaSecao && confirmado){
+      // 3) e-mails restantes pertencem a coautores reais (resumo lista menos autores que a expandida,
+      //    ou o trabalho veio sem autor): colhe "SOBRENOME, Nome" do MESMO bloco e pareia.
+      let rest=mails.filter(m=>!usados.has(m));
+      let nomes=_nomesBloco(blkOk).filter(n=>!wk.authors.some(a=>_semAcento(a.name)===_semAcento(n)));
+      // 3a) por CONTEÚDO do nome
+      for(const m of rest.slice()){
+        const nome=nomes.find(n=>_bate(n,m));
+        if(!nome) continue;
+        nomes=nomes.filter(n=>n!==nome); rest=rest.filter(x=>x!==m);
+        wk.authors.push({name:nome, email:m, _guess:true}); usados.add(m);
+      }
+      // 3b) por ORDEM do rodapé — só DENTRO deste bloco confirmado, casando nome↔e-mail que sobraram
+      //     (a ordem dos nomes = a ordem das notas). Seguro: é um único trabalho, não cruza vizinhos.
+      while(rest.length && nomes.length){
+        wk.authors.push({name:nomes.shift(), email:rest.shift(), _guess:true});
+      }
+    }
+    if(usados.size) wk.all_emails=[...new Set([...(wk.all_emails||[]), ...usados])];
   }
   works._sumario = {total:entries.length, localizados:found.length};
   return works;
@@ -1810,15 +1897,33 @@ function _matchScore(w){
 /* DEDUP por título: o mesmo trabalho às vezes aparece 2× (seção Resumos + seção Artigos).
    Mantém a versão melhor: e-mail que BATE com o nome > mais e-mails > primeira. */
 function _dedupWorks(works){
-  // chave = título COMPLETO + 1º autor → só junta o MESMO trabalho (mesmo título E mesmo autor),
-  // não trabalhos diferentes que por acaso têm o mesmo título.
-  const grupos={}, ordem=[];
+  // Junta o MESMO trabalho (mesmo título E 1º autor COMPATÍVEL) — não junta trabalhos diferentes
+  // que por acaso compartilham título. "Compatível" cobre o caso do mesmo nome com sobrenome
+  // truncado entre a seção de RESUMOS e a EXPANDIDA (ex.: "Arthur Hoffmann" ⊂ "Arthur Hoffmann Kessler").
+  const _compat=(a,b)=>{ a=_norm(a); b=_norm(b); if(!a||!b) return false; if(a===b) return true;
+    const ta=a.split(" "), tb=b.split(" ");
+    return ta[0]===tb[0] && (a.startsWith(b) || b.startsWith(a) || (ta[1]&&ta[1]===tb[1])); };
+  // "mesmo título" = mesmos 8 primeiros termos (a mesma obra pode ser listada 2× com pequena
+  // variação no fim, ex.: "…REVERBERAÇÕES NA FORMAÇÃO" vs "…PARA A FORMAÇÃO"). Exigir TAMBÉM o
+  // 1º autor compatível evita juntar trabalhos realmente diferentes que comecem igual.
+  // chave do título = 8 primeiros termos SÓ alfanuméricos (imune a aspas/pontuação: «"RETRATOS…»
+  // e «RETRATOS…» viram a mesma chave).
+  const _tk=t=>_norm(t).replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(Boolean).slice(0,8).join(" ");
+  const _nomes=w=>new Set((w.authors||[]).map(a=>_norm(a.name)).filter(Boolean));
+  const _mails=w=>new Set((w.authors||[]).map(a=>(a.email||"").toLowerCase()).filter(Boolean));
+  const _interesecta=(A,B)=>{ for(const x of A) if(B.has(x)) return true; return false; };
+  const ordem=[];                                  // cada item = grupo (array de works)
   for(const w of works){
-    const a1=(w.authors&&w.authors[0]&&w.authors[0].name)||"";
-    const k=_norm(w.title||"")+"|"+_norm(a1);
     if(!_norm(w.title||"")){ ordem.push([w]); continue; }   // título vazio = nunca junta
-    if(!grupos[k]){ grupos[k]=[]; ordem.push(grupos[k]); }
-    grupos[k].push(w);
+    const a1=(w.authors&&w.authors[0]&&w.authors[0].name)||"";
+    const nm=_nomes(w), ml=_mails(w);
+    // mesmo título (8 termos) E (1º autor compatível  OU  compartilham um AUTOR  OU um E-MAIL):
+    // as versões "resumo" e "expandida" do mesmo trabalho podem ter ordem/lista de autores diferente,
+    // mas sempre dividem ao menos um autor ou e-mail. Sinal forte e seguro de ser a MESMA obra.
+    const g=ordem.find(grp=> _tk(grp[0].title)===_tk(w.title) && (
+        _compat((grp[0].authors&&grp[0].authors[0]&&grp[0].authors[0].name)||"", a1)
+        || _interesecta(_nomes(grp[0]), nm) || _interesecta(_mails(grp[0]), ml) ));
+    if(g) g.push(w); else ordem.push([w]);
   }
   return ordem.map(g=>{
     if(g.length>1) g.sort((a,b)=> _matchScore(b)-_matchScore(a)
@@ -2658,9 +2763,11 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.3";
+const VERSION = "13.5";
 const VERSION_DATE = "2026-06-04";
 const CHANGELOG = [
+  ["13.5","2026-06-04","pdf_449 fechou os 35/35 e‑mails. Sobre a v13.4: na seção EXPANDIDA o app agora também (a) MONTA os autores que o leitor não conseguia (formato «Sobrenome, Nome» com o número sobrescrito numa linha à parte — aceita sobrenome em CAIXA ALTA ou Capitalizado, incl. acento maiúsculo «CORRÊA»), e (b) completa pela ORDEM do rodapé dentro do MESMO trabalho. Pra não estragar anais de seção única (ex.: 2023), esse modo agressivo só liga quando é mesmo uma 2ª seção (2ª ocorrência do título) ou o trabalho veio sem nenhum autor — nunca reprocessando um bloco que o app já leu. O corte do bloco em «Resumo:» evita pegar e‑mail do trabalho vizinho, e o «de‑duplica» agora junta as 2 versões mesmo com título variando por aspas/pontuação ou autor com sobrenome truncado, e quando compartilham um autor/e‑mail. Resultado pdf_449: 35 e‑mails (os 35 do PDF), 30 endereços únicos, 0 e‑mail trocado, 0 duplicado. Sem regressão (2019, 366, 336, 345, 380 melhorou 7→13, 2023 estável)."],
+  ["13.4","2026-06-04","Conserto do pdf_449 («erro grotesco»): esse anais TEM sumário (formato paginado), mas o leitor do sumário não PARAVA no fim dele — o buffer «vazava» de uma página pra outra e ele continuava inventando títulos-fantasma corpo adentro (211 títulos, ia até a pág 90). Resultado: o corte falhava e caía no modo «artigo único», cuspindo lixo («Tema: Educação», «Programa de Pós‑Graduação»…). Agora o sumário para quando a densidade de títulos despenca (fim real do índice) e reconhece cabeçalhos «GT 1.», «GT 2.». Além disso: (1) anais que lista cada trabalho 2× (Resumos SEM e‑mail + seção Expandida COM e‑mail) — o app vai buscar os e‑mails na seção expandida e PAREIA POR CONTEÚDO do nome (robusto à numeração trocada da fonte); (2) inclui coautores/orientadores que só aparecem na seção expandida; (3) aceita e‑mail com vírgula no domínio («gmail,com»→«gmail.com»); (4) rótulos de seção («Tema:», «Eixo», «GT») não viram mais «autor»; (5) dedup junta as 2 versões mesmo com título levemente diferente. Resultado pdf_449: de 5 registros‑lixo → 121 trabalhos, 28 e‑mails, 0 com nome≠e‑mail. Sem regressão (2019 425, 366 19)."],
   ["13.3","2026-06-04","(1) AVISO «⚠ e‑mail não confere com o nome» na tabela quando o e‑mail não parece ser do autor (o nome não bate com o e‑mail) — entra também no filtro «só problemas» pra você revisar rápido. (2) DEDUP: trabalho que aparece 2× (seção Resumos + seção Artigos do mesmo anais) vira 1 só, mantendo a versão cujo e‑mail BATE com o nome (ex.: pdf_380 «CONSIDERAÇÕES SOBRE A MATERNIDADE» ficou só com rrossigali@…, sem a duplicata com e‑mail errado). Sem regressão."],
   ["13.2","2026-06-04","Dois consertos: (1) GRAVE — autor SEM e-mail nunca mais vai pro Excel/CSV (a exportação agora filtra: só sai quem tem e-mail, sempre). (2) A nota de rodapé de cada autor vai do NÚMERO dele até o PRÓXIMO número (bloco inteiro), então o e-mail é pego mesmo quando QUEBRA de linha (ex.: «1 … E-mail» / «bruna.ehlert@…»). Ex. «A EXPERIÊNCIA CARTOGRÁFICA»: Bruna→bruna.ehlert, Claudete→crempel. Sem regressão."],
   ["13.1","2026-06-04","A regra do número↔rodapé virou GERAL: agora vale pra TODOS os artigos de qualquer PDF (corte por sumário, método antigo e artigo único) — sempre que o autor tiver um número (¹²³…) e a nota com o mesmo número trouxer o e-mail, ele é ligado corretamente, mesmo com dígito dentro do e-mail. Centralizei num único leitor de notas (linha a linha). Sem regressão."],
