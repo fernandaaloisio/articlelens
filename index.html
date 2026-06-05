@@ -442,6 +442,33 @@ let errorsThisRun = [];  // [{name, reason}]
 let curPage = 0;
 // ⚠ verificação: set de chaves "ri|ai" já confirmadas pelo usuário com OK
 const _okSet = new Set();
+// e-mails de um registro que NÃO foram pareados a nenhum autor
+function _orfaosDoRec(r){
+  const jaAtrib=new Set((r.authors||[]).map(a=>(a.email||"").toLowerCase().trim()).filter(Boolean));
+  return [...new Set((r.all_emails||[]).map(e=>(e||"").trim()).filter(Boolean))]
+    .filter(e=>!jaAtrib.has(e.toLowerCase()));
+}
+// adiciona os órfãos como autores reais (nome vazio + _orphan) — 1x por registro
+function _materializarOrfaos(){
+  (allResults||[]).forEach(r=>{
+    if(r._orphansAdded) return;
+    if(!Array.isArray(r.authors)) r.authors=[];
+    _orfaosDoRec(r).forEach(e=> r.authors.push({name:"", email:e, _orphan:true}));
+    r._orphansAdded=true;
+  });
+}
+// uma linha precisa de verificação? (e-mail não confere com nome, inválido, revisar, ou órfão)
+function _precisaVerificar(a){
+  const mm=!!(a.email && a.name && !_emailBate(a.name,a.email));
+  return mm || a._inv || a._revisar || a._orphan;
+}
+// nº de linhas ⚠ ainda NÃO confirmadas com OK
+function _pendentesCount(){
+  _materializarOrfaos(); let n=0;
+  allResults.forEach((r,ri)=>(r.authors||[]).forEach((a,ai)=>{
+    if(_precisaVerificar(a) && !_okSet.has(ri+"|"+ai)) n++; }));
+  return n;
+}
 
 /* =========================================================================
    1. MÓDULO — Leitura de PDF  (PDF.js)
@@ -2451,6 +2478,7 @@ function renderResults(){
   const res = document.getElementById("results");
   if(!allResults.length){ res.classList.remove("show"); return; }
   res.classList.add("show");
+  _materializarOrfaos();   // órfãos viram autores reais ANTES de contar/listar
 
   let nAuthors=0, nEmails=0;
   allResults.forEach(r=>{
@@ -2466,14 +2494,8 @@ function renderResults(){
     const auths = (r.authors&&r.authors.length)?r.authors:[{name:"",email:""}];
     auths.forEach((a,ai)=>flat.push({ri,ai,hasA:!!(r.authors&&r.authors.length),
       title:r.title||"(sem título)", name:a.name||"", email:a.email||"",
-      src:r.source_file||"", corr:a._corr, inv:a._inv, rev:a._revisar,
+      src:r.source_file||"", corr:a._corr, inv:a._inv, rev:a._revisar, _orphan:!!a._orphan,
       mismatch:!!(a.email && a.name && !_emailBate(a.name, a.email))}));
-    // REGRA GERAL: e-mails presentes no bloco mas não pareados a nenhum autor → linha ⚠ (não some)
-    const jaAtrib=new Set((r.authors||[]).map(a=>(a.email||"").toLowerCase().trim()).filter(Boolean));
-    ((r.all_emails||[]).filter(e=>e&&e.trim()&&!jaAtrib.has(e.toLowerCase().trim()))).forEach(e=>{
-      const ai2=-(flat.length+1); // índice sintético negativo → não edita o array real
-      flat.push({ri,ai:ai2,hasA:true,title:r.title||"(sem título)",name:"",email:e.trim(),
-        src:r.source_file||"",corr:false,inv:false,rev:false,mismatch:true,_orphan:true}); });
   });
   const totalFlat = flat.length;
   // ⚠ pendentes (⚠ && não confirmados com OK) ficam SEMPRE no topo, independente de filtro/página
@@ -2495,12 +2517,7 @@ function renderResults(){
   const slice = flat.slice(curPage*PAGE_SIZE, curPage*PAGE_SIZE+PAGE_SIZE);
 
   // banner de pendentes
-  const nPend = flat.filter(x=>pendente(x)).length;   // usa o flat JÁ filtrado pela busca
-  const allPend = allResults.reduce((s,r,ri)=>{
-    const auths=(r.authors||[]);const jaAtrib=new Set(auths.map(a=>(a.email||"").toLowerCase().trim()).filter(Boolean));
-    const orphans=((r.all_emails||[]).filter(e=>e&&e.trim()&&!jaAtrib.has(e.toLowerCase().trim()))).length;
-    return s + auths.filter((a,ai)=>{ const mm=!!(a.email&&a.name&&!_emailBate(a.name,a.email));
-      return (mm||a._inv||a._revisar) && !_okSet.has(ri+"|"+ai); }).length + orphans; }, 0);
+  const allPend = _pendentesCount();
   let bannerEl = document.getElementById("pendBanner");
   if(!bannerEl){ bannerEl=document.createElement("div"); bannerEl.id="pendBanner";
     const tbl=document.querySelector(".table-wrap"); if(tbl) tbl.parentNode.insertBefore(bannerEl,tbl); }
@@ -2748,11 +2765,7 @@ document.getElementById("clearResults").onclick = ()=>{
 function _exp(fn){
   if(!allResults.length){ toast("Nada para exportar.","warn"); return; }
   // bloqueia se houver ⚠ pendentes (não confirmados com OK)
-  const pend = allResults.reduce((s,r,ri)=>{
-    const auths=r.authors||[];const jaAtrib=new Set(auths.map(a=>(a.email||"").toLowerCase().trim()).filter(Boolean));
-    const orphans=((r.all_emails||[]).filter(e=>e&&e.trim()&&!jaAtrib.has(e.toLowerCase().trim()))).filter((_,idx)=>!_okSet.has(ri+"|"+-(idx+1))).length;
-    return s + auths.filter((a,ai)=>{ const mm=!!(a.email&&a.name&&!_emailBate(a.name,a.email));
-      return (mm||a._inv||a._revisar) && !_okSet.has(ri+"|"+ai); }).length; }, 0);
+  const pend = _pendentesCount();
   if(pend>0){
     toast("⚠️ "+pend+" linha"+(pend>1?"s":"")+" ainda não verificada"+(pend>1?"s":"")+". Confirme todas com OK antes de exportar.","warn");
     return;
