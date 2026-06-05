@@ -440,6 +440,8 @@ let fileQueue = [];      // [{file, status, error, result}]
 let allResults = [];     // ArticleRecord[]
 let errorsThisRun = [];  // [{name, reason}]
 let curPage = 0;
+// ⚠ verificação: set de chaves "ri|ai" já confirmadas pelo usuário com OK
+const _okSet = new Set();
 
 /* =========================================================================
    1. MÓDULO — Leitura de PDF  (PDF.js)
@@ -2125,7 +2127,7 @@ function excluirSemEmail(){
   lastRemovidosFull = allResults.filter(r=>!(r.authors||[]).length);     // registros completos (p/ recuperar via IA)
   lastRemovidos = lastRemovidosFull.map(r=>({title:r.title||"(sem título)", source:r.source_file||"",
                                       temArroba: /@/.test(r._raw||"")}));
-  allResults.length=0; allResults.push(...fica);
+  allResults.length=0; allResults.push(...fica); _okSet.clear();
   return {autRem, trabRem: lastRemovidos.length,
           remComArroba: lastRemovidos.filter(r=>r.temArroba).length};
 }
@@ -2150,7 +2152,7 @@ async function processBatch(){
         const txt = await item.file.text();
         recs = [await extractFromHTML(txt, item.file.name)];
       }
-      item.result = recs; allResults.push(...recs);
+      item.result = recs; allResults.push(...recs); _okSet.clear();
       item.status = "concluido";
     }catch(err){
       item.status = "erro"; item.error = err.message;
@@ -2466,12 +2468,23 @@ function renderResults(){
       title:r.title||"(sem título)", name:a.name||"", email:a.email||"",
       src:r.source_file||"", corr:a._corr, inv:a._inv, rev:a._revisar,
       mismatch:!!(a.email && a.name && !_emailBate(a.name, a.email))}));
+    // REGRA GERAL: e-mails presentes no bloco mas não pareados a nenhum autor → linha ⚠ (não some)
+    const jaAtrib=new Set((r.authors||[]).map(a=>(a.email||"").toLowerCase().trim()).filter(Boolean));
+    ((r.all_emails||[]).filter(e=>e&&e.trim()&&!jaAtrib.has(e.toLowerCase().trim()))).forEach(e=>{
+      const ai2=-(flat.length+1); // índice sintético negativo → não edita o array real
+      flat.push({ri,ai:ai2,hasA:true,title:r.title||"(sem título)",name:"",email:e.trim(),
+        src:r.source_file||"",corr:false,inv:false,rev:false,mismatch:true,_orphan:true}); });
   });
   const totalFlat = flat.length;
+  // ⚠ pendentes (⚠ && não confirmados com OK) ficam SEMPRE no topo, independente de filtro/página
+  const _okKey = x => x.ri+"|"+x.ai;
+  const ehAlerta = x => !!(x.mismatch || x.inv || x.rev || x._orphan);
+  const pendente  = x => ehAlerta(x) && !_okSet.has(_okKey(x));
+  flat.sort((a,b)=>{ const pa=pendente(a)?0:1, pb=pendente(b)?0:1; return pa-pb; });
   // 🔍 filtro: busca + "só problemas"
   const q = _norm((document.getElementById("resSearch")||{}).value||"").trim();
   const onlyProb = !!(document.getElementById("resOnlyProb")||{}).checked;
-  const ehProblema = x => x.inv || x.rev || x.mismatch || tituloSuspeito(x.title) || nomeQuebrado(x.name, x.email)
+  const ehProblema = x => x.inv || x.rev || x.mismatch || x._orphan || tituloSuspeito(x.title) || nomeQuebrado(x.name, x.email)
                           || /\b(de|da|do|e|em|para|com|no|na)$/i.test((x.title||"").trim());  // título cortado no fim
   if(q) flat = flat.filter(x=>_norm(x.title+" "+x.name+" "+x.email).includes(q));
   if(onlyProb) flat = flat.filter(ehProblema);
@@ -2481,17 +2494,44 @@ function renderResults(){
   if(curPage>=pages) curPage = pages-1;
   const slice = flat.slice(curPage*PAGE_SIZE, curPage*PAGE_SIZE+PAGE_SIZE);
 
+  // banner de pendentes
+  const nPend = flat.filter(x=>pendente(x)).length;   // usa o flat JÁ filtrado pela busca
+  const allPend = allResults.reduce((s,r,ri)=>{
+    const auths=(r.authors||[]);const jaAtrib=new Set(auths.map(a=>(a.email||"").toLowerCase().trim()).filter(Boolean));
+    const orphans=((r.all_emails||[]).filter(e=>e&&e.trim()&&!jaAtrib.has(e.toLowerCase().trim()))).length;
+    return s + auths.filter((a,ai)=>{ const mm=!!(a.email&&a.name&&!_emailBate(a.name,a.email));
+      return (mm||a._inv||a._revisar) && !_okSet.has(ri+"|"+ai); }).length + orphans; }, 0);
+  let bannerEl = document.getElementById("pendBanner");
+  if(!bannerEl){ bannerEl=document.createElement("div"); bannerEl.id="pendBanner";
+    const tbl=document.querySelector(".table-wrap"); if(tbl) tbl.parentNode.insertBefore(bannerEl,tbl); }
+  if(allPend>0){
+    bannerEl.style.cssText="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;display:flex;align-items:center;gap:10px";
+    bannerEl.innerHTML='<span>⚠️ <b>'+allPend+' linha'+(allPend>1?'s':'')+' aguardando verificação.</b> Confirme cada ⚠ com <b>OK</b> antes de exportar.</span>';
+  } else {
+    bannerEl.style.display="none";
+  }
+
   const body = document.getElementById("resultBody");
   body.innerHTML = "";
   slice.forEach((r,i)=>{
-    const badge = (r.mismatch ? '<span class="badge-inv" title="O e‑mail não parece ser deste autor (o nome não bate com o e‑mail). Confira/edite.">⚠ e‑mail não confere com o nome</span> ' : '')
+    const isOrphan = !!r._orphan;
+    const isPend   = pendente(r);
+    const badge = (isOrphan
+        ? '<span class="badge-inv" title="E‑mail encontrado no PDF mas não foi possível identificar o autor. Edite o nome ao lado.">⚠ autor não identificado</span> '
+        : (r.mismatch ? '<span class="badge-inv" title="O e‑mail não parece ser deste autor (o nome não bate com o e‑mail). Confira/edite.">⚠ e‑mail não confere com o nome</span> ' : ''))
                  + (r.rev ? '<span class="badge-inv" title="nome só com iniciais — confira o 1º nome">⚠ revisar</span> ' : '')
                  + (r.corr ? '<span class="badge-corr" title="corrigido pelo validador">corrigido</span>'
                  : r.inv ? '<span class="badge-inv" title="formato inválido — revise">inválido</span>' : '');
     const cls = r.inv ? 'email einv' : (r.corr ? 'email ecorr' : 'email');
     const di = ' data-ri="'+r.ri+'" data-ai="'+r.ai+'"';
     const ed = ' contenteditable="true"';
+    const okBtn = isPend
+      ? '<button class="btn-ok-pend" data-ok-ri="'+r.ri+'" data-ok-ai="'+r.ai+'" title="Confirmar — linha vai para a posição normal" style="margin-left:6px;padding:2px 10px;font-size:12px;background:#28a745;color:#fff;border:none;border-radius:5px;cursor:pointer">OK</button>'
+      : '';
+    const rowStyle = isPend ? ' style="background:#fff8e1;"' : '';
     const tr = document.createElement("tr");
+    tr.setAttribute("data-row-key", _okKey(r));
+    if(isPend) tr.style.background="#fff8e1";
     tr.innerHTML =
       '<td class="idx">'+(curPage*PAGE_SIZE+i+1)+'</td>'+
       '<td'+ed+di+' data-field="title" title="clique para editar">'+escapeHtml(r.title)+'</td>'+
@@ -2499,8 +2539,14 @@ function renderResults(){
         ? '<td'+ed+di+' data-field="name">'+escapeHtml(r.name||"")+'</td>'+
           '<td class="'+cls+'"'+ed+di+' data-field="email">'+escapeHtml(r.email)+'</td>'
         : '<td>—</td><td>—</td>')+
-      '<td>'+badge+'</td>';
+      '<td>'+badge+okBtn+'</td>';
     body.appendChild(tr);
+  });
+  // delega clique nos botões OK
+  body.querySelectorAll(".btn-ok-pend").forEach(btn=>{
+    btn.onclick = ()=>{
+      const key=btn.dataset.okRi+"|"+btn.dataset.okAi; _okSet.add(key); renderResults();
+    };
   });
 
   document.getElementById("pageInfo").textContent =
@@ -2689,19 +2735,31 @@ document.getElementById("extractBtn").onclick = ()=>{
   else toast("Adicione arquivos ou use as abas HTML/Manual.", "warn");
 };
 document.getElementById("clearAll").onclick = ()=>{
-  fileQueue=[]; allResults=[]; errorsThisRun=[]; curPage=0;
+  fileQueue=[]; allResults=[]; errorsThisRun=[]; curPage=0; _okSet.clear();
   renderFileQueue(); renderResults();
   document.getElementById("progMeter").style.width="0%";
   setStatus("Tudo limpo. Pronto para um novo lote.");
 };
 document.getElementById("clearResults").onclick = ()=>{
-  allResults=[]; errorsThisRun=[]; curPage=0; renderResults();
+  allResults=[]; errorsThisRun=[]; curPage=0; _okSet.clear(); renderResults();
   setStatus("Resultados limpos.");
 };
 
-function _exp(fn){ if(!allResults.length){ toast("Nada para exportar.","warn"); return; }
+function _exp(fn){
+  if(!allResults.length){ toast("Nada para exportar.","warn"); return; }
+  // bloqueia se houver ⚠ pendentes (não confirmados com OK)
+  const pend = allResults.reduce((s,r,ri)=>{
+    const auths=r.authors||[];const jaAtrib=new Set(auths.map(a=>(a.email||"").toLowerCase().trim()).filter(Boolean));
+    const orphans=((r.all_emails||[]).filter(e=>e&&e.trim()&&!jaAtrib.has(e.toLowerCase().trim()))).filter((_,idx)=>!_okSet.has(ri+"|"+-(idx+1))).length;
+    return s + auths.filter((a,ai)=>{ const mm=!!(a.email&&a.name&&!_emailBate(a.name,a.email));
+      return (mm||a._inv||a._revisar) && !_okSet.has(ri+"|"+ai); }).length; }, 0);
+  if(pend>0){
+    toast("⚠️ "+pend+" linha"+(pend>1?"s":"")+" ainda não verificada"+(pend>1?"s":"")+". Confirme todas com OK antes de exportar.","warn");
+    return;
+  }
   try{ pipeStep(5,"done"); fn(allResults); }
-  catch(e){ console.warn("export:",e); toast("Erro ao exportar: "+e.message,"err"); } }
+  catch(e){ console.warn("export:",e); toast("Erro ao exportar: "+e.message,"err"); }
+}
 document.getElementById("expCsv").onclick  = ()=>_exp(exportCSV);
 document.getElementById("expXlsx").onclick = ()=>_exp(exportXLSX);
 document.getElementById("expJson").onclick = ()=>_exp(exportJSON);
@@ -2875,9 +2933,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.10";
+const VERSION = "13.11";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.11","2026-06-05","Verificação obrigatória antes do export: (1) Todo e‑mail com ⚠ aparece na tabela — inclusive e‑mails encontrados no PDF que não foram ligados a nenhum autor (antes sumiam em silêncio, agora aparecem com «⚠ autor não identificado» pra você preencher/confirmar). (2) Linhas com ⚠ não confirmadas ficam no TOPO da tabela com fundo amarelo e botão OK. (3) Ao clicar OK a linha vai para a posição normal. (4) Export (CSV/Excel/JSON) fica BLOQUEADO enquanto houver qualquer ⚠ pendente — uma mensagem diz quantas faltam. Assim a planilha só sai quando você validou tudo."],
   ["13.10","2026-06-05","Trabalhos que ficaram FORA do sumário agora são recuperados. Alguns anais têm sumário incompleto (não listam todos os trabalhos) — antes o app só pegava os do sumário. Agora ele varre o corpo e acrescenta os trabalhos que não estavam no índice, MAS só quando consegue ler limpo (≥3 e‑mails que batem com o nome do autor) — gate forte pra nunca trazer trabalho‑lixo. No anais de enfermagem (56dbda) recuperou o «SAÚDE MENTAL: DESAFIOS DA ASSISTÊNCIA…» (faltava no sumário) → 72 de 73 e‑mails únicos. No de 2023 trouxe +6 trabalhos / +25 e‑mails sem nenhum erro novo. Zero regressão nos demais (449, SMENF, 366, 380, 336)."],
   ["13.9","2026-06-05","Mais um formato de lista de autores: quando os autores são numerados com «(1) (2) (3)…» em vez de «;» (ex.: «Fulano (1) Beltrano (2) …» + notas «(N) … E‑mail: x»), o app agora separa os nomes por esses marcadores e liga cada um ao e‑mail por conteúdo. Recuperou os e‑mails do trabalho «EDUCAÇÃO EM SAÚDE NA ESCOLA: UMA DISCUSSÃO SOBRE CORPO…» (8 autores). Sem regressão (449/SMENF/366/380/336/2023 iguais)."],
   ["13.8","2026-06-05","Mais e‑mails em anais de saúde com MUITOS autores por trabalho (lista separada por «;» + afiliação com «E‑mail:» embutido, ex.: UERN‑PMM). Antes, em trabalhos de 8‑9 autores o app confundia o nome com a linha de afiliação e perdia metade dos e‑mails. Agora reconhece a lista por «;», junta os nomes (mesmo quebrados em 2 linhas) e liga cada autor ao e‑mail pelo CONTEÚDO do nome. Também ignora e‑mails institucionais (callcenter@, secretaria@, faen@…). Só dispara nesse formato (nomes sem vírgula interna), então não mexe nos outros (449 segue 35, SMENF 166, 366/380/336 iguais; 2023 ganhou alguns). Obs.: nesse tipo de anais, trabalhos com texto muito bagunçado (frase do corpo no lugar do autor) ainda saem com o aviso ⚠ pra você revisar."],
