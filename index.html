@@ -846,7 +846,7 @@ function validPname(n){
   if(/^(tema|eixo|grupo|sess[ãa]o|modalidade|[áa]rea|gt|categoria|subtema|linha de pesquisa|p[óo]ster|resumo|sum[áa]rio|anais)\b/i.test(n)) return false;
   // rejeita "nome" que é FRASE/texto do corpo ("Segundo a Organização Mundial", "UTI . Os recém-")
   if(/^(segundo|conforme|uti|os|as|um|uma|este|esta|esse|essa|no|na|sobre|quando|ap[óo]s|durante|para|com|pela|pelo|neste|nesta|portanto|assim|dessa|desse)\s/i.test(n)) return false;
-  if(/\s\.\s|organiza[çc][ãa]o|mundial|rec[ée]m|neonatal|terapia intensiva|unidade de|munic[íi]pio|secretaria/i.test(n)) return false;
+  if(/\s\.\s|organiza[çc][ãa]o|mundial|rec[ée]m|neonatal|terapia intensiva|unidade de|munic[íi]pio|secretaria|c[âa]mpus|universidad|faculdad|instituto federal/i.test(n)) return false;
   return toks.filter(w=>/^[A-ZÀ-Ý]/.test(w)).length >= 2;
 }
 function splitAuthorsSeg(seg){
@@ -2308,15 +2308,10 @@ async function processBatch(){
     const fmt = descreverFormato(allResults);
     if(fmt) setStatus("Formato detectado (sem IA): <b>"+escapeHtml(fmt)+"</b>");
     const todosAlvos = allResults.filter(casoDificil);
-    // Com Haiku (barato) resolvemos TODOS os casos com ⚠ — sem amostrar — pros erros realmente
-    // pararem. (Amostra só entra se o usuário ligar "amostra" E o lote for enorme, p/ cortar custo.)
-    let alvos, amostraInfo=null;
-    if(AI.sample===true && todosAlvos.length>40){
-      alvos = amostrarPorFormato(todosAlvos, AI.sameFormat===false);
-      amostraInfo = { total: todosAlvos.length, conferidos: alvos.length };
-    } else {
-      alvos = todosAlvos.slice(0, 600);
-    }
+    // Com Haiku (barato) resolvemos TODOS os casos com ⚠ — SEM amostrar — pros erros realmente
+    // pararem. (A "amostra" virava o calcanhar: deixava a maioria dos trabalhos sem conferir.)
+    let alvos = todosAlvos.slice(0, 800), amostraInfo=null;
+    if(todosAlvos.length>800){ amostraInfo={ total: todosAlvos.length, conferidos: 800 }; }   // só p/ avisar o teto
     if(alvos.length){
       setStatus("🧠 IA conferindo "+alvos.length+(amostraInfo?(" de "+amostraInfo.total+" casos (amostra por formato)"):" casos")+" — título/nome/dono do e‑mail…");
       let nTit=0, nEmail=0, nNomes=0, nFail=0, lastErr="";
@@ -3109,9 +3104,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.17";
+const VERSION = "13.18";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.18","2026-06-05","Conserto importante: a IA estava AMOSTRANDO (conferia só alguns trabalhos) em PDFs grandes — por isso o 1º trabalho saía perfeito e o resto ficava com lixo (afiliação «Câmpus … UNITINS» no lugar do nome, nomes vazios). Agora a IA confere TODOS os trabalhos com ⚠ (Haiku é barato), então o erro não fica só num pedaço. Também: afiliação («Câmpus…», «Universidade…») nunca mais vira nome de autor. Obs.: em PDFs grandes a coleta com IA demora mais (1‑3 min) — é a IA conferindo trabalho por trabalho."],
   ["13.17","2026-06-05","📚 MEMÓRIA PERMANENTE DE APRENDIZADO: o app agora LEMBRA, pra sempre, o nome de cada e‑mail que já foi acertado (pela IA, por bater com o nome, ou por você corrigir na mão). Nos próximos PDFs, qualquer e‑mail já conhecido recebe o nome NA HORA, sem IA — então a IA é usada cada vez MENOS e o custo cai com o tempo (é o «aprende sozinho»). A memória aparece na aba 🧠 IA (quantos e‑mails sabe) com Exportar/Importar (backup) e Limpar. Trava: só aprende par confiável (nunca um chute por ordem) e ignora e‑mail institucional. Funciona até com a IA desligada."],
   ["13.16","2026-06-05","A IA agora RESOLVE os trabalhos com ⚠ (sua ideia: regra faz o fácil, IA faz o difícil). Com a IA ligada, todo trabalho que sobrou com problema (nome≠e‑mail, e‑mail sem dono, nome quebrado, e‑mail órfão) é enviado ao Haiku (barato), que lê o texto cru e devolve os pares autor↔e‑mail certos — imune ao formato (com/sem traço, número, ; etc.). O resultado vira autoritativo e some o ⚠ (marca «conferido pela IA»). Travas: nunca reduz a quantidade de e‑mails já coletados, só usa e‑mail que está no texto, e ignora e‑mail institucional. Agora processa TODOS os casos (sem amostrar) porque o Haiku é barato. Se a IA estiver desligada, nada muda (regras como antes)."],
   ["13.15","2026-06-05","Trocar de modelo (custo) ficou fácil: na aba 🧠 IA tem agora um SELETOR de modelo com o custo do lado — 🟢 Haiku (barato, recomendado) · 🟡 Sonnet · 🔴 Opus (caro). Escolher já salva. O padrão do app passou a ser o Haiku (≈20× mais barato que o Opus) — basta pro app ler texto e achar autor/e‑mail. NÃO precisa de chave nova: a MESMA chave da Anthropic acessa todos os modelos. Para sair do Opus: aba IA → Modelo (custo) → 🟢 Haiku 3.5."],
