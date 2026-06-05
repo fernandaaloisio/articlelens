@@ -2769,6 +2769,16 @@ document.getElementById("resSearch").addEventListener("input", ()=>{ curPage=0; 
 document.getElementById("resOnlyProb").addEventListener("change", ()=>{ curPage=0; renderResults(); });
 
 /* Painel de Cobertura — o que entrou e o que saiu (e por quê) */
+/* ACERTO = e‑mails únicos capturados ÷ e‑mails únicos do PDF (a meta da esteira).
+   A IA (verificar/recuperar) só libera com acerto ≥ 75% — abaixo disso há erro demais
+   e o custo da IA dispara; nesses casos compensa o humano revisar o que deu errado. */
+const ACERTO_MIN = 75;
+function _acertoPct(){
+  if(!_emailAlvo || !_emailAlvo.uni.size) return null;   // sem alvo conhecido → não bloqueia
+  const cu=new Set(); allResults.forEach(w=>(w.authors||[]).forEach(a=>{ if(a.email) cu.add(a.email.toLowerCase().trim()); }));
+  return Math.round(100*cu.size/_emailAlvo.uni.size);
+}
+function _iaBloqueada(){ const p=_acertoPct(); return (p!=null && p<ACERTO_MIN) ? p : false; }
 function renderCobertura(ex){
   const box=document.getElementById("coberturaBox"); if(!box) return;
   box.style.display=""; box.open=true;          // já abre o painel (com a verificação) após a coleta
@@ -2826,7 +2836,16 @@ function renderCobertura(ex){
          + ord.slice(0,40).map(r=>"<li>"+(r.temArroba?"⚠️ ":"")+escapeHtml(r.title.slice(0,80))+(r.temArroba?" <i>(tinha e‑mail)</i>":"")+"</li>").join("")
          + (ord.length>40?"<li>…+"+(ord.length-40)+"</li>":"") + "</ul>";
   } else html += "<br>Nenhum trabalho removido por falta de e‑mail.";
+  // GATE da IA: só libera verificar/recuperar com acerto ≥ 75% (senão o gasto da IA dispara).
+  const _pctIA=_acertoPct(), _bloq=(_pctIA!=null && _pctIA<ACERTO_MIN);
+  if(_bloq) html += "<br><br><b style='color:var(--danger)'>⛔ IA bloqueada</b> — acerto <b>"+_pctIA+"%</b> (mínimo "+ACERTO_MIN+"%). "
+    + "Abaixo disso há erro demais e o custo da IA dispara; compensa você revisar manualmente o que deu errado antes de usar a IA.";
   document.getElementById("coberturaBody").innerHTML = html;
+  ["verificarIA","recupFalta"].forEach(id=>{ const b=document.getElementById(id); if(!b) return;
+    b.disabled=_bloq;
+    b.title=_bloq ? ("Bloqueado: acerto "+_pctIA+"% (< "+ACERTO_MIN+"%). Reveja manualmente — a IA sairia cara.") : "";
+    b.style.opacity=_bloq?"0.5":""; b.style.cursor=_bloq?"not-allowed":"";
+  });
 }
 /* VERIFICAÇÃO PELA IA — só nos casos INCERTOS (barato). Responde as 3 perguntas:
    1) todos analisados? (determinístico, do sumário)  2) excluídos realmente sem e-mail? (IA tenta
@@ -2864,6 +2883,7 @@ async function _aiAplicarGrupo(grupo, modo, contador){
    e-mail = cabeçalho do trabalho) e manda a IA achar o autor + título. Fecha a esteira na ponta. */
 async function recuperarFaltantesIA(){
   const vb=document.getElementById("verifBody"), btn=document.getElementById("recupFalta");
+  const _bp=_iaBloqueada(); if(_bp){ toast("IA bloqueada: acerto "+_bp+"% (< "+ACERTO_MIN+"%). Reveja manualmente.","warn"); if(vb) vb.innerHTML="<b style='color:var(--danger)'>⛔ IA bloqueada</b> — acerto "+_bp+"% (mínimo "+ACERTO_MIN+"%)."; return; }
   if(!AI.enabled){ toast("Ligue a IA (aba 🧠 IA) antes de recuperar.","warn"); return; }
   const capt=new Set(); allResults.forEach(w=>(w.authors||[]).forEach(a=>{ if(a.email) capt.add(a.email.toLowerCase().trim()); }));
   const faltam=[...(_emailAlvo?_emailAlvo.uni:[])].filter(e=>!capt.has(e));
@@ -2903,6 +2923,7 @@ async function recuperarFaltantesIA(){
 }
 async function verificarIncertosIA(){
   const vb=document.getElementById("verifBody"), btn=document.getElementById("verificarIA");
+  const _bp=_iaBloqueada(); if(_bp){ toast("IA bloqueada: acerto "+_bp+"% (< "+ACERTO_MIN+"%). Reveja manualmente.","warn"); if(vb) vb.innerHTML="<b style='color:var(--danger)'>⛔ IA bloqueada</b> — acerto "+_bp+"% (mínimo "+ACERTO_MIN+"%)."; return; }
   if(!AI.enabled){ toast("Ligue a IA (aba 🧠 IA) antes de verificar.","warn"); return; }
   if(btn){ btn.disabled=true; btn.textContent="🔍 Verificando…"; }
   try{
@@ -3254,9 +3275,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.26";
+const VERSION = "13.27";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.27","2026-06-05","Trava de custo da IA: os botões 🔍 Verificar e 🔎 Recuperar só liberam com ACERTO ≥ 75% (e‑mails únicos capturados ÷ e‑mails do PDF). Abaixo disso eles ficam desabilitados e a Cobertura avisa «⛔ IA bloqueada» — porque com muito erro o gasto da IA dispara, e nesses casos compensa revisar manualmente o que deu errado. A lupa de cada linha continua livre (é a revisão manual, 1 por vez)."],
   ["13.26","2026-06-05","Voltou o download na Cobertura: botão «⬇️ Baixar relatório (.csv)» no painel 📊 Cobertura. O relatório traz tudo: trabalhos coletados × sumário, e‑mails únicos no PDF × capturados (com a %), custo total e por e‑mail (vs meta R$ 0,06), a LISTA dos e‑mails que não entraram e os trabalhos removidos sem e‑mail. (Substituiu, com vantagem, o antigo «baixar removidos».)"],
   ["13.25","2026-06-05","Custo por e‑mail com META: o «Custo por e‑mail» (Última coleta) agora mostra ✅ se ficou ≤ R$ 0,06 ou ❌ se passou — e PASSOU a incluir o gasto da VERIFICAÇÃO (🔍 lupa) e da RECUPERAÇÃO (🔎), não só o da coleta. Assim o número reflete o custo real por e‑mail, somando tudo que a IA gastou naquela coleta."],
   ["13.24","2026-06-05","Conserto GRAVE: trabalhos apareciam com o NOME do autor mas SEM e‑mail (o nome e o e‑mail eram extraídos, mas ficavam em linhas separadas, sem parear). Agora, dentro de cada trabalho, o autor que ficou só com nome recebe o e‑mail solto do mesmo trabalho (1º pelo conteúdo do nome, depois pela ordem do rodapé). Roda antes de excluir/exportar. Isso junta as duas metades e tira os «nome sem e‑mail» da pré‑visualização."],
