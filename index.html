@@ -444,11 +444,22 @@ let curPage = 0;
 const _okSet = new Set();
 // admin pula a verificação obrigatória (baixa direto). Só o login "user" é obrigado a dar OK.
 function _ehAdmin(){ try{ return localStorage.getItem(AUTH_KEY) !== "user"; }catch(_){ return true; } }
-// e-mails de um registro que NÃO foram pareados a nenhum autor
+// e-mail INSTITUCIONAL (caixa de setor, não de autor) — call center, secretaria, ouvidoria, etc.
+const _EMAIL_INST=/^(callcenter|contato|secretaria|secretariado|ouvidoria|atendimento|sac|imprensa|comunica[çc][ãa]o|coordena[çc][ãa]o|reitoria|diretoria|webmaster|biblioteca|n[úu]cleo|faen|den|revista|editora|anais|evento|congresso|simp[óo]sio|semin[áa]rio)\b/i;
+function _emailInstitucional(e){ return _EMAIL_INST.test((String(e).split("@")[0]||"")); }
+// e-mails de um registro que NÃO foram pareados a nenhum autor (ignora institucionais)
 function _orfaosDoRec(r){
   const jaAtrib=new Set((r.authors||[]).map(a=>(a.email||"").toLowerCase().trim()).filter(Boolean));
   return [...new Set((r.all_emails||[]).map(e=>(e||"").trim()).filter(Boolean))]
-    .filter(e=>!jaAtrib.has(e.toLowerCase()));
+    .filter(e=>!jaAtrib.has(e.toLowerCase()) && !_emailInstitucional(e));
+}
+// remove e-mail institucional que foi parar em algum autor (não é e-mail de pessoa) — 1x por coleta
+let _instLimpoFeito=false;
+function _limparInstitucional(){
+  if(_instLimpoFeito) return; _instLimpoFeito=true;
+  (allResults||[]).forEach(r=>(r.authors||[]).forEach(a=>{
+    if(a.email && _emailInstitucional(a.email)){ a.email=""; a._inst=true; }
+  }));
 }
 // REUSO DE NOME POR E-MAIL: o MESMO e-mail costuma vir com o nome certo num artigo e sem nome
 // (ou com nome errado) em outro. Constrói um mapa e-mail→nome a partir SÓ dos pareamentos CONFIÁVEIS
@@ -756,6 +767,7 @@ function _norm(s){ return s.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase(
 function cleanAuthor(s){
   s = s.replace(/[\d*†‡§¹²³⁰⁴⁵⁶⁷⁸⁹]/g,""); let p=null;   // tira dígitos ASCII E superscritos (¹²³…) colados no nome
   while(p!==s){ p=s; s=s.replace(PROFPRE_JS,"").trim(); }
+  s = s.replace(/\(\s*\)/g," ");                          // tira parênteses vazios "()" / "( )" que sobraram do "(N)"
   return s.replace(/\s+/g," ").trim().replace(/^[ ,;.\-]+|[ ,;.\-]+$/g,"");
 }
 function validPname(n){
@@ -766,6 +778,9 @@ function validPname(n){
   if(/^([A-Z]|[IVXLCDM]{1,6})$/.test(toks[0])) return false;
   // rejeita rótulos de SEÇÃO/eixo temático que se passam por autor ("Tema: Educação", "Eixo 2", "GT 3 …")
   if(/^(tema|eixo|grupo|sess[ãa]o|modalidade|[áa]rea|gt|categoria|subtema|linha de pesquisa|p[óo]ster|resumo|sum[áa]rio|anais)\b/i.test(n)) return false;
+  // rejeita "nome" que é FRASE/texto do corpo ("Segundo a Organização Mundial", "UTI . Os recém-")
+  if(/^(segundo|conforme|uti|os|as|um|uma|este|esta|esse|essa|no|na|sobre|quando|ap[óo]s|durante|para|com|pela|pelo|neste|nesta|portanto|assim|dessa|desse)\s/i.test(n)) return false;
+  if(/\s\.\s|organiza[çc][ãa]o|mundial|rec[ée]m|neonatal|terapia intensiva|unidade de|munic[íi]pio|secretaria/i.test(n)) return false;
   return toks.filter(w=>/^[A-ZÀ-Ý]/.test(w)).length >= 2;
 }
 function splitAuthorsSeg(seg){
@@ -2175,7 +2190,7 @@ function excluirSemEmail(){
   lastRemovidosFull = allResults.filter(r=>!(r.authors||[]).length);     // registros completos (p/ recuperar via IA)
   lastRemovidos = lastRemovidosFull.map(r=>({title:r.title||"(sem título)", source:r.source_file||"",
                                       temArroba: /@/.test(r._raw||"")}));
-  allResults.length=0; allResults.push(...fica); _okSet.clear(); _nomesReuFeito=false;
+  allResults.length=0; allResults.push(...fica); _okSet.clear(); _nomesReuFeito=false; _instLimpoFeito=false;
   return {autRem, trabRem: lastRemovidos.length,
           remComArroba: lastRemovidos.filter(r=>r.temArroba).length};
 }
@@ -2200,7 +2215,7 @@ async function processBatch(){
         const txt = await item.file.text();
         recs = [await extractFromHTML(txt, item.file.name)];
       }
-      item.result = recs; allResults.push(...recs); _okSet.clear(); _nomesReuFeito=false;
+      item.result = recs; allResults.push(...recs); _okSet.clear(); _nomesReuFeito=false; _instLimpoFeito=false;
       item.status = "concluido";
     }catch(err){
       item.status = "erro"; item.error = err.message;
@@ -2499,6 +2514,7 @@ function renderResults(){
   const res = document.getElementById("results");
   if(!allResults.length){ res.classList.remove("show"); return; }
   res.classList.add("show");
+  _limparInstitucional();        // remove e-mail de setor (callcenter@, secretaria@…) que virou autor
   _materializarOrfaos();         // órfãos viram autores reais ANTES de contar/listar
   _reusarNomesPorEmail();        // reusa nome de e-mail já pareado com sucesso em outro artigo
 
@@ -2777,13 +2793,13 @@ document.getElementById("extractBtn").onclick = ()=>{
   else toast("Adicione arquivos ou use as abas HTML/Manual.", "warn");
 };
 document.getElementById("clearAll").onclick = ()=>{
-  fileQueue=[]; allResults=[]; errorsThisRun=[]; curPage=0; _okSet.clear(); _nomesReuFeito=false;
+  fileQueue=[]; allResults=[]; errorsThisRun=[]; curPage=0; _okSet.clear(); _nomesReuFeito=false; _instLimpoFeito=false;
   renderFileQueue(); renderResults();
   document.getElementById("progMeter").style.width="0%";
   setStatus("Tudo limpo. Pronto para um novo lote.");
 };
 document.getElementById("clearResults").onclick = ()=>{
-  allResults=[]; errorsThisRun=[]; curPage=0; _okSet.clear(); _nomesReuFeito=false; renderResults();
+  allResults=[]; errorsThisRun=[]; curPage=0; _okSet.clear(); _nomesReuFeito=false; _instLimpoFeito=false; renderResults();
   setStatus("Resultados limpos.");
 };
 
@@ -2971,9 +2987,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.13";
+const VERSION = "13.14";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.14","2026-06-05","Menos lixo nos avisos: (1) e‑mail INSTITUCIONAL (callcenter@, secretaria@, ouvidoria@, faen@…) não entra mais como se fosse do autor — é descartado. (2) «Nome» que na verdade é frase/texto do corpo («Segundo a Organização Mundial…», «UTI. Os recém…», «Unidade de Cuidados…») é rejeitado. (3) Parênteses vazios «()» que sobravam do «(N)» são limpos do nome. No 56dbda os avisos caíram de ~25 para ~16 (a maioria do que sobra é apelido de e‑mail correto, ex.: thatig=Thatiane, que só precisa do seu OK). Sem regressão (filtro institucional remove 0 e‑mails reais nos outros anais)."],
   ["13.13","2026-06-05","(1) REUSO DE NOME PELO E‑MAIL: o mesmo autor aparece em vários trabalhos; quando o nome dele JÁ foi pego certo num artigo (o nome bate com o e‑mail) e em outro o nome veio em branco ou errado, o app agora REPETE o nome certo. Reduziu muito os e‑mails sem nome e os «não confere». (2) As linhas com ⚠ ficam na frente (topo, amarelo) também para o ADMIN — pra revisar rápido — mas o admin continua baixando direto, sem precisar dar OK (o bloqueio é só do login usuário)."],
   ["13.12","2026-06-05","A verificação obrigatória (⚠ no topo + botão OK + export bloqueado) agora vale SÓ para o login de USUÁRIO. O ADMIN baixa direto, sem precisar dar OK em cada linha — vê os avisos ⚠ como informação, mas a planilha sai na hora e na ordem normal."],
   ["13.11","2026-06-05","Verificação obrigatória antes do export: (1) Todo e‑mail com ⚠ aparece na tabela — inclusive e‑mails encontrados no PDF que não foram ligados a nenhum autor (antes sumiam em silêncio, agora aparecem com «⚠ autor não identificado» pra você preencher/confirmar). (2) Linhas com ⚠ não confirmadas ficam no TOPO da tabela com fundo amarelo e botão OK. (3) Ao clicar OK a linha vai para a posição normal. (4) Export (CSV/Excel/JSON) fica BLOQUEADO enquanto houver qualquer ⚠ pendente — uma mensagem diz quantas faltam. Assim a planilha só sai quando você validou tudo."],
