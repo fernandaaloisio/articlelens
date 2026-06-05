@@ -384,7 +384,7 @@
       <div id="coberturaBody" style="margin-top:10px;font-size:13px"></div>
       <div class="btn-bar" style="margin-top:8px">
         <button class="btn" id="verificarIA">🔍 Verificar incertos com IA</button>
-        <button class="btn ghost" id="coberturaDl">⬇️ Baixar removidos sem e‑mail (.csv)</button>
+        <button class="btn primary" id="recupFalta">🔎 Recuperar faltantes (IA)</button>
       </div>
       <div id="verifBody" style="margin-top:10px;font-size:13px"></div>
     </details>
@@ -1517,6 +1517,8 @@ function aplicarIndice(works, text){
 let lastIndice = null;   // {total, fixed} da última coleta de anais
 // META de cobertura por e-mail: quantos @ existem no(s) PDF(s) do lote (alvo p/ conferir no fim)
 let _emailAlvo = { tot:0, uni:new Set() };
+// texto de cada arquivo do lote (p/ a IA caçar os @ que faltaram, pegando o contexto)
+let _runTextos = [];
 
 /* APRENDIZADO: lembra correções (título/e-mail) por trabalho p/ NÃO repetir o erro em re-execuções.
    Guarda no navegador (localStorage). Alimentado pelas correções da IA e pelas edições manuais. */
@@ -2202,7 +2204,8 @@ async function collectFromPDF(file, mode){
   // META: conta os @ do PDF (alvo de cobertura) — à prova de formato, sem IA. Ignora institucional.
   try{ const ats=(text.match(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/gi)||[])
         .map(e=>e.toLowerCase().replace(/[.,;)]+$/,"")).filter(e=>!_emailInstitucional(e));
-    _emailAlvo.tot+=ats.length; ats.forEach(e=>_emailAlvo.uni.add(e)); }catch(_){}
+    _emailAlvo.tot+=ats.length; ats.forEach(e=>_emailAlvo.uni.add(e));
+    _runTextos.push({file:file.name, text}); }catch(_){}
   let modelo = detectarModelo(text, mode);
   // IA de IDENTIFICAÇÃO (rede de segurança): SÓ pode RESGATAR um anais que a regra não pegou.
   // NUNCA rebaixa um anais detectado — a regra (conta RESUMO/palavras-chave no PDF inteiro) é confiável,
@@ -2295,6 +2298,7 @@ async function processBatch(){
   modelosUsados = {};
   _formatoIA = null; _lastFid = null;     // zera a identificação da IA por lote
   _emailAlvo = { tot:0, uni:new Set() };  // zera a meta de @ do lote
+  _runTextos = [];                        // zera os textos do lote
   const modo = sepMode();
   // ETAPA 1+2 — Cortar (separador) + Coletar
   pipeStep(1,"active");
@@ -2823,6 +2827,45 @@ async function _aiAplicarGrupo(grupo, modo, contador){
     }
   });
 }
+/* CAÇA AOS FALTANTES: pega cada @ do PDF que NÃO entrou, monta o CONTEXTO (1800 chars antes do
+   e-mail = cabeçalho do trabalho) e manda a IA achar o autor + título. Fecha a esteira na ponta. */
+async function recuperarFaltantesIA(){
+  const vb=document.getElementById("verifBody"), btn=document.getElementById("recupFalta");
+  if(!AI.enabled){ toast("Ligue a IA (aba 🧠 IA) antes de recuperar.","warn"); return; }
+  const capt=new Set(); allResults.forEach(w=>(w.authors||[]).forEach(a=>{ if(a.email) capt.add(a.email.toLowerCase().trim()); }));
+  const faltam=[...(_emailAlvo?_emailAlvo.uni:[])].filter(e=>!capt.has(e));
+  if(!faltam.length){ if(vb) vb.innerHTML="<b>✅ Nada a recuperar</b> — todos os e‑mails do PDF já entraram."; return; }
+  if(btn){ btn.disabled=true; btn.textContent="🔎 Recuperando…"; }
+  try{
+    const ehTit=l=>{ const L=l.replace(/[^A-Za-zÀ-ÿ]/g,""); return L.length>=14 && (l.match(/[A-ZÀ-Ý]/g)||[]).length/L.length>=0.6 && l.split(/\s+/).length>=3; };
+    const CAP=160; const grupo=[];
+    for(const e of faltam.slice(0,CAP)){
+      let ctx=null,file="";
+      for(const rt of (_runTextos||[])){ const idx=rt.text.toLowerCase().indexOf(e); if(idx<0) continue;
+        ctx=rt.text.slice(Math.max(0,idx-1800), idx+200); file=rt.file; break; }
+      if(!ctx) continue;
+      const lns=ctx.split(/\n/).map(s=>s.trim()).filter(Boolean); let tit="";
+      for(const l of lns){ if(ehTit(l)) tit=l; }                 // último título CAIXA ALTA antes do @
+      grupo.push({title: tit||"(recuperar)", authors:[{name:"", email:e}], all_emails:[e], _raw:ctx, source_file:file});
+    }
+    if(!grupo.length){ if(vb) vb.innerHTML="<b>Não achei o contexto</b> dos e‑mails faltantes."; if(btn){ btn.disabled=false; btn.textContent="🔎 Recuperar faltantes (IA)"; } return; }
+    const cont={rec:0,nome:0,tit:0}; let feito=0; const TOT=grupo.length;
+    const prog=f=>{ if(vb) vb.innerHTML="<b>🧠 Recuperando faltantes…</b> "+feito+" de "+TOT+" — "+f
+       +"<div style='height:8px;background:var(--border);border-radius:6px;margin-top:6px;overflow:hidden'><div style='height:100%;width:"+Math.round(feito/TOT*100)+"%;background:var(--accent,#4f8cff)'></div></div>"; setProgress(feito,TOT,"IA recuperando"); };
+    prog("iniciando…");
+    for(let i=0;i<grupo.length;i+=4){ const g=grupo.slice(i,i+4); prog("achando o autor dos e‑mails ("+(i+1)+"–"+Math.min(i+4,grupo.length)+")");
+      await _aiAplicarGrupo(g,"recupera",cont); feito+=g.length; prog("achando o autor…"); }
+    allResults = _dedupWorks(allResults);                        // junta os recuperados com os existentes
+    _nomesReuFeito=false; _instLimpoFeito=false;
+    let ex={trabRem:0,remComArroba:0}; try{ ex=excluirSemEmail(); }catch(_){}
+    try{ renderResults(); }catch(_){}
+    try{ renderCobertura(ex); }catch(_){}
+    const capt2=new Set(); allResults.forEach(w=>(w.authors||[]).forEach(a=>{ if(a.email) capt2.add(a.email.toLowerCase().trim()); }));
+    if(vb) vb.innerHTML="<b>🔎 Recuperação:</b> a IA recuperou <b>"+cont.rec+"</b> e‑mail(s). Agora <b>"+capt2.size+"</b> de "+(_emailAlvo?_emailAlvo.uni.size:capt2.size)+" capturados.";
+    toast("🔎 IA recuperou "+cont.rec+" e‑mail(s) faltante(s).");
+  }catch(e){ if(vb) vb.innerHTML="<b style='color:var(--danger)'>Erro:</b> "+escapeHtml(e.message); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent="🔎 Recuperar faltantes (IA)"; } }
+}
 async function verificarIncertosIA(){
   const vb=document.getElementById("verifBody"), btn=document.getElementById("verificarIA");
   if(!AI.enabled){ toast("Ligue a IA (aba 🧠 IA) antes de verificar.","warn"); return; }
@@ -2880,13 +2923,7 @@ async function verificarIncertosIA(){
   finally{ if(btn){ btn.disabled=false; btn.textContent="🔍 Verificar incertos com IA"; } }
 }
 document.getElementById("verificarIA").onclick = verificarIncertosIA;
-document.getElementById("coberturaDl").onclick = ()=>{
-  if(!lastRemovidos.length){ toast("Nenhum trabalho removido nesta coleta.","warn"); return; }
-  const esc=s=>'"'+String(s==null?"":s).replace(/"/g,'""')+'"';
-  const csv="﻿"+["Titulo removido (sem e-mail)","Fonte"].map(esc).join(",")+"\n"
-    +lastRemovidos.map(r=>[r.title,r.source].map(esc).join(",")).join("\n");
-  download(new Blob([csv],{type:"text/csv;charset=utf-8;"}), "removidos_sem_email.csv");
-};
+{ const _rf=document.getElementById("recupFalta"); if(_rf) _rf.onclick = recuperarFaltantesIA; }
 
 
 /* =========================================================================
@@ -3153,9 +3190,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.22";
+const VERSION = "13.23";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.23","2026-06-05","Botão 🔎 «Recuperar faltantes (IA)» no painel 📊 Cobertura (substituiu o antigo «Baixar removidos», ultrapassado). Quando a conferência mostra que faltaram e‑mails, é só clicar: o app pega CADA @ que não entrou, recorta o trecho do PDF em volta dele (com autores e título) e manda a IA achar o autor + título daquele e‑mail — recuperando o que escapou da coleta. Fecha a esteira na ponta final, como você desenhou (IA caçando os faltantes). Custo baixo (só os que faltaram)."],
   ["13.22","2026-06-05","Menos amarelo à toa: o aviso «⚠ e‑mail não confere» agora entende e‑mail de «primeiro nome + iniciais» (anna.pm = Ana Paula Monteiro, leandro.pr = Leandro Pereira Rezende) como CERTO — antes acendia amarelo mesmo estando correto. No 1D5B7CCC os avisos de e‑mail caíram de 11 → 3 (sobram só os realmente ambíguos). Sem mexer em nada que já funcionava."],
   ["13.21","2026-06-05","ESTEIRA FECHADA — conferência por META de e‑mail: no fim da coleta, o painel 📊 Cobertura agora mostra «o PDF tem X e‑mails · capturei Y (Z%)» com ✅ (≥90%) / ⚠️ (70‑89%) / ❌ (<70%). O alvo de @ vem do TEXTO do PDF (à prova de formato, sem IA). Assim você SEMPRE sabe se a coleta veio completa — e nunca recebe incompleto em silêncio. Ex.: 1D5B7CCC mostra «239/251 (95%) ✅». Soma o % também no resumo do painel pra ver de relance."],
   ["13.20","2026-06-05","Conserto do TÍTULO grudado no sumário: quando uma entrada do índice vinha com poucos pontinhos antes do número da página (ex.: «… REVISÃO DE LITERATURA ...26»), o app não cortava ali e grudava o próximo título junto (ficava «…LITERATURA ...26 A INFLUÊNCIA DAS HABILIDADES…»). Agora corta com 3 pontos (ou pontos+número no fim). Resultado: títulos do 1D5B7CCC separados certo; e de quebra melhorou outros anais (2019 ganhou trabalhos e diminuiu erro). Sem regressão."],
