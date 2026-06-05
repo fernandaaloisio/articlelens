@@ -1126,6 +1126,33 @@ function parseAutoresPV(block, titulo){
   if(semMail.length && semMail.length===rest.length) semMail.forEach((a,k)=>{ a.email=rest[k]; });
   return {title:titulo, authors, _fromIndex:true};
 }
+/* REGRA GERAL — alguns anais têm SUMÁRIO INCOMPLETO (não listam todos os trabalhos). Esta varredura
+   procura no CORPO trabalhos no formato PV (lista de autores por ";"/"(N)" + e-mails) que ficaram de
+   FORA do sumário e os acrescenta. Gate FORTE: só entra quando o PV parseia limpo (≥3 e-mails que
+   BATEM por conteúdo com o nome) e o título ainda não foi pego — para nunca trazer trabalho-lixo. */
+function scanCorpoPV(text, works){
+  const pages=text.split("\f"); const sum=lerSumario(pages); const start=sum?sum.endPage+1:0;
+  const _tk=t=>_norm(t).replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(Boolean).slice(0,8).join(" ");
+  const jaTk=new Set((works||[]).map(w=>_tk(w.title||"")));
+  const ehTit=l=>{ const letras=l.replace(/[^A-Za-zÀ-ÿ]/g,""); if(letras.length<10) return false; return (l.match(/[A-ZÀ-Ý]/g)||[]).length/letras.length>=0.6; };
+  const bate=a=>{ const loc=(String(a.email).split("@")[0]||"").toLowerCase(); return _norm(a.name).split(/\s+/).filter(t=>t.length>=3).some(t=>loc.includes(t)); };
+  const add=[];
+  for(let p=start;p<pages.length;p++){
+    const lines=pages[p].split("\n").map(l=>l.trim()).filter(Boolean);
+    let i=0; if(lines[i] && /^\d{1,4}$/.test(lines[i])) i++;          // pula nº de página
+    const tit=[]; while(i<lines.length && ehTit(lines[i]) && tit.length<4){ tit.push(lines[i]); i++; }
+    const titulo=tit.join(" ").replace(/\s+/g," ").trim();
+    if(titulo.length<15 || jaTk.has(_tk(titulo))) continue;
+    const pv=parseAutoresPV(lines.slice(0,40).join("\n"), titulo);
+    if(!pv) continue;
+    const comE=pv.authors.filter(a=>a.email);
+    if(comE.length>=3 && comE.filter(bate).length>=3){
+      add.push({title:titulo, authors:pv.authors, all_emails:comE.map(a=>a.email), _fromIndex:true});
+      jaTk.add(_tk(titulo));
+    }
+  }
+  return add;
+}
 function cortarPorSumario(text){
   const pages = text.split("\f");
   if(pages.length<8) return null;
@@ -2052,6 +2079,8 @@ async function collectFromPDF(file, mode){
       works = viaSep || [];
       lastIndice = aplicarIndice(works, text);            // títulos oficiais do sumário (grátis), se houver
     }
+    // completa com trabalhos do CORPO que ficaram FORA do sumário (sumário incompleto), formato PV
+    try{ const extra=scanCorpoPV(text, works); if(extra.length) works=works.concat(extra); }catch(_){}
     works = _dedupWorks(works);     // tira trabalhos repetidos (mesmo título em 2 seções: Resumos + Artigos)
     if(works.length){
       recs = works.map(w=>({title:w.title, authors:w.authors, all_emails:w.all_emails,
@@ -2846,9 +2875,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.9";
+const VERSION = "13.10";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.10","2026-06-05","Trabalhos que ficaram FORA do sumário agora são recuperados. Alguns anais têm sumário incompleto (não listam todos os trabalhos) — antes o app só pegava os do sumário. Agora ele varre o corpo e acrescenta os trabalhos que não estavam no índice, MAS só quando consegue ler limpo (≥3 e‑mails que batem com o nome do autor) — gate forte pra nunca trazer trabalho‑lixo. No anais de enfermagem (56dbda) recuperou o «SAÚDE MENTAL: DESAFIOS DA ASSISTÊNCIA…» (faltava no sumário) → 72 de 73 e‑mails únicos. No de 2023 trouxe +6 trabalhos / +25 e‑mails sem nenhum erro novo. Zero regressão nos demais (449, SMENF, 366, 380, 336)."],
   ["13.9","2026-06-05","Mais um formato de lista de autores: quando os autores são numerados com «(1) (2) (3)…» em vez de «;» (ex.: «Fulano (1) Beltrano (2) …» + notas «(N) … E‑mail: x»), o app agora separa os nomes por esses marcadores e liga cada um ao e‑mail por conteúdo. Recuperou os e‑mails do trabalho «EDUCAÇÃO EM SAÚDE NA ESCOLA: UMA DISCUSSÃO SOBRE CORPO…» (8 autores). Sem regressão (449/SMENF/366/380/336/2023 iguais)."],
   ["13.8","2026-06-05","Mais e‑mails em anais de saúde com MUITOS autores por trabalho (lista separada por «;» + afiliação com «E‑mail:» embutido, ex.: UERN‑PMM). Antes, em trabalhos de 8‑9 autores o app confundia o nome com a linha de afiliação e perdia metade dos e‑mails. Agora reconhece a lista por «;», junta os nomes (mesmo quebrados em 2 linhas) e liga cada autor ao e‑mail pelo CONTEÚDO do nome. Também ignora e‑mails institucionais (callcenter@, secretaria@, faen@…). Só dispara nesse formato (nomes sem vírgula interna), então não mexe nos outros (449 segue 35, SMENF 166, 366/380/336 iguais; 2023 ganhou alguns). Obs.: nesse tipo de anais, trabalhos com texto muito bagunçado (frase do corpo no lugar do autor) ainda saem com o aviso ⚠ pra você revisar."],
   ["13.7","2026-06-05","SMENF fechou 166/166 e‑mails. Faltavam 2 (hemilyevellyn, deivsonwendell) num trabalho onde o número da nota de rodapé sai COLADO na afiliação («1Universidade do Estado…, email») — o leitor de notas exigia um espaço/limite depois do número e por isso não lia essas notas. Agora aceita o número colado («1Universidade», «1 Universidade» e «1»+linha seguinte), sem confundir com ano («2024»). Resultado: o trabalho «O PAPEL DA MONITORIA…» saiu com os 4 autores certos (Jorgivan, Hemily Evellyn, Deivson Wendell, Kalidia). Sem regressão (efeito ZERO em 449/2019/2023; SMENF 164→166)."],
