@@ -442,6 +442,8 @@ let errorsThisRun = [];  // [{name, reason}]
 let curPage = 0;
 // ⚠ verificação: set de chaves "ri|ai" já confirmadas pelo usuário com OK
 const _okSet = new Set();
+// admin pula a verificação obrigatória (baixa direto). Só o login "user" é obrigado a dar OK.
+function _ehAdmin(){ try{ return localStorage.getItem(AUTH_KEY) !== "user"; }catch(_){ return true; } }
 // e-mails de um registro que NÃO foram pareados a nenhum autor
 function _orfaosDoRec(r){
   const jaAtrib=new Set((r.authors||[]).map(a=>(a.email||"").toLowerCase().trim()).filter(Boolean));
@@ -2498,11 +2500,12 @@ function renderResults(){
       mismatch:!!(a.email && a.name && !_emailBate(a.name, a.email))}));
   });
   const totalFlat = flat.length;
+  const adminMode = _ehAdmin();    // admin baixa direto: sem ⚠ no topo, sem OK, sem bloqueio
   // ⚠ pendentes (⚠ && não confirmados com OK) ficam SEMPRE no topo, independente de filtro/página
   const _okKey = x => x.ri+"|"+x.ai;
   const ehAlerta = x => !!(x.mismatch || x.inv || x.rev || x._orphan);
-  const pendente  = x => ehAlerta(x) && !_okSet.has(_okKey(x));
-  flat.sort((a,b)=>{ const pa=pendente(a)?0:1, pb=pendente(b)?0:1; return pa-pb; });
+  const pendente  = x => !adminMode && ehAlerta(x) && !_okSet.has(_okKey(x));
+  if(!adminMode) flat.sort((a,b)=>{ const pa=pendente(a)?0:1, pb=pendente(b)?0:1; return pa-pb; });
   // 🔍 filtro: busca + "só problemas"
   const q = _norm((document.getElementById("resSearch")||{}).value||"").trim();
   const onlyProb = !!(document.getElementById("resOnlyProb")||{}).checked;
@@ -2516,8 +2519,8 @@ function renderResults(){
   if(curPage>=pages) curPage = pages-1;
   const slice = flat.slice(curPage*PAGE_SIZE, curPage*PAGE_SIZE+PAGE_SIZE);
 
-  // banner de pendentes
-  const allPend = _pendentesCount();
+  // banner de pendentes (só para login NÃO‑admin)
+  const allPend = adminMode ? 0 : _pendentesCount();
   let bannerEl = document.getElementById("pendBanner");
   if(!bannerEl){ bannerEl=document.createElement("div"); bannerEl.id="pendBanner";
     const tbl=document.querySelector(".table-wrap"); if(tbl) tbl.parentNode.insertBefore(bannerEl,tbl); }
@@ -2764,8 +2767,8 @@ document.getElementById("clearResults").onclick = ()=>{
 
 function _exp(fn){
   if(!allResults.length){ toast("Nada para exportar.","warn"); return; }
-  // bloqueia se houver ⚠ pendentes (não confirmados com OK)
-  const pend = _pendentesCount();
+  // bloqueia se houver ⚠ pendentes — SÓ para login não‑admin (admin baixa direto)
+  const pend = _ehAdmin() ? 0 : _pendentesCount();
   if(pend>0){
     toast("⚠️ "+pend+" linha"+(pend>1?"s":"")+" ainda não verificada"+(pend>1?"s":"")+". Confirme todas com OK antes de exportar.","warn");
     return;
@@ -2946,9 +2949,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.11";
+const VERSION = "13.12";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.12","2026-06-05","A verificação obrigatória (⚠ no topo + botão OK + export bloqueado) agora vale SÓ para o login de USUÁRIO. O ADMIN baixa direto, sem precisar dar OK em cada linha — vê os avisos ⚠ como informação, mas a planilha sai na hora e na ordem normal."],
   ["13.11","2026-06-05","Verificação obrigatória antes do export: (1) Todo e‑mail com ⚠ aparece na tabela — inclusive e‑mails encontrados no PDF que não foram ligados a nenhum autor (antes sumiam em silêncio, agora aparecem com «⚠ autor não identificado» pra você preencher/confirmar). (2) Linhas com ⚠ não confirmadas ficam no TOPO da tabela com fundo amarelo e botão OK. (3) Ao clicar OK a linha vai para a posição normal. (4) Export (CSV/Excel/JSON) fica BLOQUEADO enquanto houver qualquer ⚠ pendente — uma mensagem diz quantas faltam. Assim a planilha só sai quando você validou tudo."],
   ["13.10","2026-06-05","Trabalhos que ficaram FORA do sumário agora são recuperados. Alguns anais têm sumário incompleto (não listam todos os trabalhos) — antes o app só pegava os do sumário. Agora ele varre o corpo e acrescenta os trabalhos que não estavam no índice, MAS só quando consegue ler limpo (≥3 e‑mails que batem com o nome do autor) — gate forte pra nunca trazer trabalho‑lixo. No anais de enfermagem (56dbda) recuperou o «SAÚDE MENTAL: DESAFIOS DA ASSISTÊNCIA…» (faltava no sumário) → 72 de 73 e‑mails únicos. No de 2023 trouxe +6 trabalhos / +25 e‑mails sem nenhum erro novo. Zero regressão nos demais (449, SMENF, 366, 380, 336)."],
   ["13.9","2026-06-05","Mais um formato de lista de autores: quando os autores são numerados com «(1) (2) (3)…» em vez de «;» (ex.: «Fulano (1) Beltrano (2) …» + notas «(N) … E‑mail: x»), o app agora separa os nomes por esses marcadores e liga cada um ao e‑mail por conteúdo. Recuperou os e‑mails do trabalho «EDUCAÇÃO EM SAÚDE NA ESCOLA: UMA DISCUSSÃO SOBRE CORPO…» (8 autores). Sem regressão (449/SMENF/366/380/336/2023 iguais)."],
