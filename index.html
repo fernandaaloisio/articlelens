@@ -504,6 +504,7 @@ function _materializarOrfaos(){
 }
 // uma linha precisa de verificação? (e-mail não confere com nome, inválido, revisar, ou órfão)
 function _precisaVerificar(a){
+  if(a._aiOk) return false;                      // conferido pela IA → não precisa
   const mm=!!(a.email && a.name && !_emailBate(a.name,a.email));
   return mm || a._inv || a._revisar || a._orphan;
 }
@@ -1714,8 +1715,11 @@ function completarIniciais(records){
   }
   return {nComp, nFlag};
 }
-/* Caso para a IA = título suspeito OU sem e-mail (com @ no texto) OU NOME quebrado. */
-function casoDificil(r){ return tituloSuspeito(r.title) || _semEmailColetado(r) || temNomeQuebrado(r); }
+/* Caso para a IA = título suspeito OU sem e-mail OU NOME quebrado OU nome≠e-mail OU e-mail órfão. */
+function _temMismatch(r){ return (r.authors||[]).some(a=>a.email && a.name && !_emailBate(a.name,a.email)); }
+function _temOrfaoRec(r){ const ja=new Set((r.authors||[]).map(a=>(a.email||"").toLowerCase().trim()).filter(Boolean));
+  return (r.all_emails||[]).some(e=>e&&e.trim()&&!ja.has(e.toLowerCase().trim())&&!_emailInstitucional(e)); }
+function casoDificil(r){ return tituloSuspeito(r.title) || _semEmailColetado(r) || temNomeQuebrado(r) || _temMismatch(r) || _temOrfaoRec(r); }
 /* Descreve o formato detectado (DE GRAÇA, sem IA) p/ mostrar ao usuário: tipo + título CAIXA ALTA + e‑mail por número. */
 function descreverFormato(recs){
   if(!recs || !recs.length) return "";
@@ -2250,13 +2254,14 @@ async function processBatch(){
     const fmt = descreverFormato(allResults);
     if(fmt) setStatus("Formato detectado (sem IA): <b>"+escapeHtml(fmt)+"</b>");
     const todosAlvos = allResults.filter(casoDificil);
-    // AMOSTRA por formato (sonda no 1º + poucos) em vez de cada caso — corta MUITO o custo.
+    // Com Haiku (barato) resolvemos TODOS os casos com ⚠ — sem amostrar — pros erros realmente
+    // pararem. (Amostra só entra se o usuário ligar "amostra" E o lote for enorme, p/ cortar custo.)
     let alvos, amostraInfo=null;
-    if(AI.sample!==false && todosAlvos.length>8){
+    if(AI.sample===true && todosAlvos.length>40){
       alvos = amostrarPorFormato(todosAlvos, AI.sameFormat===false);
       amostraInfo = { total: todosAlvos.length, conferidos: alvos.length };
     } else {
-      alvos = todosAlvos.slice(0, 400);
+      alvos = todosAlvos.slice(0, 600);
     }
     if(alvos.length){
       setStatus("🧠 IA conferindo "+alvos.length+(amostraInfo?(" de "+amostraInfo.total+" casos (amostra por formato)"):" casos")+" — título/nome/dono do e‑mail…");
@@ -2282,20 +2287,28 @@ async function processBatch(){
           const tinhaNomeQuebrado = temNomeQuebrado(r);
           if(f){
             if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)){ r.title=f.title; nTit++; }
-            // (A) NOMES quebrados → substitui a lista de autores pela da IA (validada e com e-mail do texto)
-            if(tinhaNomeQuebrado && Array.isArray(f.authors) && f.authors.length){
+            // (A) É um caso ⚠ (nome quebrado / nome≠e-mail / sem e-mail / órfão): a IA leu o TEXTO CRU
+            //     e é a AUTORIDADE. Substitui a lista de autores pela dela (cada um marcado _aiOk =
+            //     conferido pela IA → some o ⚠). TRAVA: nunca REDUZ os e-mails já coletados.
+            const ehHard = tinhaNomeQuebrado || _temMismatch(r) || _temOrfaoRec(r) || _semEmailColetado(r);
+            if(ehHard && Array.isArray(f.authors) && f.authors.length){
               const novos = f.authors
                 .filter(a=>a && a.name && a.name.trim().split(/\s+/).length>=2 && !nomeQuebrado(a.name, a.email))
                 .map(a=>{ let em=(a.email||"").trim().toLowerCase();
-                          if(em && (!/@/.test(em) || !(r._raw||"").toLowerCase().includes(em))) em="";
-                          return {name:a.name.trim(), email:em}; });
-              // TRAVA: a IA NUNCA pode REDUZIR os e-mails já coletados. Se a versão dela tem
-              // menos e-mails que a nossa, mantém a nossa (a IA estava jogando e-mail fora).
+                          if(em && (!/@/.test(em) || !(r._raw||"").toLowerCase().includes(em) || _emailInstitucional(em))) em="";
+                          return {name:a.name.trim(), email:em, _aiOk:true}; });
               const emailsAntes = (r.authors||[]).filter(a=>a.email).length;
               const emailsNovos = novos.filter(a=>a.email).length;
               if(novos.length && emailsNovos>=emailsAntes){ r.authors=novos; nomesCorr=true; nNomes++; }
+              else if(Array.isArray(f.authors)) for(const fa of f.authors){   // não substituiu → ao menos confirma donos
+                const em=(fa.email||"").trim().toLowerCase();
+                if(!/@/.test(em) || !(r._raw||"").toLowerCase().includes(em)) continue;
+                const fn=_norm(fa.name||"").split(/\s+/).filter(t=>t.length>=3);
+                const alvo=(r.authors||[]).find(a=>{const an=_norm(a.name); return fn.some(t=>an.includes(t));});
+                if(alvo){ if((!alvo.email||alvo._guess)&&alvo.email!==em){ alvo.email=em; nEmail++; mudouE.push(alvo.name.split(" ")[0]+"→"+em); } alvo._guess=false; alvo._aiOk=true; }
+              }
             }
-            // (B) senão, confere o DONO do e-mail (vazio/chute): só e-mail presente no texto
+            // (B) caso comum: confere o DONO do e-mail (vazio/chute): só e-mail presente no texto
             else if(Array.isArray(f.authors)) for(const fa of f.authors){
               const em=(fa.email||"").trim().toLowerCase();
               if(!/@/.test(em) || !(r._raw||"").toLowerCase().includes(em)) continue;
@@ -2545,8 +2558,8 @@ function renderResults(){
     const auths = (r.authors&&r.authors.length)?r.authors:[{name:"",email:""}];
     auths.forEach((a,ai)=>flat.push({ri,ai,hasA:!!(r.authors&&r.authors.length),
       title:r.title||"(sem título)", name:a.name||"", email:a.email||"",
-      src:r.source_file||"", corr:a._corr, inv:a._inv, rev:a._revisar, _orphan:!!a._orphan,
-      mismatch:!!(a.email && a.name && !_emailBate(a.name, a.email))}));
+      src:r.source_file||"", corr:a._corr, inv:a._inv, rev:(a._revisar&&!a._aiOk), _orphan:(!!a._orphan&&!a._aiOk),
+      mismatch:!!(a.email && a.name && !a._aiOk && !_emailBate(a.name, a.email))}));
   });
   const totalFlat = flat.length;
   const adminMode = _ehAdmin();    // admin: vê ⚠ na frente e botão OK, mas baixa SEM bloqueio
@@ -3013,9 +3026,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.15";
+const VERSION = "13.16";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.16","2026-06-05","A IA agora RESOLVE os trabalhos com ⚠ (sua ideia: regra faz o fácil, IA faz o difícil). Com a IA ligada, todo trabalho que sobrou com problema (nome≠e‑mail, e‑mail sem dono, nome quebrado, e‑mail órfão) é enviado ao Haiku (barato), que lê o texto cru e devolve os pares autor↔e‑mail certos — imune ao formato (com/sem traço, número, ; etc.). O resultado vira autoritativo e some o ⚠ (marca «conferido pela IA»). Travas: nunca reduz a quantidade de e‑mails já coletados, só usa e‑mail que está no texto, e ignora e‑mail institucional. Agora processa TODOS os casos (sem amostrar) porque o Haiku é barato. Se a IA estiver desligada, nada muda (regras como antes)."],
   ["13.15","2026-06-05","Trocar de modelo (custo) ficou fácil: na aba 🧠 IA tem agora um SELETOR de modelo com o custo do lado — 🟢 Haiku (barato, recomendado) · 🟡 Sonnet · 🔴 Opus (caro). Escolher já salva. O padrão do app passou a ser o Haiku (≈20× mais barato que o Opus) — basta pro app ler texto e achar autor/e‑mail. NÃO precisa de chave nova: a MESMA chave da Anthropic acessa todos os modelos. Para sair do Opus: aba IA → Modelo (custo) → 🟢 Haiku 3.5."],
   ["13.14","2026-06-05","Menos lixo nos avisos: (1) e‑mail INSTITUCIONAL (callcenter@, secretaria@, ouvidoria@, faen@…) não entra mais como se fosse do autor — é descartado. (2) «Nome» que na verdade é frase/texto do corpo («Segundo a Organização Mundial…», «UTI. Os recém…», «Unidade de Cuidados…») é rejeitado. (3) Parênteses vazios «()» que sobravam do «(N)» são limpos do nome. No 56dbda os avisos caíram de ~25 para ~16 (a maioria do que sobra é apelido de e‑mail correto, ex.: thatig=Thatiane, que só precisa do seu OK). Sem regressão (filtro institucional remove 0 e‑mails reais nos outros anais)."],
   ["13.13","2026-06-05","(1) REUSO DE NOME PELO E‑MAIL: o mesmo autor aparece em vários trabalhos; quando o nome dele JÁ foi pego certo num artigo (o nome bate com o e‑mail) e em outro o nome veio em branco ou errado, o app agora REPETE o nome certo. Reduziu muito os e‑mails sem nome e os «não confere». (2) As linhas com ⚠ ficam na frente (topo, amarelo) também para o ADMIN — pra revisar rápido — mas o admin continua baixando direto, sem precisar dar OK (o bloqueio é só do login usuário)."],
