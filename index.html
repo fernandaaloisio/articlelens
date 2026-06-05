@@ -2583,6 +2583,15 @@ document.querySelectorAll(".chper").forEach(b=>b.onclick=()=>{
   inp.onchange=()=>{ const v=parseFloat(inp.value); if(v>0){ USD_BRL=v; try{localStorage.setItem("articlelens_usdbrl",String(v));}catch(e){} renderCostChart(); renderRun(); loadUsage(); } };
 })();
 /* Custo por trabalho + relatório da IA (da última coleta) */
+// soma um gasto de IA (verificação/lupa, recuperação) ao custo da última coleta e atualiza a tela.
+function _somaCustoRun(usdGasto){
+  if(!lastRun) lastRun={works:allResults.length,cost:0,perWork:0,hard:0,nEmail:0,nTit:0,nNomes:0,nFail:0,report:[]};
+  lastRun.cost=(lastRun.cost||0)+(usdGasto||0);
+  lastRun.emails=(allResults||[]).reduce((s,w)=>s+(w.authors||[]).filter(a=>a.email).length,0);
+  lastRun.perWork=lastRun.works?lastRun.cost/lastRun.works:0;
+  try{ _saveRun(); }catch(_){}
+  try{ renderRun(); }catch(_){}
+}
 function renderRun(){
   const fmt = v => "US$ " + (v||0).toFixed(v<1?4:2);
   const box = document.getElementById("aiReportBox");
@@ -2595,7 +2604,11 @@ function renderRun(){
               : (allResults||[]).reduce((s,w)=>s+(w.authors||[]).filter(a=>a.email).length,0);
   document.getElementById("runWorks").textContent = lastRun.works;
   document.getElementById("runCost").innerHTML  = fmtMoney(lastRun.cost);
-  document.getElementById("runPer").innerHTML   = nmail ? fmtMoney((lastRun.cost||0)/nmail)+" <span style='color:var(--muted);font-weight:400;font-size:.8em'>("+nmail+" e‑mails)</span>" : "—";
+  // custo POR E-MAIL (já incluindo coleta + verificação/lupa + recuperação) vs META R$ 0,06
+  const perBRL = nmail ? (lastRun.cost||0)*USD_BRL/nmail : 0;
+  const META=0.06, ok=perBRL<=META;
+  const selo = nmail ? " <span style='font-weight:700;color:"+(ok?"var(--ok,#28a745)":"var(--danger)")+"'>"+(ok?"✅ ≤ R$ 0,06":"❌ > R$ 0,06")+"</span>" : "";
+  document.getElementById("runPer").innerHTML   = nmail ? fmtMoney((lastRun.cost||0)/nmail)+selo+" <span style='color:var(--muted);font-weight:400;font-size:.8em'>("+nmail+" e‑mails · meta R$ 0,06)</span>" : "—";
   sum.innerHTML = (lastRun.formato?"Formato (detectado sem IA): <b>"+escapeHtml(lastRun.formato)+"</b><br>":"")
     +"IA revisou <b>"+lastRun.hard+"</b> casos"
     +(lastRun.amostra?" <i>(amostra de "+lastRun.amostra.total+" — confere o 1º trabalho de cada formato + alguns)</i>":"")+" · "
@@ -2855,6 +2868,7 @@ async function recuperarFaltantesIA(){
   const faltam=[...(_emailAlvo?_emailAlvo.uni:[])].filter(e=>!capt.has(e));
   if(!faltam.length){ if(vb) vb.innerHTML="<b>✅ Nada a recuperar</b> — todos os e‑mails do PDF já entraram."; return; }
   if(btn){ btn.disabled=true; btn.textContent="🔎 Recuperando…"; }
+  const _usdBefore=aiUsage.usd;
   try{
     const ehTit=l=>{ const L=l.replace(/[^A-Za-zÀ-ÿ]/g,""); return L.length>=14 && (l.match(/[A-ZÀ-Ý]/g)||[]).length/L.length>=0.6 && l.split(/\s+/).length>=3; };
     const CAP=160; const grupo=[];
@@ -2883,7 +2897,8 @@ async function recuperarFaltantesIA(){
     if(vb) vb.innerHTML="<b>🔎 Recuperação:</b> a IA recuperou <b>"+cont.rec+"</b> e‑mail(s). Agora <b>"+capt2.size+"</b> de "+(_emailAlvo?_emailAlvo.uni.size:capt2.size)+" capturados.";
     toast("🔎 IA recuperou "+cont.rec+" e‑mail(s) faltante(s).");
   }catch(e){ if(vb) vb.innerHTML="<b style='color:var(--danger)'>Erro:</b> "+escapeHtml(e.message); }
-  finally{ if(btn){ btn.disabled=false; btn.textContent="🔎 Recuperar faltantes (IA)"; } }
+  finally{ try{ _somaCustoRun(aiUsage.usd-_usdBefore); }catch(_){}   // a recuperação entra no custo por e-mail
+           if(btn){ btn.disabled=false; btn.textContent="🔎 Recuperar faltantes (IA)"; } }
 }
 async function verificarIncertosIA(){
   const vb=document.getElementById("verifBody"), btn=document.getElementById("verificarIA");
@@ -2920,6 +2935,7 @@ async function verificarIncertosIA(){
     lastRemovidosFull=(lastRemovidosFull||[]).filter(r=>!dentro.has(r));
     lastRemovidos=lastRemovidosFull.map(r=>({title:r.title||"(sem título)",source:r.source_file||"",temArroba:/@/.test(r._raw||"")}));
     const custo=aiUsage.usd-usdBefore;
+    _somaCustoRun(custo);   // a verificação (lupa) entra no custo por e-mail da coleta
     // RELATÓRIO das 3 perguntas
     const idxN=lastIndice?lastIndice.total:null;
     const localizei=allResults.length+lastRemovidos.length;
@@ -3209,9 +3225,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.24";
+const VERSION = "13.25";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.25","2026-06-05","Custo por e‑mail com META: o «Custo por e‑mail» (Última coleta) agora mostra ✅ se ficou ≤ R$ 0,06 ou ❌ se passou — e PASSOU a incluir o gasto da VERIFICAÇÃO (🔍 lupa) e da RECUPERAÇÃO (🔎), não só o da coleta. Assim o número reflete o custo real por e‑mail, somando tudo que a IA gastou naquela coleta."],
   ["13.24","2026-06-05","Conserto GRAVE: trabalhos apareciam com o NOME do autor mas SEM e‑mail (o nome e o e‑mail eram extraídos, mas ficavam em linhas separadas, sem parear). Agora, dentro de cada trabalho, o autor que ficou só com nome recebe o e‑mail solto do mesmo trabalho (1º pelo conteúdo do nome, depois pela ordem do rodapé). Roda antes de excluir/exportar. Isso junta as duas metades e tira os «nome sem e‑mail» da pré‑visualização."],
   ["13.23","2026-06-05","Botão 🔎 «Recuperar faltantes (IA)» no painel 📊 Cobertura (substituiu o antigo «Baixar removidos», ultrapassado). Quando a conferência mostra que faltaram e‑mails, é só clicar: o app pega CADA @ que não entrou, recorta o trecho do PDF em volta dele (com autores e título) e manda a IA achar o autor + título daquele e‑mail — recuperando o que escapou da coleta. Fecha a esteira na ponta final, como você desenhou (IA caçando os faltantes). Custo baixo (só os que faltaram)."],
   ["13.22","2026-06-05","Menos amarelo à toa: o aviso «⚠ e‑mail não confere» agora entende e‑mail de «primeiro nome + iniciais» (anna.pm = Ana Paula Monteiro, leandro.pr = Leandro Pereira Rezende) como CERTO — antes acendia amarelo mesmo estando correto. No 1D5B7CCC os avisos de e‑mail caíram de 11 → 3 (sobram só os realmente ambíguos). Sem mexer em nada que já funcionava."],
