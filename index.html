@@ -1127,7 +1127,9 @@ function parseSumarioPontilhado(pages){
     for(const l of plines){
       if(/^SUM[ÁA]RIO\s*$/.test(l)){ inSum=true; started=true; buf=[]; continue; }   // "SUMÁRIO" sozinho (não o rodapé "Sumário 12")
       if(!inSum) continue;
-      if(/\.{4,}/.test(l)){                                   // pontilhado fecha um título
+      // pontilhado fecha um título: ≥3 pontos OU "pontos + nº de página no fim" (às vezes vem só
+      // "...26" com 3 pontinhos — antes exigia 4+ e grudava no título seguinte).
+      if(/\.{3,}/.test(l) || /\.{2,}\s*\d{1,4}\s*$/.test(l)){
         const antes=l.replace(/\.{2,}.*$/,"").trim();
         if(antes && !_SUM_HDR.test(antes)) buf.push(antes);
         const t=buf.join(" ").replace(/\s+/g," ").trim();
@@ -3106,9 +3108,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.19";
+const VERSION = "13.20";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.20","2026-06-05","Conserto do TÍTULO grudado no sumário: quando uma entrada do índice vinha com poucos pontinhos antes do número da página (ex.: «… REVISÃO DE LITERATURA ...26»), o app não cortava ali e grudava o próximo título junto (ficava «…LITERATURA ...26 A INFLUÊNCIA DAS HABILIDADES…»). Agora corta com 3 pontos (ou pontos+número no fim). Resultado: títulos do 1D5B7CCC separados certo; e de quebra melhorou outros anais (2019 ganhou trabalhos e diminuiu erro). Sem regressão."],
   ["13.19","2026-06-05","Mais barato e rápido: a IA agora confere os trabalhos em LOTES maiores (8 por chamada, antes 4). Como os trabalhos do mesmo PDF têm o mesmo formato, a IA vê vários juntos, reconhece o padrão e resolve todos de uma vez — cortando ~metade das chamadas (menos custo, menos tempo), sem perder a conferência de nenhum."],
   ["13.18","2026-06-05","Conserto importante: a IA estava AMOSTRANDO (conferia só alguns trabalhos) em PDFs grandes — por isso o 1º trabalho saía perfeito e o resto ficava com lixo (afiliação «Câmpus … UNITINS» no lugar do nome, nomes vazios). Agora a IA confere TODOS os trabalhos com ⚠ (Haiku é barato), então o erro não fica só num pedaço. Também: afiliação («Câmpus…», «Universidade…») nunca mais vira nome de autor. Obs.: em PDFs grandes a coleta com IA demora mais (1‑3 min) — é a IA conferindo trabalho por trabalho."],
   ["13.17","2026-06-05","📚 MEMÓRIA PERMANENTE DE APRENDIZADO: o app agora LEMBRA, pra sempre, o nome de cada e‑mail que já foi acertado (pela IA, por bater com o nome, ou por você corrigir na mão). Nos próximos PDFs, qualquer e‑mail já conhecido recebe o nome NA HORA, sem IA — então a IA é usada cada vez MENOS e o custo cai com o tempo (é o «aprende sozinho»). A memória aparece na aba 🧠 IA (quantos e‑mails sabe) com Exportar/Importar (backup) e Limpar. Trava: só aprende par confiável (nunca um chute por ordem) e ignora e‑mail institucional. Funciona até com a IA desligada."],
