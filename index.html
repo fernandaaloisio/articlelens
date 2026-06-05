@@ -1304,6 +1304,76 @@ function scanCorpoPV(text, works){
   }
   return add;
 }
+/* ───────────────────────────────────────────────────────────────────────────
+   MODELO "SOBRENOME, Nome  +  e‑mail rotulado por número"  (anais tipo UNITINS/PIVIC)
+   Estrutura de cada trabalho:
+     TÍTULO (em CAIXA ALTA, 1‑4 linhas)
+     1 2                              ← marcador (números soltos, podem vir interleaved)
+     OLIVEIRA, Gustavo Alves; QUEIROZ, Adriano Sérgio   ← autores SOBRENOME, Nome ; separados por ;
+     1Estudante do Curso ...; e-mail:  alvesgustavo@unitins.br
+     2Professor/Orientador ...; e-mails: adriano.sq@unitins.br e outro@x.br   ← rotulado por número, pode ter VÁRIOS
+     RESUMO
+   Âncora confiável = RESUMO/ABSTRACT. Captura TODOS os @ contíguos acima (inclusive
+   listas "e-mails: a, b e c" que QUEBRAM de linha) e os nomes SOBRENOME,Nome (juntando
+   linhas quebradas por marcadores). Pareia por posição quando #nomes == #emails. */
+function _assinaturaSobreNum(text){
+  const linhas = text.split("\n");
+  let num=0, sob=0;
+  for(const l of linhas){
+    if(/^\s*\d{1,2}\D.{0,200}e-?mails?\s*:/i.test(l)) num++;
+    if(/^[A-ZÁ-Ú]{2,}(\s+[A-ZÁ-Ú]+)*\s*,\s*[A-ZÁ-Ú]/.test(l) && /;/.test(l) && l.length<240) sob++;
+  }
+  return {num, sob};
+}
+function parseModeloSobrenomeNum(text){
+  const sig=_assinaturaSobreNum(text);
+  if(sig.num < 8 || sig.sob < 5) return [];     // assinatura fraca → não é este formato (não interfere noutros PDFs)
+  const L = text.split("\n").map(x=>x.replace(/\s+$/,""));
+  const MAILRE=/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/ig;
+  const hasMail=l=>/@/.test(l);
+  const marker=l=>/^\s*[\d\s]+$/.test(l);
+  const authorish=l=>/,/.test(l)&&/[A-ZÁ-Ú]{2,}/.test(l)&&/[a-zà-ÿ]/.test(l)&&!hasMail(l)&&l.length<260&&!/palavras?-?chave|resumo|abstract/i.test(l);
+  const contin=l=>/[a-zà-ÿ]/.test(l)&&!hasMail(l)&&!marker(l)&&l.length<260&&!/palavras?-?chave|resumo|abstract/i.test(l)&&!/[a-zà-ÿ]{5,}\s+[a-zà-ÿ]{5,}\s+[a-zà-ÿ]{5,}/.test(l);
+  const isTitleLine=l=>l&&/[A-ZÁ-Ú]/.test(l)&&!/[a-zà-ÿ]{4,}/.test(l)&&!hasMail(l)&&!marker(l);
+  const flip=s=>{ const m=s.split(/,\s*/); if(m.length<2) return s.trim();
+    const sob=m[0].trim().toLowerCase().replace(/(^|\s|\p{Pd})\p{L}/gu,c=>c.toUpperCase());
+    return (m.slice(1).join(" ").trim()+" "+sob).replace(/\s+/g," ").trim(); };
+  const tc=s=>s.toLowerCase().replace(/(^|\s|\p{Pd})\p{L}/gu,c=>c.toUpperCase());
+  const resumos=[]; L.forEach((l,i)=>{ if(/^\s*(RESUMO|ABSTRACT)\b/i.test(l)) resumos.push(i); });
+  const works=[];
+  for(const r of resumos){
+    let k=r-1; while(k>=0&&!L[k].trim()) k--;
+    // bloco de e-mails = linhas contíguas com @ (tolera linha em branco)
+    let bot=k, top=k, found=false;
+    while(k>=0 && (hasMail(L[k])||!L[k].trim())){ if(hasMail(L[k])){ top=k; found=true; } k--; }
+    if(!found) continue;
+    const emails=[]; for(let q=top;q<=bot;q++){ (L[q].match(MAILRE)||[]).forEach(e=>emails.push(e.toLowerCase().replace(/[.;,]+$/,""))); }
+    // bloco de autores (pula marcadores interleaved e junta nomes quebrados)
+    let a=top-1, al=[], steps=0;
+    while(a>=0 && steps++<14){
+      if(!L[a].trim()||marker(L[a])){ a--; continue; }
+      if(authorish(L[a])||(al.length&&contin(L[a]))){ al.unshift(L[a].trim()); a--; continue; }
+      break;
+    }
+    const auth=al.join(" ").replace(/\s+/g," ").trim();
+    // título (caixa alta, acima dos autores)
+    while(a>=0 && (marker(L[a])||!L[a].trim())) a--;
+    let tl=[], s2=0; while(a>=0 && isTitleLine(L[a]) && s2++<8){ tl.unshift(L[a].trim()); a--; while(a>=0&&!L[a].trim())a--; }
+    const title=tc(tl.join(" ").replace(/\s+/g," ").trim());
+    const names=auth.split(/\s*;\s*/).map(s=>s.trim()).filter(s=>/,/.test(s)).map(flip)
+                    .filter(n=>n.split(/\s+/).length>=2 && n.length<60 && !/UNITINS|C[âa]mpus|Curso|Professor|Estudante|Doutorand|Mestrand|Bolsista/i.test(n));
+    const seen=new Set(), em2=[]; for(const e of emails){ if(!seen.has(e)){ seen.add(e); em2.push(e); } }
+    const balanced = names.length===em2.length && names.length>0;
+    const authors=[]; const mx=Math.max(names.length, em2.length);
+    for(let q=0;q<mx;q++){
+      // só pareia nome↔e-mail por posição quando balanceado (senão deixa nome p/ memória/IA — nunca chuta errado)
+      const nm = balanced ? names[q] : (names.length>1 && names.length<em2.length ? "" : (names[q]||""));
+      authors.push({ name:nm, email:em2[q]||"" });
+    }
+    if(em2.length) works.push({ title, authors, all_emails:em2, _modeloFmt:"sobrenome-num" });
+  }
+  return works;
+}
 function cortarPorSumario(text){
   const pages = text.split("\f");
   if(pages.length<8) return null;
@@ -1948,13 +2018,15 @@ async function buildAuthors(text, html, title){
     if(blocks.length){
       // formato estruturado: os blocos SÃO os autores. NÃO inventar autor a partir de
       // e-mails soltos (eles vêm das REFERÊNCIAS e poluíam com "nomes" tipo "Profdebora").
+      _ultimoModeloArtigo = "Artigo · bloco Nome/Instituição/E‑mail";
       return blocks;
     }
     // formato Even3 "Nome (email)" logo após o título → exato, sem pegar frases do corpo.
     const inline = parseInlineEmailAuthors(text);
-    if(inline.length) return inline;
+    if(inline.length){ _ultimoModeloArtigo = "Artigo · Nome (e‑mail)"; return inline; }
   }
   // 2) Caminho geral: nomes (meta/regex) + e-mails + pareamento inteligente
+  _ultimoModeloArtigo = "Artigo · geral (nomes + e‑mails)";
   const names  = extractAuthorNames(text, html);
   const emails = extractEmails(text);
   let authors  = pairAuthorsEmails(names, emails);          // heurística (grátis)
@@ -2144,6 +2216,9 @@ function detectarModelo(text, mode){
   return modeloPorId("artigo");
 }
 let modelosUsados = {};   // {nomeModelo: contagem} da última coleta
+let _pdfsBloqueados = [];  // PDFs cuja cobertura ficou < META_COBERTURA (nenhum modelo adequado) → revisar à mão
+let _ultimoModeloArtigo = ""; // qual sub-modelo de ARTIGO (periódico) pegou os autores (p/ nomear o modelo)
+const META_COBERTURA = 90; // % mínimo de e‑mails capturados p/ aceitar a coleta de um PDF; abaixo disso TRAVA e avisa
 /* O e-mail PARECE ser deste autor? (local-part contém algum token do nome, ou as iniciais). */
 function _emailBate(name, email){
   if(!email || !/@/.test(email)) return true;            // sem e-mail → não marca como erro
@@ -2246,12 +2321,18 @@ async function collectFromPDF(file, mode){
     //  • método antigo (página/RESUMO + afiliação): melhor em alguns formatos.
     const viaSum = cortarPorSumario(text);
     const viaSep = separarAnais(text);
+    const viaMod = parseModeloSobrenomeNum(text);   // MODELO "SOBRENOME,Nome + e‑mail nº" ([] se não casar)
     const comEmail = a => a ? a.filter(w=>(w.authors||[]).some(x=>x.email)).length : -1;
-    const eS = comEmail(viaSum), eP = comEmail(viaSep);
+    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod);
     // Prefere o SUMÁRIO (títulos oficiais, limpos). Só troca pro método antigo quando ele pega
     // MUITO mais e-mail (≥25% e +5) — aí o ganho compensa títulos um pouco menos limpos.
     let works;
-    if(viaSum && viaSum.length && !(eP > eS*1.25 && eP > eS+5)){
+    if(eM>0 && eM>=eS && eM>=eP){
+      // o MODELO específico casou e é o que mais pega e‑mail → usa ele (formato SOBRENOME,Nome rotulado por nº)
+      works = viaMod;
+      modelosUsados["SOBRENOME,Nome + e‑mail nº"] = (modelosUsados["SOBRENOME,Nome + e‑mail nº"]||0) + 1;
+      lastIndice = aplicarIndice(works, text);
+    } else if(viaSum && viaSum.length && !(eP > eS*1.25 && eP > eS+5)){
       works = viaSum;
       lastIndice = {total: viaSum._sumario.total, fixed: viaSum._sumario.localizados, viaSumario:true};
     } else {
@@ -2266,12 +2347,34 @@ async function collectFromPDF(file, mode){
                             _raw:w._raw, _fromIndex:w._fromIndex, source_file:file.name}));
     }
   }
+  let nomeModelo = modelo.nome;
   if(!recs){
     const title = extractTitle(text, null);              // periódico/artigo: 1 PDF = 1 artigo
-    recs = [{ title, authors: await buildAuthors(text, null, title),
+    _ultimoModeloArtigo = "";
+    const autores = await buildAuthors(text, null, title);
+    recs = [{ title, authors: autores,
               _raw: text.slice(0, 4500), source_file:file.name }];   // cabeçalho+rodapés (e-mails) p/ a IA conferir
+    if(_ultimoModeloArtigo){ nomeModelo = _ultimoModeloArtigo;
+      modelosUsados[_ultimoModeloArtigo] = (modelosUsados[_ultimoModeloArtigo]||0) + 1; }
   }
-  recs.forEach(r=>r._modelo = modelo.nome);
+  recs.forEach(r=>r._modelo = nomeModelo);
+  // ───── GATE DE COBERTURA POR PDF (a esteira do usuário): mede quantos @ do PDF entraram.
+  // Se NENHUM modelo deu ≥ META_COBERTURA (90%), TRAVA esse PDF e avisa — em vez de soltar
+  // dado ruim em silêncio. (Os @ realmente do PDF, sem institucional, são o gabarito.)
+  try{
+    const alvoPdf = new Set(extractEmails(text).filter(e=>!_emailInstitucional(e)));
+    if(alvoPdf.size>0){
+      const capPdf = new Set();
+      recs.forEach(r=>(r.authors||[]).forEach(a=>{ if(a.email) capPdf.add(a.email.toLowerCase().trim()); }));
+      const hit = [...capPdf].filter(e=>alvoPdf.has(e)).length;
+      const pct = Math.round(100*hit/alvoPdf.size);
+      recs.forEach(r=>{ r._cobPdf = pct; });
+      if(pct < META_COBERTURA){
+        recs.forEach(r=>{ r._bloqueado = true; });   // marca p/ revisão (⛔) e trava o XML até conferir
+        _pdfsBloqueados.push({ file:file.name, pct, alvo:alvoPdf.size, captados:hit, modelo:nomeModelo });
+      }
+    }
+  }catch(_){}
   return recs;
 }
 
@@ -2314,6 +2417,7 @@ async function processBatch(){
   const total = fileQueue.length; let done = 0;
   errorsThisRun = [];
   modelosUsados = {};
+  _pdfsBloqueados = [];                    // zera os PDFs travados por baixa cobertura
   _formatoIA = null; _lastFid = null;     // zera a identificação da IA por lote
   _emailAlvo = { tot:0, uni:new Set() };  // zera a meta de @ do lote
   _runTextos = [];                        // zera os textos do lote
@@ -2467,7 +2571,11 @@ async function processBatch(){
   const revMsg = inic.nFlag ? " · ⚠️ "+inic.nFlag+" nomes só com iniciais — REVISAR" : "";
   setStatus("Linha concluída: <b>"+trab+"</b> trabalhos com e‑mail"+idxMsg+" · "+ex.trabRem
             +" removidos (sem e‑mail)"+revMsg+". Gere o Excel quando quiser.");
-  toast("Pronto: "+trab+" trabalhos. Clique em Excel/CSV para baixar.");
+  if(_pdfsBloqueados && _pdfsBloqueados.length){
+    toast("⛔ "+_pdfsBloqueados.length+" PDF(s) TRAVADO(s) por cobertura < "+META_COBERTURA+"% — veja a lista em 📊 Cobertura e revise à mão. O resto está pronto.","warn");
+  } else {
+    toast("Pronto: "+trab+" trabalhos. Clique em Excel/CSV para baixar.");
+  }
 }
 
 /* =========================================================================
@@ -2825,6 +2933,14 @@ function renderCobertura(ex){
   }
   const mu = Object.entries(modelosUsados||{});
   if(mu.length) html += "<br><br><b>📐 Modelos usados:</b> " + mu.map(([n,c])=>escapeHtml(n)+" ("+c+")").join(" · ");
+  // PDFs TRAVADOS: nenhum modelo deu ≥90% → o usuário revisa à mão (a esteira não solta dado ruim calado).
+  if(_pdfsBloqueados && _pdfsBloqueados.length){
+    html += "<br><br><b style='color:var(--danger)'>⛔ "+_pdfsBloqueados.length+" PDF(s) TRAVADO(s)</b> — nenhum modelo atingiu "+META_COBERTURA+"% de cobertura. "
+         + "Estes precisam de revisão manual (formato fora dos modelos prontos):";
+    html += "<ul style='margin:6px 0 0 18px'>"
+         + _pdfsBloqueados.slice(0,30).map(b=>"<li>"+escapeHtml(b.file)+" — <b style='color:var(--danger)'>"+b.pct+"%</b> ("+b.captados+"/"+b.alvo+" e‑mails) · modelo tentado: "+escapeHtml(b.modelo)+"</li>").join("")
+         + (_pdfsBloqueados.length>30?"<li>…+"+(_pdfsBloqueados.length-30)+"</li>":"") + "</ul>";
+  }
   if(ex.trabRem){
     const comA = ex.remComArroba||0, semA = ex.trabRem - comA;
     html += "<br><br><b style='color:var(--warn)'>"+ex.trabRem+" trabalhos removidos por NÃO ter e‑mail</b> (conforme sua regra).";
@@ -2999,6 +3115,8 @@ document.getElementById("verificarIA").onclick = verificarIncertosIA;
   if(alvo) L.push(["Cobertura de e-mail", Math.round(100*captUni.size/alvo)+"%"]);
   L.push(["Custo total (R$)", custoBRL.toFixed(2).replace(".",",")]);
   L.push(["Custo por e-mail (R$)", perBRL.toFixed(4).replace(".",",")+(perBRL<=0.06?" (OK, meta R$0,06)":" (ACIMA da meta R$0,06)")]);
+  L.push([]); L.push(["PDFs TRAVADOS (cobertura < "+META_COBERTURA+"%) ("+(_pdfsBloqueados?_pdfsBloqueados.length:0)+")","%","e‑mails","modelo tentado"]);
+  (_pdfsBloqueados||[]).forEach(b=>L.push([b.file, b.pct+"%", b.captados+"/"+b.alvo, b.modelo]));
   const faltam = alvo ? [..._emailAlvo.uni].filter(e=>!captUni.has(e)) : [];
   L.push([]); L.push(["E-MAILS DO PDF QUE NÃO ENTRARAM ("+faltam.length+")",""]);
   faltam.forEach(e=>L.push([e,""]));
@@ -3275,9 +3393,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.27";
+const VERSION = "13.28";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.28","2026-06-05","ESTEIRA POR MODELOS + trava de qualidade (90%). (1) Novo modelo de coleta «SOBRENOME,Nome + e‑mail nº» para anais tipo UNITINS/PIVIC (autores SOBRENOME,Nome; e e‑mail rotulado por número, listas «e‑mails: a, b e c» que quebram de linha) — esse formato ia de 8% → 97%. (2) Cada coleta agora MOSTRA o modelo usado por tipo de artigo (bloco Nome/Instituição/E‑mail · Nome (e‑mail) · geral). (3) GATE de cobertura por PDF: se NENHUM modelo pronto atingir 90% dos e‑mails do PDF, esse PDF é TRAVADO (⛔), listado em 📊 Cobertura e no relatório, com aviso — em vez de soltar dado ruim em silêncio. Conferência feita em todos os PDFs da pasta (raiz + ARACE 138 + SBIE 185): anais 90–100%, artigos ARACE/SBIE/Nome‑(e‑mail) 100%."],
   ["13.27","2026-06-05","Trava de custo da IA: os botões 🔍 Verificar e 🔎 Recuperar só liberam com ACERTO ≥ 75% (e‑mails únicos capturados ÷ e‑mails do PDF). Abaixo disso eles ficam desabilitados e a Cobertura avisa «⛔ IA bloqueada» — porque com muito erro o gasto da IA dispara, e nesses casos compensa revisar manualmente o que deu errado. A lupa de cada linha continua livre (é a revisão manual, 1 por vez)."],
   ["13.26","2026-06-05","Voltou o download na Cobertura: botão «⬇️ Baixar relatório (.csv)» no painel 📊 Cobertura. O relatório traz tudo: trabalhos coletados × sumário, e‑mails únicos no PDF × capturados (com a %), custo total e por e‑mail (vs meta R$ 0,06), a LISTA dos e‑mails que não entraram e os trabalhos removidos sem e‑mail. (Substituiu, com vantagem, o antigo «baixar removidos».)"],
   ["13.25","2026-06-05","Custo por e‑mail com META: o «Custo por e‑mail» (Última coleta) agora mostra ✅ se ficou ≤ R$ 0,06 ou ❌ se passou — e PASSOU a incluir o gasto da VERIFICAÇÃO (🔍 lupa) e da RECUPERAÇÃO (🔎), não só o da coleta. Assim o número reflete o custo real por e‑mail, somando tudo que a IA gastou naquela coleta."],
