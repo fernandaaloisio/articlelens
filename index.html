@@ -450,6 +450,25 @@ function _orfaosDoRec(r){
   return [...new Set((r.all_emails||[]).map(e=>(e||"").trim()).filter(Boolean))]
     .filter(e=>!jaAtrib.has(e.toLowerCase()));
 }
+// REUSO DE NOME POR E-MAIL: o MESMO e-mail costuma vir com o nome certo num artigo e sem nome
+// (ou com nome errado) em outro. Constrói um mapa e-mail→nome a partir SÓ dos pareamentos CONFIÁVEIS
+// (nome bate com o e-mail) e usa esse nome onde faltou/errou. Roda 1x por coleta.
+let _nomesReuFeito = false;
+function _reusarNomesPorEmail(){
+  if(_nomesReuFeito) return; _nomesReuFeito = true;
+  const mapa = {};
+  (allResults||[]).forEach(r=>(r.authors||[]).forEach(a=>{
+    if(a.email && a.name && _emailBate(a.name, a.email)){
+      const k=a.email.toLowerCase().trim(); if(!mapa[k]) mapa[k]=a.name;   // 1ª ocorrência confiável vence
+    }
+  }));
+  (allResults||[]).forEach(r=>(r.authors||[]).forEach(a=>{
+    if(!a.email) return; const k=a.email.toLowerCase().trim(); if(!mapa[k]) return;
+    if(!a.name || !_emailBate(a.name, a.email)){           // sem nome OU nome não bate → reusa o confiável
+      a.name = mapa[k]; a._orphan = false; a._nomeReusado = true;
+    }
+  }));
+}
 // adiciona os órfãos como autores reais (nome vazio + _orphan) — 1x por registro
 function _materializarOrfaos(){
   (allResults||[]).forEach(r=>{
@@ -2156,7 +2175,7 @@ function excluirSemEmail(){
   lastRemovidosFull = allResults.filter(r=>!(r.authors||[]).length);     // registros completos (p/ recuperar via IA)
   lastRemovidos = lastRemovidosFull.map(r=>({title:r.title||"(sem título)", source:r.source_file||"",
                                       temArroba: /@/.test(r._raw||"")}));
-  allResults.length=0; allResults.push(...fica); _okSet.clear();
+  allResults.length=0; allResults.push(...fica); _okSet.clear(); _nomesReuFeito=false;
   return {autRem, trabRem: lastRemovidos.length,
           remComArroba: lastRemovidos.filter(r=>r.temArroba).length};
 }
@@ -2181,7 +2200,7 @@ async function processBatch(){
         const txt = await item.file.text();
         recs = [await extractFromHTML(txt, item.file.name)];
       }
-      item.result = recs; allResults.push(...recs); _okSet.clear();
+      item.result = recs; allResults.push(...recs); _okSet.clear(); _nomesReuFeito=false;
       item.status = "concluido";
     }catch(err){
       item.status = "erro"; item.error = err.message;
@@ -2480,7 +2499,8 @@ function renderResults(){
   const res = document.getElementById("results");
   if(!allResults.length){ res.classList.remove("show"); return; }
   res.classList.add("show");
-  _materializarOrfaos();   // órfãos viram autores reais ANTES de contar/listar
+  _materializarOrfaos();         // órfãos viram autores reais ANTES de contar/listar
+  _reusarNomesPorEmail();        // reusa nome de e-mail já pareado com sucesso em outro artigo
 
   let nAuthors=0, nEmails=0;
   allResults.forEach(r=>{
@@ -2500,12 +2520,12 @@ function renderResults(){
       mismatch:!!(a.email && a.name && !_emailBate(a.name, a.email))}));
   });
   const totalFlat = flat.length;
-  const adminMode = _ehAdmin();    // admin baixa direto: sem ⚠ no topo, sem OK, sem bloqueio
-  // ⚠ pendentes (⚠ && não confirmados com OK) ficam SEMPRE no topo, independente de filtro/página
+  const adminMode = _ehAdmin();    // admin: vê ⚠ na frente e botão OK, mas baixa SEM bloqueio
+  // ⚠ pendentes (⚠ && não confirmados com OK) ficam SEMPRE no topo (admin e usuário)
   const _okKey = x => x.ri+"|"+x.ai;
   const ehAlerta = x => !!(x.mismatch || x.inv || x.rev || x._orphan);
-  const pendente  = x => !adminMode && ehAlerta(x) && !_okSet.has(_okKey(x));
-  if(!adminMode) flat.sort((a,b)=>{ const pa=pendente(a)?0:1, pb=pendente(b)?0:1; return pa-pb; });
+  const pendente  = x => ehAlerta(x) && !_okSet.has(_okKey(x));
+  flat.sort((a,b)=>{ const pa=pendente(a)?0:1, pb=pendente(b)?0:1; return pa-pb; });
   // 🔍 filtro: busca + "só problemas"
   const q = _norm((document.getElementById("resSearch")||{}).value||"").trim();
   const onlyProb = !!(document.getElementById("resOnlyProb")||{}).checked;
@@ -2519,14 +2539,16 @@ function renderResults(){
   if(curPage>=pages) curPage = pages-1;
   const slice = flat.slice(curPage*PAGE_SIZE, curPage*PAGE_SIZE+PAGE_SIZE);
 
-  // banner de pendentes (só para login NÃO‑admin)
-  const allPend = adminMode ? 0 : _pendentesCount();
+  // banner de pendentes (⚠ na frente para todos; o BLOQUEIO do download é só p/ não‑admin)
+  const allPend = _pendentesCount();
   let bannerEl = document.getElementById("pendBanner");
   if(!bannerEl){ bannerEl=document.createElement("div"); bannerEl.id="pendBanner";
     const tbl=document.querySelector(".table-wrap"); if(tbl) tbl.parentNode.insertBefore(bannerEl,tbl); }
   if(allPend>0){
     bannerEl.style.cssText="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;display:flex;align-items:center;gap:10px";
-    bannerEl.innerHTML='<span>⚠️ <b>'+allPend+' linha'+(allPend>1?'s':'')+' aguardando verificação.</b> Confirme cada ⚠ com <b>OK</b> antes de exportar.</span>';
+    bannerEl.innerHTML = adminMode
+      ? '<span>⚠️ <b>'+allPend+' linha'+(allPend>1?'s':'')+' com aviso</b> (no topo, em amarelo). Revise se quiser — o download está liberado.</span>'
+      : '<span>⚠️ <b>'+allPend+' linha'+(allPend>1?'s':'')+' aguardando verificação.</b> Confirme cada ⚠ com <b>OK</b> antes de exportar.</span>';
   } else {
     bannerEl.style.display="none";
   }
@@ -2755,13 +2777,13 @@ document.getElementById("extractBtn").onclick = ()=>{
   else toast("Adicione arquivos ou use as abas HTML/Manual.", "warn");
 };
 document.getElementById("clearAll").onclick = ()=>{
-  fileQueue=[]; allResults=[]; errorsThisRun=[]; curPage=0; _okSet.clear();
+  fileQueue=[]; allResults=[]; errorsThisRun=[]; curPage=0; _okSet.clear(); _nomesReuFeito=false;
   renderFileQueue(); renderResults();
   document.getElementById("progMeter").style.width="0%";
   setStatus("Tudo limpo. Pronto para um novo lote.");
 };
 document.getElementById("clearResults").onclick = ()=>{
-  allResults=[]; errorsThisRun=[]; curPage=0; _okSet.clear(); renderResults();
+  allResults=[]; errorsThisRun=[]; curPage=0; _okSet.clear(); _nomesReuFeito=false; renderResults();
   setStatus("Resultados limpos.");
 };
 
@@ -2949,9 +2971,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.12";
+const VERSION = "13.13";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.13","2026-06-05","(1) REUSO DE NOME PELO E‑MAIL: o mesmo autor aparece em vários trabalhos; quando o nome dele JÁ foi pego certo num artigo (o nome bate com o e‑mail) e em outro o nome veio em branco ou errado, o app agora REPETE o nome certo. Reduziu muito os e‑mails sem nome e os «não confere». (2) As linhas com ⚠ ficam na frente (topo, amarelo) também para o ADMIN — pra revisar rápido — mas o admin continua baixando direto, sem precisar dar OK (o bloqueio é só do login usuário)."],
   ["13.12","2026-06-05","A verificação obrigatória (⚠ no topo + botão OK + export bloqueado) agora vale SÓ para o login de USUÁRIO. O ADMIN baixa direto, sem precisar dar OK em cada linha — vê os avisos ⚠ como informação, mas a planilha sai na hora e na ordem normal."],
   ["13.11","2026-06-05","Verificação obrigatória antes do export: (1) Todo e‑mail com ⚠ aparece na tabela — inclusive e‑mails encontrados no PDF que não foram ligados a nenhum autor (antes sumiam em silêncio, agora aparecem com «⚠ autor não identificado» pra você preencher/confirmar). (2) Linhas com ⚠ não confirmadas ficam no TOPO da tabela com fundo amarelo e botão OK. (3) Ao clicar OK a linha vai para a posição normal. (4) Export (CSV/Excel/JSON) fica BLOQUEADO enquanto houver qualquer ⚠ pendente — uma mensagem diz quantas faltam. Assim a planilha só sai quando você validou tudo."],
   ["13.10","2026-06-05","Trabalhos que ficaram FORA do sumário agora são recuperados. Alguns anais têm sumário incompleto (não listam todos os trabalhos) — antes o app só pegava os do sumário. Agora ele varre o corpo e acrescenta os trabalhos que não estavam no índice, MAS só quando consegue ler limpo (≥3 e‑mails que batem com o nome do autor) — gate forte pra nunca trazer trabalho‑lixo. No anais de enfermagem (56dbda) recuperou o «SAÚDE MENTAL: DESAFIOS DA ASSISTÊNCIA…» (faltava no sumário) → 72 de 73 e‑mails únicos. No de 2023 trouxe +6 trabalhos / +25 e‑mails sem nenhum erro novo. Zero regressão nos demais (449, SMENF, 366, 380, 336)."],
