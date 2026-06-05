@@ -2014,19 +2014,21 @@ function parseInlineEmailAuthors(text){
 async function buildAuthors(text, html, title){
   // 1) Sem metadados HTML, tenta o bloco de periódico (nome+e-mail juntos = exato)
   if(!html){
+    // Dois modelos ESTRUTURADOS (limpos, sem pegar e-mail das referências):
+    //   • bloco "Nome / cargo / Instituição: / E-mail:"  (ex.: ARACE)
+    //   • inline "Nome Completo (email@dominio)"          (ex.: Even3)
+    // O coletor ESCOLHE SOZINHO o melhor: o que pega MAIS e-mails (e, empatando, mais pares nome+e-mail).
     const blocks = parseAuthorBlocks(text);
-    if(blocks.length){
-      // formato estruturado: os blocos SÃO os autores. NÃO inventar autor a partir de
-      // e-mails soltos (eles vêm das REFERÊNCIAS e poluíam com "nomes" tipo "Profdebora").
-      _ultimoModeloArtigo = "Artigo · bloco Nome/Instituição/E‑mail";
-      return blocks;
-    }
-    // formato Even3 "Nome (email)" logo após o título → exato, sem pegar frases do corpo.
     const inline = parseInlineEmailAuthors(text);
-    if(inline.length){ _ultimoModeloArtigo = "Artigo · Nome (e‑mail)"; return inline; }
+    const _scoreA = a => (a.filter(x=>x.email).length*10) + a.filter(x=>x.name&&x.email).length;
+    const sB=_scoreA(blocks), sI=_scoreA(inline);
+    if(sB>0 && sB>=sI){ _ultimoModeloArtigo="Artigo · bloco Nome/Instituição/E‑mail"; return blocks; }
+    if(sI>0){ _ultimoModeloArtigo="Artigo · Nome (e‑mail)"; return inline; }
   }
-  // 2) Caminho geral: nomes (meta/regex) + e-mails + pareamento inteligente
-  _ultimoModeloArtigo = "Artigo · geral (nomes + e‑mails)";
+  // 2) Caminho geral: nomes (meta/regex) + e-mails + pareamento inteligente.
+  //    (e-mails em CHAVE {a,b}@dom estilo SBC já são expandidos por extractEmails → modelo SBIE)
+  _ultimoModeloArtigo = /\{[^}]+\}@[a-z0-9.\-]+\.[a-z]{2,}/i.test(text||"")
+                          ? "Artigo · chaves SBC {a,b}@dom" : "Artigo · geral (nomes + e‑mails)";
   const names  = extractAuthorNames(text, html);
   const emails = extractEmails(text);
   let authors  = pairAuthorsEmails(names, emails);          // heurística (grátis)
@@ -3393,9 +3395,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.28";
+const VERSION = "13.29";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.29","2026-06-05","Coletor escolhe SOZINHO o melhor modelo de artigo. Antes ele usava o 1º parser que retornava algo; agora compara os modelos estruturados (bloco «Nome/Instituição/E‑mail» × «Nome (e‑mail)») e fica com o que pega MAIS e‑mails (empate → mais pares nome+e‑mail). E passou a nomear o modelo SBC de chaves «{a,b}@dom» quando aparece (antes caía em «geral»). Tudo sem IA, de graça, por assinatura do formato — e o gate de 90% segue como rede de segurança."],
   ["13.28","2026-06-05","ESTEIRA POR MODELOS + trava de qualidade (90%). (1) Novo modelo de coleta «SOBRENOME,Nome + e‑mail nº» para anais tipo UNITINS/PIVIC (autores SOBRENOME,Nome; e e‑mail rotulado por número, listas «e‑mails: a, b e c» que quebram de linha) — esse formato ia de 8% → 97%. (2) Cada coleta agora MOSTRA o modelo usado por tipo de artigo (bloco Nome/Instituição/E‑mail · Nome (e‑mail) · geral). (3) GATE de cobertura por PDF: se NENHUM modelo pronto atingir 90% dos e‑mails do PDF, esse PDF é TRAVADO (⛔), listado em 📊 Cobertura e no relatório, com aviso — em vez de soltar dado ruim em silêncio. Conferência feita em todos os PDFs da pasta (raiz + ARACE 138 + SBIE 185): anais 90–100%, artigos ARACE/SBIE/Nome‑(e‑mail) 100%."],
   ["13.27","2026-06-05","Trava de custo da IA: os botões 🔍 Verificar e 🔎 Recuperar só liberam com ACERTO ≥ 75% (e‑mails únicos capturados ÷ e‑mails do PDF). Abaixo disso eles ficam desabilitados e a Cobertura avisa «⛔ IA bloqueada» — porque com muito erro o gasto da IA dispara, e nesses casos compensa revisar manualmente o que deu errado. A lupa de cada linha continua livre (é a revisão manual, 1 por vez)."],
   ["13.26","2026-06-05","Voltou o download na Cobertura: botão «⬇️ Baixar relatório (.csv)» no painel 📊 Cobertura. O relatório traz tudo: trabalhos coletados × sumário, e‑mails únicos no PDF × capturados (com a %), custo total e por e‑mail (vs meta R$ 0,06), a LISTA dos e‑mails que não entraram e os trabalhos removidos sem e‑mail. (Substituiu, com vantagem, o antigo «baixar removidos».)"],
