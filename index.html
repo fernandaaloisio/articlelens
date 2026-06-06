@@ -1305,72 +1305,70 @@ function scanCorpoPV(text, works){
   return add;
 }
 /* ───────────────────────────────────────────────────────────────────────────
-   MODELO "SOBRENOME, Nome  +  e‑mail rotulado por número"  (anais tipo UNITINS/PIVIC)
-   Estrutura de cada trabalho:
+   MODELO "Autores numerados + e‑mail rotulado"  (anais tipo UNITINS/PIVIC, UFRA…)
+   Cada trabalho:
      TÍTULO (em CAIXA ALTA, 1‑4 linhas)
-     1 2                              ← marcador (números soltos, podem vir interleaved)
-     OLIVEIRA, Gustavo Alves; QUEIROZ, Adriano Sérgio   ← autores SOBRENOME, Nome ; separados por ;
-     1Estudante do Curso ...; e-mail:  alvesgustavo@unitins.br
-     2Professor/Orientador ...; e-mails: adriano.sq@unitins.br e outro@x.br   ← rotulado por número, pode ter VÁRIOS
+     1 2                              ← marcador (números soltos, podem vir interleaved nos nomes)
+     autores: "SOBRENOME, Nome; ..."  OU  "Nome Completo; Nome Completo; ..."
+     1. afiliação ..., e-mail: a@x ; 2. Fulano ; 3. ... e-mail: b@y   ← numerado, e‑mail por nº
      RESUMO
-   Âncora confiável = RESUMO/ABSTRACT. Captura TODOS os @ contíguos acima (inclusive
-   listas "e-mails: a, b e c" que QUEBRAM de linha) e os nomes SOBRENOME,Nome (juntando
-   linhas quebradas por marcadores). Pareia por posição quando #nomes == #emails. */
+   ESTRATÉGIA (robusta p/ as 2 variações): ancora no RESUMO/ABSTRACT e lê a REGIÃO até o
+   TÍTULO (caixa alta) acima. Pega TODOS os @ da região (afiliação corrida que quebra de
+   linha — antes só pegava @ contíguos e perdia metade). Nomes = topo da região (antes da
+   1ª linha de afiliação/@), juntando linhas e pulando marcadores; "SOBRENOME, Nome"→flip,
+   "Nome Completo" mantém. Pareia por posição só quando #nomes == #emails (senão nome vazio
+   p/ memória/IA — nunca chuta errado). */
+const _AFF_KW = /universidad|institut|gradua|bolsist|orientador|c[âa]mpus|campus|e-?mail|professor|mestrand|doutorand|discente|docente|curso|departament|pivic|pibic|faculdad|p[óo]s-?gradu|t[ée]cnic|licenciatur|f[ée]deral|estadual|laborat|p[óo]s-?doc|especial/i;
 function _assinaturaSobreNum(text){
   const linhas = text.split("\n");
-  let num=0, sob=0;
+  let num=0, nomesPV=0;
   for(const l of linhas){
-    if(/^\s*\d{1,2}\D.{0,200}e-?mails?\s*:/i.test(l)) num++;
-    if(/^[A-ZÁ-Ú]{2,}(\s+[A-ZÁ-Ú]+)*\s*,\s*[A-ZÁ-Ú]/.test(l) && /;/.test(l) && l.length<240) sob++;
+    if(/^\s*\d{1,2}\s*[\.\)]?\D.{0,200}e-?mails?\s*:/i.test(l)) num++;          // "1. ... e-mail:" ou "1Estudante ... e-mail:"
+    if(/;/.test(l) && /[A-ZÁ-Ú][a-zà-ÿ]+\s+[A-ZÁ-Ú]/.test(l) && !/@/.test(l) && l.length<240) nomesPV++;   // linha de nomes ;-separados
   }
-  return {num, sob};
+  return {num, nomesPV};
 }
 function parseModeloSobrenomeNum(text){
   const sig=_assinaturaSobreNum(text);
-  if(sig.num < 8 || sig.sob < 5) return [];     // assinatura fraca → não é este formato (não interfere noutros PDFs)
+  if(sig.num < 8) return [];     // poucos blocos numerados c/ e‑mail → não é este formato (não interfere noutros PDFs)
   const L = text.split("\n").map(x=>x.replace(/\s+$/,""));
   const MAILRE=/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/ig;
   const hasMail=l=>/@/.test(l);
   const marker=l=>/^\s*[\d\s]+$/.test(l);
-  const authorish=l=>/,/.test(l)&&/[A-ZÁ-Ú]{2,}/.test(l)&&/[a-zà-ÿ]/.test(l)&&!hasMail(l)&&l.length<260&&!/palavras?-?chave|resumo|abstract/i.test(l);
-  const contin=l=>/[a-zà-ÿ]/.test(l)&&!hasMail(l)&&!marker(l)&&l.length<260&&!/palavras?-?chave|resumo|abstract/i.test(l)&&!/[a-zà-ÿ]{5,}\s+[a-zà-ÿ]{5,}\s+[a-zà-ÿ]{5,}/.test(l);
-  const isTitleLine=l=>l&&/[A-ZÁ-Ú]/.test(l)&&!/[a-zà-ÿ]{4,}/.test(l)&&!hasMail(l)&&!marker(l);
+  const isTitle=l=>{ const s=l.trim(); if(s.length<12) return false; if(/@/.test(s)) return false;
+    if(/palavras?-?chave|resumo|abstract|e-?mail/i.test(s)) return false;
+    const letras=s.replace(/[^A-Za-zÀ-ÿ]/g,""); if(letras.length<10) return false;
+    return (s.match(/[a-zà-ÿ]/g)||[]).length/letras.length < 0.25; };   // ≥75% MAIÚSCULAS → é título
+  const affish=l=>hasMail(l)||_AFF_KW.test(l)||/^\s*\d{1,2}\s*[\.\)]/.test(l);
+  const tc=s=>s.toLowerCase().replace(/(^|\s|\p{Pd})\p{L}/gu,c=>c.toUpperCase());
   const flip=s=>{ const m=s.split(/,\s*/); if(m.length<2) return s.trim();
     const sob=m[0].trim().toLowerCase().replace(/(^|\s|\p{Pd})\p{L}/gu,c=>c.toUpperCase());
     return (m.slice(1).join(" ").trim()+" "+sob).replace(/\s+/g," ").trim(); };
-  const tc=s=>s.toLowerCase().replace(/(^|\s|\p{Pd})\p{L}/gu,c=>c.toUpperCase());
+  const nomeOrdem=s=>{ s=s.trim().replace(/^\d+[\.\)]?\s*/,"").replace(/\s*\d+\s*$/,"").replace(/[.;]+$/,"").trim();
+    return /,/.test(s) ? flip(s) : tc(s); };   // "SOBRENOME, Nome"→flip ; "Nome Completo"→title-case
   const resumos=[]; L.forEach((l,i)=>{ if(/^\s*(RESUMO|ABSTRACT)\b/i.test(l)) resumos.push(i); });
   const works=[];
   for(const r of resumos){
-    let k=r-1; while(k>=0&&!L[k].trim()) k--;
-    // bloco de e-mails = linhas contíguas com @ (tolera linha em branco)
-    let bot=k, top=k, found=false;
-    while(k>=0 && (hasMail(L[k])||!L[k].trim())){ if(hasMail(L[k])){ top=k; found=true; } k--; }
-    if(!found) continue;
-    const emails=[]; for(let q=top;q<=bot;q++){ (L[q].match(MAILRE)||[]).forEach(e=>emails.push(e.toLowerCase().replace(/[.;,]+$/,""))); }
-    // bloco de autores (pula marcadores interleaved e junta nomes quebrados)
-    let a=top-1, al=[], steps=0;
-    while(a>=0 && steps++<14){
-      if(!L[a].trim()||marker(L[a])){ a--; continue; }
-      if(authorish(L[a])||(al.length&&contin(L[a]))){ al.unshift(L[a].trim()); a--; continue; }
-      break;
-    }
-    const auth=al.join(" ").replace(/\s+/g," ").trim();
-    // título (caixa alta, acima dos autores)
-    while(a>=0 && (marker(L[a])||!L[a].trim())) a--;
-    let tl=[], s2=0; while(a>=0 && isTitleLine(L[a]) && s2++<8){ tl.unshift(L[a].trim()); a--; while(a>=0&&!L[a].trim())a--; }
-    const title=tc(tl.join(" ").replace(/\s+/g," ").trim());
-    const names=auth.split(/\s*;\s*/).map(s=>s.trim()).filter(s=>/,/.test(s)).map(flip)
-                    .filter(n=>n.split(/\s+/).length>=2 && n.length<60 && !/UNITINS|C[âa]mpus|Curso|Professor|Estudante|Doutorand|Mestrand|Bolsista/i.test(n));
+    // REGIÃO do trabalho = do RESUMO subindo até o TÍTULO (caixa alta)
+    let k=r-1, steps=0; const region=[];
+    while(k>=0 && steps++<30 && !isTitle(L[k]) && !/^\s*(RESUMO|ABSTRACT)\b/i.test(L[k]) && !/palavras?-?chave/i.test(L[k])){ region.unshift(L[k]); k--; }
+    const title = (k>=0 && isTitle(L[k])) ? tc(L[k].trim()) : "";
+    // e-mails = TODOS os @ da região (afiliação corrida, quebra de linha, listas a,b e c)
+    const emails=[]; region.forEach(l=>{ (l.match(MAILRE)||[]).forEach(e=>emails.push(e.toLowerCase().replace(/[.;,)]+$/,""))); });
     const seen=new Set(), em2=[]; for(const e of emails){ if(!seen.has(e)){ seen.add(e); em2.push(e); } }
+    if(!em2.length) continue;
+    // nomes = topo da região (antes da 1ª linha de afiliação/@), juntando + pulando marcadores
+    let nameStr="";
+    for(const l of region){ if(affish(l)) break; if(marker(l)||!l.trim()) continue; nameStr+=" "+l.trim(); }
+    const names=nameStr.split(/\s*;\s*/).map(s=>s.trim()).filter(Boolean).map(nomeOrdem)
+                 .filter(n=>n.split(/\s+/).length>=2 && n.length<60 && !_AFF_KW.test(n));
     const balanced = names.length===em2.length && names.length>0;
     const authors=[]; const mx=Math.max(names.length, em2.length);
     for(let q=0;q<mx;q++){
-      // só pareia nome↔e-mail por posição quando balanceado (senão deixa nome p/ memória/IA — nunca chuta errado)
       const nm = balanced ? names[q] : (names.length>1 && names.length<em2.length ? "" : (names[q]||""));
       authors.push({ name:nm, email:em2[q]||"" });
     }
-    if(em2.length) works.push({ title, authors, all_emails:em2, _modeloFmt:"sobrenome-num" });
+    works.push({ title, authors, all_emails:em2, _modeloFmt:"numerado-email" });
   }
   return works;
 }
@@ -3395,9 +3393,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.29";
+const VERSION = "13.30";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.30","2026-06-05","Modelo numerado muito mais forte (resolve o Anaisfinais 2023, que estava em 66%). Agora ele lê a REGIÃO de cada trabalho do RESUMO até o TÍTULO e pega TODOS os e‑mails dali — antes só pegava @ em linhas coladas e perdia metade quando a afiliação era um parágrafo corrido que quebrava de linha (ex.: «1. … e‑mail: a; 2. Fulano; 3. … e‑mail: b»). Também passou a aceitar nomes em «Nome Completo» (não só «SOBRENOME, Nome»). Resultado: Anaisfinais 66%→99%, F3D 97%→99%, 1D5B7CCC 99% — e nada regrediu nos outros anais."],
   ["13.29","2026-06-05","Coletor escolhe SOZINHO o melhor modelo de artigo. Antes ele usava o 1º parser que retornava algo; agora compara os modelos estruturados (bloco «Nome/Instituição/E‑mail» × «Nome (e‑mail)») e fica com o que pega MAIS e‑mails (empate → mais pares nome+e‑mail). E passou a nomear o modelo SBC de chaves «{a,b}@dom» quando aparece (antes caía em «geral»). Tudo sem IA, de graça, por assinatura do formato — e o gate de 90% segue como rede de segurança."],
   ["13.28","2026-06-05","ESTEIRA POR MODELOS + trava de qualidade (90%). (1) Novo modelo de coleta «SOBRENOME,Nome + e‑mail nº» para anais tipo UNITINS/PIVIC (autores SOBRENOME,Nome; e e‑mail rotulado por número, listas «e‑mails: a, b e c» que quebram de linha) — esse formato ia de 8% → 97%. (2) Cada coleta agora MOSTRA o modelo usado por tipo de artigo (bloco Nome/Instituição/E‑mail · Nome (e‑mail) · geral). (3) GATE de cobertura por PDF: se NENHUM modelo pronto atingir 90% dos e‑mails do PDF, esse PDF é TRAVADO (⛔), listado em 📊 Cobertura e no relatório, com aviso — em vez de soltar dado ruim em silêncio. Conferência feita em todos os PDFs da pasta (raiz + ARACE 138 + SBIE 185): anais 90–100%, artigos ARACE/SBIE/Nome‑(e‑mail) 100%."],
   ["13.27","2026-06-05","Trava de custo da IA: os botões 🔍 Verificar e 🔎 Recuperar só liberam com ACERTO ≥ 75% (e‑mails únicos capturados ÷ e‑mails do PDF). Abaixo disso eles ficam desabilitados e a Cobertura avisa «⛔ IA bloqueada» — porque com muito erro o gasto da IA dispara, e nesses casos compensa revisar manualmente o que deu errado. A lupa de cada linha continua livre (é a revisão manual, 1 por vez)."],
