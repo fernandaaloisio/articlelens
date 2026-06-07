@@ -2537,7 +2537,13 @@ async function processBatch(){
                           if(em && (!/@/.test(em) || !(r._raw||"").toLowerCase().includes(em) || _emailInstitucional(em))) em="";
                           return {name:a.name.trim(), email:em, _aiOk:true}; })
                 .filter(a=>a.email);                       // exporta só quem tem e‑mail no texto
-              if(novos.length){ r.authors=novos; nomesCorr=true; nNomes++; }
+              if(novos.length){
+                // TRAVA: a IA NUNCA pode PERDER um e‑mail que o determinístico já tinha (ela só limpa nome/título).
+                const temEmail=new Set(novos.map(a=>a.email));
+                for(const a of (r.authors||[])){ const em=(a.email||"").toLowerCase().trim();
+                  if(em && !temEmail.has(em)){ novos.push({name:a.name||"", email:em, _aiOk:true}); temEmail.add(em); } }
+                r.authors=novos; nomesCorr=true; nNomes++;
+              }
             }
            } else {
             if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)){ r.title=f.title; nTit++; }
@@ -3456,9 +3462,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.39";
+const VERSION = "13.40";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.40","2026-06-07","TRAVA anti-perda no modo «IA faz tudo»: a IA NUNCA pode remover um e‑mail que o determinístico já capturou — ela só limpa nome/título. Antes, ao refazer um trabalho, a IA às vezes omitia um autor e o e‑mail sumia (no 892EAB ela derrubou 5 de 505). Agora todo e‑mail capturado é garantido na saída, com o nome da IA quando ela acertou ou o nome determinístico caso ela tenha omitido. Obs.: e‑mails truncados no PRÓPRIO PDF (texto acaba em «@hotmail» sem «.com») seguem fora — não dá pra capturar o que não está no texto."],
   ["13.39","2026-06-07","MODO TESTE «IA faz TUDO»: com o checkbox 🧪 ligado, a IA recebe o TEXTO CRU de cada trabalho e refaz título+nome+e‑mail do ZERO (autoridade total), em vez de só ajustar. CONSERTO crítico: o modelo numerado de anais agora anexa o «_raw» (bloco do trabalho) — sem isso a IA vinha CEGA (texto vazio) e por isso não corrigia nada nos anais. Agora a IA enxerga o bloco e reextrai. (O determinístico só corta os trabalhos.) Rode com a IA ligada (Render+Haiku) + o checkbox marcado."],
   ["13.38","2026-06-07","Nova opção (aba 🧠 IA): «✅ Conferir TODOS os trabalhos com IA (máxima qualidade)». Ligada, a IA (Haiku, nuvem) revisa nome/título de CADA trabalho — não só os marcados como suspeitos — pro resultado sair pronto pra entregar. O determinístico continua achando 100% dos e‑mails e cortando os trabalhos (de graça); a IA só confere/corrige, por isso fica barata. Custo aparece no «custo por e‑mail» (meta R$0,06). Desligada = comportamento de antes (só confere os ⚠, mais barato)."],
   ["13.37","2026-06-07","DOIS consertos grandes de QUALIDADE no modelo numerado (não só «achar o @», mas acertar nome e título): (1) TÍTULO completo — antes pegava só a ÚLTIMA linha do título (que quebra em 2‑3 linhas), agora junta todas → no 5CBDD46 os títulos «inteiros» foram de 73% → 100%. (2) Nome↔e‑mail por CONTEÚDO — antes pareava por POSIÇÃO, então um e‑mail quebrado/faltando no meio desalinhava todos os seguintes; agora casa cada e‑mail com o nome cujas iniciais/sobrenome batem → erro de nome 6%→3% (5CBDD46), 1% (F3D/1D5B7CCC). Anais com nomes muito fundidos (ex.: Anaisfinais) ainda têm ~13% — esses valem a passada da IA."],
