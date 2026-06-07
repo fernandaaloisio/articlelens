@@ -387,6 +387,7 @@
         <button class="btn" id="verificarIA">🔍 Verificar incertos com IA</button>
         <button class="btn primary" id="recupFalta">🔎 Recuperar faltantes (IA)</button>
         <button class="btn ghost" id="coberturaDl">⬇️ Baixar relatório (.csv)</button>
+        <button class="btn ghost" id="descartesDl">⬇️ Relatório de descartes (.csv)</button>
       </div>
       <div id="verifBody" style="margin-top:10px;font-size:13px"></div>
     </details>
@@ -3243,6 +3244,31 @@ document.getElementById("verificarIA").onclick = verificarIncertosIA;
   download(new Blob([csv],{type:"text/csv;charset=utf-8;"}), "relatorio_cobertura.csv");
   toast("Relatório de cobertura baixado.");
 };}
+/* RELATÓRIO DE DESCARTES: tudo que saiu da esteira, num arquivo só, p/ a equipe conferir.
+   3 blocos: 🔁 repetidos juntados · ⛔ PDFs travados (<95%) · ❌ removidos sem e‑mail. */
+{ const _dd=document.getElementById("descartesDl"); if(_dd) _dd.onclick = ()=>{
+  const esc=s=>'"'+String(s==null?"":s).replace(/"/g,'""')+'"';
+  const dup=lastDuplicatas||[], blo=_pdfsBloqueados||[], rem=(typeof lastRemovidos!=="undefined"&&lastRemovidos)?lastRemovidos:[];
+  if(!dup.length && !blo.length && !rem.length){ toast("Nada foi descartado nesta coleta. 🎉"); return; }
+  const L=[];
+  L.push(["RELATÓRIO DE DESCARTES — o que NÃO entrou no resultado final e por quê",""]);
+  L.push(["Gerado em", (typeof VERSION!=="undefined"?("v"+VERSION):"")]);
+  L.push([]);
+  L.push(["① TRABALHOS REPETIDOS JUNTADOS (mesmo título 2×+; e‑mails PRESERVADOS — nada perdido) ("+dup.length+")"]);
+  L.push(["Título","Vezes que apareceu","E‑mails unidos das cópias","Fonte"]);
+  dup.forEach(d=>L.push([d.titulo, d.vezes, d.emailsUnidos, d.fonte||""]));
+  L.push([]);
+  L.push(["② PDFs TRAVADOS por baixa cobertura < "+META_COBERTURA+"% (precisam de revisão manual) ("+blo.length+")"]);
+  L.push(["Arquivo","Cobertura","e‑mails","trabalhos","motivo","modelo"]);
+  blo.forEach(b=>L.push([b.file, b.pct+"%", (b.pctMail!=null?b.pctMail+"% ":"")+b.captados+"/"+b.alvo, (b.trabEsper?(b.pctTrab!=null?b.pctTrab+"% ":"")+b.trabCap+"/"+b.trabEsper:"—"), b.motivo||"", b.modelo||""]));
+  L.push([]);
+  L.push(["③ TRABALHOS REMOVIDOS por NÃO ter e‑mail no PDF ("+rem.length+")"]);
+  L.push(["Título","Tinha @ no texto? (extração falhou)","Fonte"]);
+  rem.forEach(r=>L.push([r.title, r.temArroba?"SIM — revisar":"não", r.source||""]));
+  const csv="﻿"+L.map(r=>r.map(esc).join(",")).join("\r\n");
+  download(new Blob([csv],{type:"text/csv;charset=utf-8;"}), "relatorio_descartes.csv");
+  toast("Relatório de descartes baixado: "+dup.length+" repetidos · "+blo.length+" travados · "+rem.length+" sem e‑mail.");
+};}
 
 
 /* =========================================================================
@@ -3511,9 +3537,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.45";
+const VERSION = "13.46";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.46","2026-06-07","Novo botão «⬇️ Relatório de descartes (.csv)» na 📊 Cobertura: um arquivo só com TUDO que não entrou no resultado e por quê — ① repetidos juntados (e‑mails preservados), ② PDFs travados (<95%, p/ revisar), ③ removidos sem e‑mail (marcando os que TINHAM @ mas a extração falhou). Pra equipe conferir os descartes de uma vez."],
   ["13.45","2026-06-07","TRANSPARÊNCIA: o app agora AVISA quando junta trabalhos repetidos. Quando o mesmo trabalho aparece 2×+ no PDF (ex.: seção de Resumos + seção de Artigos), o sistema junta numa linha só — mas antes fazia isso CALADO. Agora mostra em 📊 Cobertura «🔁 N trabalho(s) repetido(s) juntado(s)» com a lista (título, quantas vezes, e‑mails unidos), avisa por toast no fim, e lista no relatório .csv. E confirma: NENHUM e‑mail é perdido (os @ das cópias são unidos no trabalho mantido). Nada mais é descartado em silêncio."],
   ["13.44","2026-06-07","Recupera e‑mail com TLD truncado no PDF: quando o texto corta o domínio (ex.: «fulano@unitins» ou «fulano@unitins.» sem o «.br», com RESUMO logo abaixo), o app agora completa o final pelos domínios conhecidos (unitins→.br, gmail/hotmail/outlook→.com, uft/ifto→.edu.br). É a única «adivinhação», e segura (destino único). No F9322E18 recuperou 4 e‑mails de autor que estavam truncados (vanderleianascimento, kemmyllyclara, mariamikaelle, mirellacoelho → @unitins.br); únicos 77→80. NÃO altera e‑mail já completo."],
   ["13.43","2026-06-07","BUG GRAVE de e‑mails faltando (NÃO era a IA): o agrupador de trabalhos repetidos comparava só os 8 PRIMEIROS termos do título. Numa SÉRIE («Avaliação… Feira Municipal de Colmeia» × «…de Miranorte» × «…de Guarai»…), os 8 termos batem e elas dividem o mesmo orientador → o sistema achava que era o MESMO trabalho e DESCARTAVA as outras, perdendo dezenas de e‑mails. Agora compara o TÍTULO COMPLETO (séries não se confundem) e, ao juntar duas versões do mesmo trabalho, UNE os e‑mails (nunca descarta). No F9322E18: deixou de perder e voltou aos 77 únicos. Vale p/ TODOS os anais."],
