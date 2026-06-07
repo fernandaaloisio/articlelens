@@ -2608,6 +2608,10 @@ async function processBatch(){
               +" · US$ "+runCost.toFixed(4)+" (US$ "+lastRun.perWork.toFixed(4)+"/trab)"+(nFail?" · "+nFail+" falhas":"")+".");
     } else lastRun = { works: allResults.length, cost:0, perWork:0, hard:0, nEmail:0, nTit:0, nNomes:0, nFail:0, report:[] };
     _saveRun();
+    // ESTEIRA "IA coleta → validador": os e‑mails que a IA coletou/refez passam (de novo) pelo
+    // VALIDADOR — corrige typo de domínio (gmial→gmail) e marca inválido. (O 1º validador rodou ANTES
+    // da IA; sem esta 2ª passada os e‑mails da IA sairiam sem validar.)
+    try{ const v2=validarTudo(); if(v2 && (v2.corr||v2.inv)) setStatus("✅ Validador (pós‑IA): "+v2.corr+" corrigidos · "+v2.inv+" inválidos."); }catch(e){ console.warn("validarTudo pós‑IA:",e); }
   }
   // MEMÓRIA: aprende os pares confiáveis desta coleta (IA = forte; demais só se batem por conteúdo).
   try{ _parearNomesComEmails(allResults); }catch(e){ console.warn("parear:",e); }   // pareia nome↔e-mail solto ANTES de excluir/aprender
@@ -3462,9 +3466,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.40";
+const VERSION = "13.41";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.41","2026-06-07","Esteira do ANAIS reorganizada (a seu pedido): determinístico CORTA os trabalhos (acha tudo) → IA COLETA título+nome completo+e‑mail de cada um → VALIDADOR de e‑mail roda DE NOVO no fim (corrige typo de domínio, marca inválido). Antes o validador só rodava ANTES da IA, então os e‑mails que a IA coletava saíam sem validar; agora há uma 2ª passada do validador pós‑IA. Revista/artigo (1 PDF = 1 trabalho) segue no determinístico, que já vai bem. Para anais: ligar 🧪 «IA faz TODA a extração» na aba IA."],
   ["13.40","2026-06-07","TRAVA anti-perda no modo «IA faz tudo»: a IA NUNCA pode remover um e‑mail que o determinístico já capturou — ela só limpa nome/título. Antes, ao refazer um trabalho, a IA às vezes omitia um autor e o e‑mail sumia (no 892EAB ela derrubou 5 de 505). Agora todo e‑mail capturado é garantido na saída, com o nome da IA quando ela acertou ou o nome determinístico caso ela tenha omitido. Obs.: e‑mails truncados no PRÓPRIO PDF (texto acaba em «@hotmail» sem «.com») seguem fora — não dá pra capturar o que não está no texto."],
   ["13.39","2026-06-07","MODO TESTE «IA faz TUDO»: com o checkbox 🧪 ligado, a IA recebe o TEXTO CRU de cada trabalho e refaz título+nome+e‑mail do ZERO (autoridade total), em vez de só ajustar. CONSERTO crítico: o modelo numerado de anais agora anexa o «_raw» (bloco do trabalho) — sem isso a IA vinha CEGA (texto vazio) e por isso não corrigia nada nos anais. Agora a IA enxerga o bloco e reextrai. (O determinístico só corta os trabalhos.) Rode com a IA ligada (Render+Haiku) + o checkbox marcado."],
   ["13.38","2026-06-07","Nova opção (aba 🧠 IA): «✅ Conferir TODOS os trabalhos com IA (máxima qualidade)». Ligada, a IA (Haiku, nuvem) revisa nome/título de CADA trabalho — não só os marcados como suspeitos — pro resultado sair pronto pra entregar. O determinístico continua achando 100% dos e‑mails e cortando os trabalhos (de graça); a IA só confere/corrige, por isso fica barata. Custo aparece no «custo por e‑mail» (meta R$0,06). Desligada = comportamento de antes (só confere os ⚠, mais barato)."],
