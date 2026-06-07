@@ -2218,7 +2218,7 @@ function detectarModelo(text, mode){
 let modelosUsados = {};   // {nomeModelo: contagem} da última coleta
 let _pdfsBloqueados = [];  // PDFs cuja cobertura ficou < META_COBERTURA (nenhum modelo adequado) → revisar à mão
 let _ultimoModeloArtigo = ""; // qual sub-modelo de ARTIGO (periódico) pegou os autores (p/ nomear o modelo)
-const META_COBERTURA = 90; // % mínimo de e‑mails capturados p/ aceitar a coleta de um PDF; abaixo disso TRAVA e avisa
+const META_COBERTURA = 95; // % mínimo de e‑mails capturados p/ aceitar a coleta de um PDF; abaixo disso TRAVA e avisa
 /* O e-mail PARECE ser deste autor? (local-part contém algum token do nome, ou as iniciais). */
 function _emailBate(name, email){
   if(!email || !/@/.test(email)) return true;            // sem e-mail → não marca como erro
@@ -3393,9 +3393,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.30";
+const VERSION = "13.31";
 const VERSION_DATE = "2026-06-05";
 const CHANGELOG = [
+  ["13.31","2026-06-07","Piso da trava subiu de 90% → 95%. Agora um PDF só é aceito se algum modelo pegar ≥95% dos e‑mails; abaixo disso ele é TRAVADO (⛔) p/ revisão manual. Mais rígido (a seu pedido). Lembrando que a % é um termômetro (o alvo vem do regex de @), então de vez em quando trava um PDF que na prática já está completo — é só revisar e liberar."],
   ["13.30","2026-06-05","Modelo numerado muito mais forte (resolve o Anaisfinais 2023, que estava em 66%). Agora ele lê a REGIÃO de cada trabalho do RESUMO até o TÍTULO e pega TODOS os e‑mails dali — antes só pegava @ em linhas coladas e perdia metade quando a afiliação era um parágrafo corrido que quebrava de linha (ex.: «1. … e‑mail: a; 2. Fulano; 3. … e‑mail: b»). Também passou a aceitar nomes em «Nome Completo» (não só «SOBRENOME, Nome»). Resultado: Anaisfinais 66%→99%, F3D 97%→99%, 1D5B7CCC 99% — e nada regrediu nos outros anais."],
   ["13.29","2026-06-05","Coletor escolhe SOZINHO o melhor modelo de artigo. Antes ele usava o 1º parser que retornava algo; agora compara os modelos estruturados (bloco «Nome/Instituição/E‑mail» × «Nome (e‑mail)») e fica com o que pega MAIS e‑mails (empate → mais pares nome+e‑mail). E passou a nomear o modelo SBC de chaves «{a,b}@dom» quando aparece (antes caía em «geral»). Tudo sem IA, de graça, por assinatura do formato — e o gate de 90% segue como rede de segurança."],
   ["13.28","2026-06-05","ESTEIRA POR MODELOS + trava de qualidade (90%). (1) Novo modelo de coleta «SOBRENOME,Nome + e‑mail nº» para anais tipo UNITINS/PIVIC (autores SOBRENOME,Nome; e e‑mail rotulado por número, listas «e‑mails: a, b e c» que quebram de linha) — esse formato ia de 8% → 97%. (2) Cada coleta agora MOSTRA o modelo usado por tipo de artigo (bloco Nome/Instituição/E‑mail · Nome (e‑mail) · geral). (3) GATE de cobertura por PDF: se NENHUM modelo pronto atingir 90% dos e‑mails do PDF, esse PDF é TRAVADO (⛔), listado em 📊 Cobertura e no relatório, com aviso — em vez de soltar dado ruim em silêncio. Conferência feita em todos os PDFs da pasta (raiz + ARACE 138 + SBIE 185): anais 90–100%, artigos ARACE/SBIE/Nome‑(e‑mail) 100%."],
