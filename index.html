@@ -2049,7 +2049,7 @@ function _parseWorks(raw){
   if(lastObj>0){ try{ return JSON.parse(arr.slice(0, lastObj+1) + "]"); }catch(_){} }
   return [];
 }
-async function aiExtrairBloco(chunk){
+async function aiExtrairBloco(chunk, dbg){
   const sys = "Você extrai TODOS os trabalhos de um trecho de ANAIS acadêmico (texto cru, vários trabalhos). "
     + "Para CADA trabalho: title (título completo) e authors = lista de {name: nome completo e próprio, SEM "
     + "titulação (Doutor/Mestre/Graduando/Orientador) e SEM ser o e-mail; email}. REGRAS DURAS: só use e-mail "
@@ -2057,32 +2057,43 @@ async function aiExtrairBloco(chunk){
     + "e-mail; se um trabalho aparecer cortado na borda do trecho, inclua mesmo assim o que der. APENAS JSON.";
   const user = 'Devolva {"works":[{"title":"...","authors":[{"name":"Nome Completo","email":"x@y"}]}]}.\n\nTEXTO:\n' + (chunk||"").slice(0,12000);
   const msgs=[{role:"system",content:sys},{role:"user",content:user}];
-  try{ return _parseWorks(await aiChat(msgs,_repairModelNow())); }
+  try{
+    const raw = await aiChat(msgs,_repairModelNow());
+    if(dbg && !_aiDbgRaw) _aiDbgRaw = String(raw||"").slice(0,500);
+    return _parseWorks(raw);
+  }
   catch(e){
+    if(dbg && !_aiDbgErr) _aiDbgErr = e.message;
     if(/\b404\b|not_found|model:/i.test(e.message)){
-      if(_repairOK && _repairIdx<_repairCands.length-1){ _repairIdx++; try{ return await aiExtrairBloco(chunk); }catch(_){ } }
-      _repairOK=false; try{ return _parseWorks(await aiChat(msgs,AI.model)); }catch(_){ return []; }
+      if(_repairOK && _repairIdx<_repairCands.length-1){ _repairIdx++; try{ return await aiExtrairBloco(chunk,dbg); }catch(_){ } }
+      _repairOK=false; try{ const raw2=await aiChat(msgs,AI.model); if(dbg&&!_aiDbgRaw)_aiDbgRaw=String(raw2||"").slice(0,500); return _parseWorks(raw2); }catch(_){ return []; }
     }
     throw e;
   }
 }
+let _aiDbgRaw="", _aiDbgErr="";
 async function aiColetarAnais(text, fileName){
   // pica por PÁGINA (\f) acumulando ~7000 chars (trabalho raramente quebra; o dedup junta se quebrar)
   const pages=(text||"").split("\f"); const chunks=[]; let buf="";
   for(const p of pages){ if(buf && (buf.length+p.length)>7000){ chunks.push(buf); buf=""; } buf += (buf?"\f":"")+p; }
   if(buf.trim()) chunks.push(buf);
-  const low=(text||"").toLowerCase(); const works=[]; let brutos=0, falhas=0;
+  const low=(text||"").toLowerCase(); const works=[]; let brutos=0, falhas=0, semTexto=0;
+  _aiDbgRaw=""; _aiDbgErr="";
   for(let i=0;i<chunks.length;i++){
     setStatus("🧠 IA lendo o anais — bloco "+(i+1)+"/"+chunks.length+"…"); setProgress(i,chunks.length,"IA");
-    let ws=[]; try{ ws=await aiExtrairBloco(chunks[i]); }catch(_){ falhas++; }
+    let ws=[]; try{ ws=await aiExtrairBloco(chunks[i], i===0); }catch(_){ falhas++; }
     brutos += (ws||[]).length;
     for(const w of (ws||[])){
       const authors=(w&&w.authors||[]).map(a=>({name:(a.name||"").trim(), email:(a.email||"").trim().toLowerCase()}))
-        .filter(a=>a.email && /@/.test(a.email) && low.includes(a.email) && !_emailInstitucional(a.email));
+        .filter(a=>{ if(!a.email||!/@/.test(a.email)) return false;
+                     if(_emailInstitucional(a.email)) return false;
+                     if(!low.includes(a.email)){ semTexto++; return false; }   // IA devolveu @ que não está no texto
+                     return true; });
       if(authors.length) works.push({ title:(w.title||"").trim(), authors, _aiOk:true, _aiColetado:true, source_file:fileName });
     }
   }
-  _aiAnaisInfo = { blocos:chunks.length, trabalhosBrutos:brutos, trabalhos:works.length, falhas };
+  _aiAnaisInfo = { blocos:chunks.length, trabalhosBrutos:brutos, trabalhos:works.length, falhas,
+                   semTexto, amostra:_aiDbgRaw, erro:_aiDbgErr };
   console.log("aiColetarAnais:", JSON.stringify(_aiAnaisInfo));
   return works;
 }
@@ -3190,9 +3201,16 @@ function renderCobertura(ex){
   }
   const mu = Object.entries(modelosUsados||{});
   if(mu.length) html += "<br><br><b>📐 Modelos usados:</b> " + mu.map(([n,c])=>escapeHtml(n)+" ("+c+")").join(" · ");
-  if(_aiAnaisInfo) html += "<br><b>🧠 IA por blocos:</b> leu "+_aiAnaisInfo.blocos+" bloco(s), achou <b>"+_aiAnaisInfo.trabalhos+"</b> trabalho(s)"
-       + (_aiAnaisInfo.falhas?(" · "+_aiAnaisInfo.falhas+" bloco(s) falharam"):"")
-       + (_aiAnaisInfo.trabalhos===0?" — <b style='color:var(--danger)'>IA não retornou nada (caiu no determinístico). Confira conexão/modelo.</b>":"");
+  if(_aiAnaisInfo){
+    html += "<br><b>🧠 IA por blocos:</b> leu "+_aiAnaisInfo.blocos+" bloco(s) · trabalhos brutos da IA <b>"+(_aiAnaisInfo.trabalhosBrutos||0)+"</b> · usados <b>"+_aiAnaisInfo.trabalhos+"</b>"
+       + (_aiAnaisInfo.falhas?(" · "+_aiAnaisInfo.falhas+" falha(s) de rede"):"")
+       + (_aiAnaisInfo.semTexto?(" · "+_aiAnaisInfo.semTexto+" @ descartado(s) (não batiam com o texto)"):"");
+    if(_aiAnaisInfo.trabalhos===0){
+      html += "<br><span style='color:var(--danger)'>⚠ IA não trouxe trabalhos usáveis.</span>";
+      if(_aiAnaisInfo.erro) html += "<br><span style='color:var(--muted)'>erro da 1ª chamada: "+escapeHtml(_aiAnaisInfo.erro.slice(0,160))+"</span>";
+      if(_aiAnaisInfo.amostra) html += "<br><span style='color:var(--muted)'>resposta da IA (amostra): <code>"+escapeHtml(_aiAnaisInfo.amostra)+"</code></span>";
+    }
+  }
   // TRANSPARÊNCIA: trabalhos REPETIDOS que foram juntados (mesmo título em 2 seções do anais). Os e‑mails
   // foram PRESERVADOS (unidos na cópia mantida) — mas você é avisado do que foi juntado.
   if(lastDuplicatas && lastDuplicatas.length){
@@ -3697,9 +3715,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.50";
+const VERSION = "13.51";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.51","2026-06-07","Diagnóstico fundo da IA por blocos: a 📊 Cobertura agora mostra os trabalhos BRUTOS que a IA devolveu, quantos @ foram descartados por «não baterem com o texto», e — quando dá 0 — o ERRO da chamada + uma AMOSTRA da resposta da IA. Serve pra achar por que a IA retorna 0 (resposta vazia? formato? @ que não está no texto?)."],
   ["13.50","2026-06-07","Conserta a IA por blocos que «voltava vazia» (e por isso caía no determinístico, com erros de nome). CAUSA: o leitor de JSON só entendia {\"works\":[...]}; se a IA respondia com array puro [...], com cercas ```json ou JSON CORTADO, ele falhava. Agora o parser é tolerante (aceita os 3 casos e salva JSON truncado). + Diagnóstico em 📊 Cobertura: «🧠 IA por blocos: leu N bloco(s), achou M trabalho(s)» — assim dá pra VER se a IA realmente coletou (M>0) ou caiu no determinístico (M=0 → checar conexão). NOTA: o «leitor» de texto (PDF.js) não era o problema — todos os e‑mails já eram lidos; o que falhava era ler a RESPOSTA da IA."],
   ["13.49","2026-06-07","Esteira do anais SIMPLIFICADA: com a IA ligada, a IA é o COLETOR PRINCIPAL (lê o texto em blocos e extrai título+nome+e‑mail) — não precisa mais «vencer» o determinístico, ela assume sempre que devolver trabalhos. O determinístico (cortadores por RESUMO/sumário) virou só RESERVA pra quando a IA estiver desligada ou voltar vazia. Some a confusão dos vários modelos; a rede de segurança continua garantindo todo @. IMPORTANTE: após atualizar, faça Ctrl+Shift+R (recarga forçada) — senão o navegador usa a versão antiga em cache."],
   ["13.48","2026-06-07","ESTEIRA DO ANAIS REPENSADA (sua pergunta: «a IA precisa cortar?»). O corte deixou de ser «inteligente por formato» (que quebrava em todo anais novo) e virou AGNÓSTICO: o texto é picado em blocos por TAMANHO e a IA acha TODOS os trabalhos de cada bloco (título+nome+e‑mail). Funciona em qualquer layout, sem depender de RESUMO/sumário. + REDE DE SEGURANÇA determinística: TODO @ do PDF (não‑institucional) é garantido no resultado — se a IA ou o corte perder algum, ele entra com o contexto p/ a IA/revisão completar. Assim «não pegou todos os e‑mails» não acontece mais. (A IA por blocos exige a IA ligada; o corte por tamanho só serve p/ caber no limite dela.)"],
