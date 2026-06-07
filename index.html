@@ -605,9 +605,13 @@ function _juntarEmailQuebrado(s){
    porque o destino é único (unitins→.br, gmail→.com…). NÃO toca e‑mail já completo (@unitins.br fica). */
 const _TLD_FIX = { unitins:"unitins.br", gmail:"gmail.com", hotmail:"hotmail.com", outlook:"outlook.com", yahoo:"yahoo.com", uft:"uft.edu.br", ifto:"ifto.edu.br", unitins:"unitins.br" };
 function _completarTLD(s){
-  return s.replace(/([a-z0-9._%+\-]+@(unitins|unitins|gmail|hotmail|outlook|yahoo|uft|ifto))\.?(?![a-z0-9.])/gi,
+  s = s.replace(/([a-z0-9._%+\-]+@(unitins|unitins|gmail|hotmail|outlook|yahoo|uft|ifto))\.?(?![a-z0-9.])/gi,
     (m,local,dom)=>{ const d=dom.toLowerCase(); const full=_TLD_FIX[d]; if(!full) return m;
       return local.slice(0, local.length-d.length) + full; });
+  // TYPO de provedor: gmail/hotmail/outlook NÃO têm «.com.br» (sempre erro) → normaliza p/ «.com».
+  // (yahoo.com.br EXISTE de verdade, então fica de fora.)
+  s = s.replace(/@(gmail|hotmail|outlook|live)\.com\.br\b/gi, "@$1.com");
+  return s;
 }
 function consertarAcentos(s){
   if(!/[´˜ˆ^`¨¸ı]/.test(s)) return s;
@@ -2054,7 +2058,10 @@ async function aiExtrairBloco(chunk, dbg){
     + "Para CADA trabalho: title (título completo) e authors = lista de {name: nome completo e próprio, SEM "
     + "titulação (Doutor/Mestre/Graduando/Orientador) e SEM ser o e-mail; email}. REGRAS DURAS: só use e-mail "
     + "que APARECE no texto (NUNCA invente); junte nome quebrado entre linhas; inclua TODOS os autores que têm "
-    + "e-mail; se um trabalho aparecer cortado na borda do trecho, inclua mesmo assim o que der. APENAS JSON.";
+    + "e-mail. CADA e-mail DEVE ter o NOME do seu dono: os nomes ficam na lista de autores no TOPO do trabalho e "
+    + "os e-mails nas linhas de afiliação numeradas (1., 2., …) — case pela ORDEM/NÚMERO e pelas iniciais/sobrenome "
+    + "do e-mail. Se mesmo assim não achar o nome de um e-mail, devolva o e-mail com name vazio (não o descarte). "
+    + "Se um trabalho aparecer cortado na borda do trecho, inclua o que der. APENAS JSON.";
   const user = 'Devolva {"works":[{"title":"...","authors":[{"name":"Nome Completo","email":"x@y"}]}]}.\n\nTEXTO:\n' + (chunk||"").slice(0,12000);
   const msgs=[{role:"system",content:sys},{role:"user",content:user}];
   // USA O MODELO CONFIGURADO (AI.model) direto — alguns proxies do Render só aceitam 1 modelo (ex.: só Opus);
@@ -3717,9 +3724,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.52";
+const VERSION = "13.53";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.53","2026-06-07","Dois ajustes finos: (1) corrige typo de provedor «gmail/hotmail/outlook.com.br» → «.com» (não existe .com.br nesses) — resolve o falso «e‑mail não entrou» do doribilac@gmail.com.br, que é só o mesmo autor digitado errado (o @gmail.com dele já entra). yahoo.com.br fica intacto (esse é real). (2) Prompt da IA reforçado: CADA e‑mail tem que vir com o NOME do dono (os nomes ficam no topo do trabalho, os e‑mails nas afiliações numeradas — casar por ordem/iniciais). Reduz «linha sem autor». Obs.: linha sem autor que sobra costuma ser FRAGMENTO de e‑mail partido no meio (ex.: «sion@gmail.com» = pedaço de «dara.passion@gmail.com»), não autor real."],
   ["13.52","2026-06-07","ACHADO: o Render do usuário só aceita o modelo Opus 4.8 (Haiku/outros dão erro). A IA por blocos tentava Haiku barato primeiro → falhava → voltava vazia → caía no determinístico (com erros de nome). AGORA a IA por blocos usa DIRETO o modelo configurado na aba IA (o que funciona no seu Render). Assim ela coleta de verdade. OBS de custo: Opus é ~20× mais caro que Haiku; pra baratear vale habilitar um Haiku no proxy do Render."],
   ["13.51","2026-06-07","Diagnóstico fundo da IA por blocos: a 📊 Cobertura agora mostra os trabalhos BRUTOS que a IA devolveu, quantos @ foram descartados por «não baterem com o texto», e — quando dá 0 — o ERRO da chamada + uma AMOSTRA da resposta da IA. Serve pra achar por que a IA retorna 0 (resposta vazia? formato? @ que não está no texto?)."],
   ["13.50","2026-06-07","Conserta a IA por blocos que «voltava vazia» (e por isso caía no determinístico, com erros de nome). CAUSA: o leitor de JSON só entendia {\"works\":[...]}; se a IA respondia com array puro [...], com cercas ```json ou JSON CORTADO, ele falhava. Agora o parser é tolerante (aceita os 3 casos e salva JSON truncado). + Diagnóstico em 📊 Cobertura: «🧠 IA por blocos: leu N bloco(s), achou M trabalho(s)» — assim dá pra VER se a IA realmente coletou (M>0) ou caiu no determinístico (M=0 → checar conexão). NOTA: o «leitor» de texto (PDF.js) não era o problema — todos os e‑mails já eram lidos; o que falhava era ler a RESPOSTA da IA."],
