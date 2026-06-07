@@ -2218,7 +2218,8 @@ function detectarModelo(text, mode){
 let modelosUsados = {};   // {nomeModelo: contagem} da última coleta
 let _pdfsBloqueados = [];  // PDFs cuja cobertura ficou < META_COBERTURA (nenhum modelo adequado) → revisar à mão
 let _ultimoModeloArtigo = ""; // qual sub-modelo de ARTIGO (periódico) pegou os autores (p/ nomear o modelo)
-const META_COBERTURA = 95; // % mínimo de e‑mails capturados p/ aceitar a coleta de um PDF; abaixo disso TRAVA e avisa
+const META_COBERTURA = 95; // % mínimo de E‑MAILS capturados p/ aceitar a coleta de um PDF (trava rígida)
+const META_TRAB = 70;      // % mínimo de TRABALHOS localizados vs sumário; só trava em falha GROSSA (contagem de obra é ruidosa)
 /* O e-mail PARECE ser deste autor? (local-part contém algum token do nome, ou as iniciais). */
 function _emailBate(name, email){
   if(!email || !/@/.test(email)) return true;            // sem e-mail → não marca como erro
@@ -2358,10 +2359,12 @@ async function collectFromPDF(file, mode){
       modelosUsados[_ultimoModeloArtigo] = (modelosUsados[_ultimoModeloArtigo]||0) + 1; }
   }
   recs.forEach(r=>r._modelo = nomeModelo);
-  // ───── GATE DE COBERTURA POR PDF (a esteira do usuário): JUNÇÃO de DUAS medidas —
-  //   (A) % de E‑MAILS do PDF que entraram   (@ reais, sem institucional, = gabarito)
-  //   (B) % de TRABALHOS localizados vs esperados (sumário; senão nº de RESUMO)
-  // Se QUALQUER uma ficar < META_COBERTURA, TRAVA o PDF e avisa — em vez de soltar dado ruim calado.
+  // ───── GATE DE COBERTURA POR PDF (a esteira do usuário). DUAS medidas, com pesos diferentes:
+  //   (A) % de E‑MAILS do PDF que entraram (@ reais, sem institucional) — trava RÍGIDA a META_COBERTURA.
+  //       Esta é a confiável e JÁ reflete trabalho perdido: perdeu obra → perdeu os @ dela → a % cai.
+  //   (B) % de TRABALHOS localizados vs sumário — só INFORMA e trava em FALHA GROSSA (< META_TRAB).
+  //       A contagem de obras é RUIDOSA ("Resumo"+"Abstract" = 2×/obra; sumário lista itens sem e‑mail),
+  //       então NÃO dá p/ exigir 95% aqui — reprovaria anais que estão 96‑100% completos.
   try{
     // (A) e-mails
     const alvoPdf = new Set(extractEmails(text).filter(e=>!_emailInstitucional(e)));
@@ -2369,20 +2372,20 @@ async function collectFromPDF(file, mode){
     recs.forEach(r=>(r.authors||[]).forEach(a=>{ if(a.email) capPdf.add(a.email.toLowerCase().trim()); }));
     const hit = [...capPdf].filter(e=>alvoPdf.has(e)).length;
     const pctMail = alvoPdf.size>0 ? Math.round(100*hit/alvoPdf.size) : 100;
-    // (B) trabalhos — esperados = sumário (se houver) senão nº de RESUMO; localizados = recs
-    let trabEsper = 1, trabCap = recs.length;
-    if(modelo.tipo==="anais"){
-      const nResumo = (text.match(/^\s*resumo\b/gim)||[]).length + (text.match(/\bresumo\s*:/gi)||[]).length;
-      const nSum = (lastIndice && lastIndice.total) ? lastIndice.total : 0;
-      trabEsper = Math.max(nSum, nResumo, 1);
+    // (B) trabalhos — esperados = SUMÁRIO (só ele; nº de RESUMO conta 2× e engana); localizados = recs
+    let trabEsper = 0, trabCap = recs.length, pctTrab = 100;
+    if(modelo.tipo==="anais" && lastIndice && lastIndice.total){
+      trabEsper = lastIndice.total;
+      pctTrab = Math.min(100, Math.round(100*trabCap/trabEsper));
     }
-    const pctTrab = trabEsper>0 ? Math.min(100, Math.round(100*trabCap/trabEsper)) : 100;
-    const pct = Math.min(pctMail, pctTrab);   // a JUNÇÃO: vale a PIOR das duas
-    recs.forEach(r=>{ r._cobPdf = pct; r._cobMail = pctMail; r._cobTrab = pctTrab; });
-    if(alvoPdf.size>0 && pct < META_COBERTURA){
+    recs.forEach(r=>{ r._cobMail = pctMail; r._cobTrab = trabEsper>0?pctTrab:null; r._cobPdf = pctMail; });
+    const reprovaMail = alvoPdf.size>0 && pctMail < META_COBERTURA;     // rígido (95%)
+    const reprovaTrab = trabEsper>0 && pctTrab < META_TRAB;             // só falha grosseira (70%)
+    if(reprovaMail || reprovaTrab){
       recs.forEach(r=>{ r._bloqueado = true; });   // marca p/ revisão (⛔) e trava o XML até conferir
-      _pdfsBloqueados.push({ file:file.name, pct, pctMail, pctTrab,
-        alvo:alvoPdf.size, captados:hit, trabEsper, trabCap, modelo:nomeModelo });
+      _pdfsBloqueados.push({ file:file.name, pct:Math.min(pctMail, trabEsper>0?pctTrab:100), pctMail,
+        pctTrab: trabEsper>0?pctTrab:null, alvo:alvoPdf.size, captados:hit, trabEsper, trabCap,
+        motivo: reprovaMail?(reprovaTrab?"e‑mail+trabalhos":"e‑mail"):"trabalhos", modelo:nomeModelo });
     }
   }catch(_){}
   return recs;
@@ -2945,10 +2948,10 @@ function renderCobertura(ex){
   if(mu.length) html += "<br><br><b>📐 Modelos usados:</b> " + mu.map(([n,c])=>escapeHtml(n)+" ("+c+")").join(" · ");
   // PDFs TRAVADOS: nenhum modelo deu ≥90% → o usuário revisa à mão (a esteira não solta dado ruim calado).
   if(_pdfsBloqueados && _pdfsBloqueados.length){
-    html += "<br><br><b style='color:var(--danger)'>⛔ "+_pdfsBloqueados.length+" PDF(s) TRAVADO(s)</b> — nenhum modelo atingiu "+META_COBERTURA+"% de cobertura. "
-         + "Estes precisam de revisão manual (formato fora dos modelos prontos):";
+    html += "<br><br><b style='color:var(--danger)'>⛔ "+_pdfsBloqueados.length+" PDF(s) TRAVADO(s)</b> — abaixo da meta ("+META_COBERTURA+"% de e‑mails; trabalhos só travam se < "+META_TRAB+"%). "
+         + "Estes precisam de revisão manual:";
     html += "<ul style='margin:6px 0 0 18px'>"
-         + _pdfsBloqueados.slice(0,30).map(b=>"<li>"+escapeHtml(b.file)+" — <b style='color:var(--danger)'>"+b.pct+"%</b> "
+         + _pdfsBloqueados.slice(0,30).map(b=>"<li>"+escapeHtml(b.file)+" — <b style='color:var(--danger)'>"+(b.motivo||"")+"</b> "
              + "(e‑mails "+(b.pctMail!=null?b.pctMail:b.pct)+"% = "+b.captados+"/"+b.alvo
              + (b.trabEsper?" · trabalhos "+(b.pctTrab!=null?b.pctTrab:100)+"% = "+b.trabCap+"/"+b.trabEsper:"")+")"
              + " · modelo: "+escapeHtml(b.modelo)+"</li>").join("")
@@ -3406,9 +3409,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.32";
-const VERSION_DATE = "2026-06-05";
+const VERSION = "13.33";
+const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.33","2026-06-07","CORREÇÃO do gate de trabalhos (a v13.32 travaria quase todo anais por engano!). A contagem de trabalhos é ruidosa (o «Resumo»+«Abstract» conta 2× por obra e o sumário lista itens sem e‑mail), então exigir 95% dela reprovava anais que estão 96‑100% completos. Agora: a % de E‑MAILS é a trava rígida (95%) — e ela já reflete trabalho perdido (perdeu obra → perdeu os @ dela). A % de TRABALHOS vs sumário virou informação e só trava em FALHA GROSSA (< 70%). Resultado: nenhum anais bom trava à toa; só trava quem realmente perdeu e‑mail (ex.: pdf_380, 91%) ou perdeu muitos trabalhos."],
   ["13.32","2026-06-07","Trava agora é a JUNÇÃO de DUAS medidas (a seu pedido): (A) % de e‑mails do PDF que entraram E (B) % de TRABALHOS localizados vs esperados (sumário; senão nº de RESUMO). Vale a PIOR das duas — então um PDF só passa se pegou ≥95% dos e‑mails E ≥95% dos trabalhos. A Cobertura e o relatório mostram as duas %. Varredura COMPLETA dos 345 PDFs da pasta (raiz + ARACE 138 + SBIE 185): 302 ≥95%, 28 sem e‑mail no texto, 15 abaixo de 95% (quase todos artigos pequenos perdendo 1 autor — cabeçalho sem «Instituição:», autor após quebra de página, etc.) → esses ficam TRAVADOS p/ revisão."],
   ["13.31","2026-06-07","Piso da trava subiu de 90% → 95%. Agora um PDF só é aceito se algum modelo pegar ≥95% dos e‑mails; abaixo disso ele é TRAVADO (⛔) p/ revisão manual. Mais rígido (a seu pedido). Lembrando que a % é um termômetro (o alvo vem do regex de @), então de vez em quando trava um PDF que na prática já está completo — é só revisar e liberar."],
   ["13.30","2026-06-05","Modelo numerado muito mais forte (resolve o Anaisfinais 2023, que estava em 66%). Agora ele lê a REGIÃO de cada trabalho do RESUMO até o TÍTULO e pega TODOS os e‑mails dali — antes só pegava @ em linhas coladas e perdia metade quando a afiliação era um parágrafo corrido que quebrava de linha (ex.: «1. … e‑mail: a; 2. Fulano; 3. … e‑mail: b»). Também passou a aceitar nomes em «Nome Completo» (não só «SOBRENOME, Nome»). Resultado: Anaisfinais 66%→99%, F3D 97%→99%, 1D5B7CCC 99% — e nada regrediu nos outros anais."],
