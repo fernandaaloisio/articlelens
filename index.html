@@ -599,6 +599,15 @@ function _pendentesCount(){
 function _juntarEmailQuebrado(s){
   return s.replace(/([a-z0-9._%+\-]+@[a-z0-9\-]*)\n[ \t]*([a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.[a-z]{2,})/gi, "$1$2");
 }
+/* TLD truncado no PRÓPRIO PDF: o texto acaba em "fulano@unitins" ou "fulano@unitins." (sem .br) e vem
+   RESUMO/quebra logo depois. Completa SÓ domínios óbvios (lista branca) — é o único "palpite", e seguro
+   porque o destino é único (unitins→.br, gmail→.com…). NÃO toca e‑mail já completo (@unitins.br fica). */
+const _TLD_FIX = { unitins:"unitins.br", gmail:"gmail.com", hotmail:"hotmail.com", outlook:"outlook.com", yahoo:"yahoo.com", uft:"uft.edu.br", ifto:"ifto.edu.br", unitins:"unitins.br" };
+function _completarTLD(s){
+  return s.replace(/([a-z0-9._%+\-]+@(unitins|unitins|gmail|hotmail|outlook|yahoo|uft|ifto))\.?(?![a-z0-9.])/gi,
+    (m,local,dom)=>{ const d=dom.toLowerCase(); const full=_TLD_FIX[d]; if(!full) return m;
+      return local.slice(0, local.length-d.length) + full; });
+}
 function consertarAcentos(s){
   if(!/[´˜ˆ^`¨¸ı]/.test(s)) return s;
   const M={ "´":"́", "˜":"̃", "ˆ":"̂", "^":"̂", "`":"̀", "¨":"̈" };
@@ -673,6 +682,7 @@ async function extractTextFromPDF(file){
   let clean = consertarAcentos(out).normalize("NFC")   // junta acentos soltos (LaTeX) + compõe ç/ã
                    .replace(/[ \t]+/g," ").replace(/\n{3,}/g,"\n\n").trim();
   clean = _juntarEmailQuebrado(clean);                  // cola e‑mail partido na quebra de linha (…@ + domínio)
+  clean = _completarTLD(clean);                         // completa TLD truncado no PDF (@unitins → @unitins.br)
   if(!clean) throw new Error("PDF sem texto selecionável (provável imagem/escaneado — requer OCR)");
   return clean;
 }
@@ -3475,9 +3485,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.43";
+const VERSION = "13.44";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.44","2026-06-07","Recupera e‑mail com TLD truncado no PDF: quando o texto corta o domínio (ex.: «fulano@unitins» ou «fulano@unitins.» sem o «.br», com RESUMO logo abaixo), o app agora completa o final pelos domínios conhecidos (unitins→.br, gmail/hotmail/outlook→.com, uft/ifto→.edu.br). É a única «adivinhação», e segura (destino único). No F9322E18 recuperou 4 e‑mails de autor que estavam truncados (vanderleianascimento, kemmyllyclara, mariamikaelle, mirellacoelho → @unitins.br); únicos 77→80. NÃO altera e‑mail já completo."],
   ["13.43","2026-06-07","BUG GRAVE de e‑mails faltando (NÃO era a IA): o agrupador de trabalhos repetidos comparava só os 8 PRIMEIROS termos do título. Numa SÉRIE («Avaliação… Feira Municipal de Colmeia» × «…de Miranorte» × «…de Guarai»…), os 8 termos batem e elas dividem o mesmo orientador → o sistema achava que era o MESMO trabalho e DESCARTAVA as outras, perdendo dezenas de e‑mails. Agora compara o TÍTULO COMPLETO (séries não se confundem) e, ao juntar duas versões do mesmo trabalho, UNE os e‑mails (nunca descarta). No F9322E18: deixou de perder e voltou aos 77 únicos. Vale p/ TODOS os anais."],
   ["13.42","2026-06-07","ANAIS agora usa a IA SEMPRE (automático): se a IA estiver ligada, todo trabalho de anais é coletado pela IA (título+nome+e‑mail), sem precisar marcar nada. O determinístico só corta os trabalhos; a IA coleta; o validador fecha. Os sinais de revisão continuam (⚠ por trabalho e ⛔ trava < 95%) — nada é confiado às cegas. O checkbox 🧪 agora serve só pra estender a IA também a ARTIGOS/revista (que no determinístico já vão bem). Para anais NÃO travar por falta de IA, mantenha a IA conectada (Render/Haiku)."],
   ["13.41","2026-06-07","Esteira do ANAIS reorganizada (a seu pedido): determinístico CORTA os trabalhos (acha tudo) → IA COLETA título+nome completo+e‑mail de cada um → VALIDADOR de e‑mail roda DE NOVO no fim (corrige typo de domínio, marca inválido). Antes o validador só rodava ANTES da IA, então os e‑mails que a IA coletava saíam sem validar; agora há uma 2ª passada do validador pós‑IA. Revista/artigo (1 PDF = 1 trabalho) segue no determinístico, que já vai bem. Para anais: ligar 🧪 «IA faz TODA a extração» na aba IA."],
