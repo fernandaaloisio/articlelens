@@ -2410,7 +2410,16 @@ function modeloPorId(id){ return todosModelos().find(m=>m.id===id) || MODELOS_BU
 /* Detecção HEURÍSTICA do modelo (base; a IA refina na Etapa 2) */
 function detectarModelo(text, mode){
   if(mode==="sim") return modeloPorId("anais");
-  if(mode!=="nao" && isProceedings(text).anais) return modeloPorId("anais");
+  if(mode!=="nao"){
+    if(isProceedings(text).anais) return modeloPorId("anais");
+    // ANAIS sem "Resumo"/"Palavras-chave": detecta pelo SUMÁRIO (índice com VÁRIOS trabalhos) — ex.: "Anais do
+    // Seminário…" que só tem o índice. Um artigo único não tem sumário com 4+ entradas.
+    try{ const vs=cortarPorSumario(text); if(vs && vs.length>=4) return modeloPorId("anais"); }catch(_){}
+    // ou texto de capa típico de evento + muitos e-mails distintos (multi-trabalho)
+    const capa=/\b(anais|caderno de resumos|semin[áa]rio|congresso|simp[óo]sio|jornada|mostra cient|encontro)\b/i.test(text.slice(0,1200));
+    const nAt=new Set((text.match(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/gi)||[]).map(e=>e.toLowerCase())).size;
+    if(capa && nAt>=8) return modeloPorId("anais");
+  }
   if(parseAuthorBlocks(text).length>=1) return modeloPorId("periodico");
   return modeloPorId("artigo");
 }
@@ -3769,9 +3778,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.56";
+const VERSION = "13.57";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.57","2026-06-07","Detecta anais que NÃO tem «Resumo»/«Palavras-chave» (ex.: «Anais do I Seminário sobre o Agronegócio»): antes era tratado como 1 artigo (capa + e‑mails soltos). Agora, além de resumo/palavras-chave, o app reconhece anais pelo SUMÁRIO (índice com 4+ trabalhos) e pela capa de evento (anais/seminário/congresso/simpósio/jornada/mostra) com muitos e‑mails. Artigo único (1 trabalho) continua artigo — testado, sem falso positivo."],
   ["13.56","2026-06-07","Marca pra REVISAR o que faltava: agora linha SEM NOME (tem e‑mail mas sem autor) e trabalho SEM TÍTULO entram como ⚠ no topo — antes passavam batido (a IA marcava como «conferido» e escapavam). E o filtro institucional agora pega «secretariageral@…» (estava escapando porque «geral» vinha colado em «secretaria»); nomes comuns (sergio, seninha) NÃO são afetados. E‑mail tipo conced.org@ (sem nome) fica, mas marcado pra revisão."],
   ["13.55","2026-06-07","CORRIGE UMA VEZ, ARRUMA TODAS (autor que repete): (1) Auto — mesmo e‑mail = mesma pessoa: o app escolhe o melhor nome daquele e‑mail (o mais frequente/completo) e preenche/conserta TODAS as outras linhas do mesmo e‑mail sozinho, antes de você revisar. (2) Manual — ao editar o nome de um e‑mail na tabela, ele aplica esse nome em TODAS as linhas daquele e‑mail (avisa quantas) — acabou o retrabalho de arrumar o mesmo autor várias vezes."],
   ["13.54","2026-06-07","ANTI-INVENÇÃO de nome: quando a IA não acha o dono de um e‑mail, ela às vezes MONTAVA um nome a partir do próprio e‑mail (ex.: vhictor.hr → «Vhictor Hr»; vitinho_agronomia → «Vitinho Agronomia»). Agora o app detecta isso (nome = só o e‑mail reformatado E que não aparece no texto fora do e‑mail) e deixa o nome VAZIO p/ revisão — melhor sem nome do que nome fabricado. Nome REAL que por acaso bate com o e‑mail (joao.silva → João Silva, que está escrito no texto) é mantido. A Cobertura mostra quantos foram esvaziados. Conferência: 0 nomes 100% inventados; só esses derivados do e‑mail."],
