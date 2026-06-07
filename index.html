@@ -232,7 +232,7 @@
     <label class="fld"><input type="checkbox" id="aiOrch"> 🧠 IA orquestra a esteira (decide o corte 1× por PDF + confere amostra)</label>
     <label class="fld"><input type="checkbox" id="aiSample"> 💸 Conferir só uma AMOSTRA por formato (mais barato) — a IA aprende o padrão no 1º trabalho e confere poucos, em vez de cada caso</label>
     <label class="fld"><input type="checkbox" id="aiSameFmt"> 📎 Todos os PDFs têm a MESMA formatação (sonda só o 1º e reusa nos demais)</label>
-    <label class="fld"><input type="checkbox" id="aiTudo"> ✅ Conferir TODOS os trabalhos com IA (máxima qualidade — confere nome/título de cada um, não só os suspeitos; custa mais)</label>
+    <label class="fld"><input type="checkbox" id="aiTudo"> 🧪 IA faz TODA a extração de cada trabalho (título+nome+e‑mail do texto cru — o determinístico só corta; máxima qualidade, custa mais)</label>
     <div class="btn-bar" style="margin:4px 0">
       <button class="btn ghost" id="aiPresetRender" type="button">Preencher dados do meu Render</button>
     </div>
@@ -1392,7 +1392,9 @@ function parseModeloSobrenomeNum(text){
     // e‑mails sem casamento de conteúdo (apelido genérico) → nomes restantes por ORDEM do documento
     const restantes = names.filter((_,n)=>!usados[n]);
     let ri=0; for(const e of semNome) authors.push({ name: restantes[ri++]||"", email:e });
-    works.push({ title, authors, all_emails:em2, _modeloFmt:"numerado-email" });
+    // _raw = bloco do trabalho (título + região: nomes + afiliação + e‑mails) → a IA enxerga p/ reextrair
+    const _raw = (tl.concat(region)).join("\n");
+    works.push({ title, authors, all_emails:em2, _raw, _modeloFmt:"numerado-email" });
   }
   return works;
 }
@@ -2525,6 +2527,19 @@ async function processBatch(){
           const f = fixes.find(x=>x.i===gi); const antesT = r.title; const mudouE=[]; let nomesCorr=false;
           const tinhaNomeQuebrado = temNomeQuebrado(r);
           if(f){
+           if(AI.conferirTudo){
+            // 🧪 "IA faz TUDO": a IA leu o TEXTO CRU e é AUTORIDADE TOTAL — refaz título e autores do zero.
+            if(f.title && f.title.length>8 && f.title!==r.title){ r.title=f.title; nTit++; }
+            if(Array.isArray(f.authors)){
+              const novos = f.authors
+                .filter(a=>a && a.name && a.name.trim().split(/\s+/).length>=2 && !nomeQuebrado(a.name,a.email))
+                .map(a=>{ let em=(a.email||"").trim().toLowerCase();
+                          if(em && (!/@/.test(em) || !(r._raw||"").toLowerCase().includes(em) || _emailInstitucional(em))) em="";
+                          return {name:a.name.trim(), email:em, _aiOk:true}; })
+                .filter(a=>a.email);                       // exporta só quem tem e‑mail no texto
+              if(novos.length){ r.authors=novos; nomesCorr=true; nNomes++; }
+            }
+           } else {
             if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)){ r.title=f.title; nTit++; }
             // (A) É um caso ⚠ (nome quebrado / nome≠e-mail / sem e-mail / órfão): a IA leu o TEXTO CRU
             //     e é a AUTORIDADE. Substitui a lista de autores pela dela (cada um marcado _aiOk =
@@ -2556,6 +2571,7 @@ async function processBatch(){
               if(alvo && (!alvo.email || alvo._guess) && alvo.email!==em){
                 alvo.email=em; alvo._guess=false; nEmail++; mudouE.push(alvo.name.split(" ")[0]+"→"+em); }
             }
+           }
           }
           (r.authors||[]).forEach(a=>{ delete a._guess; });
           aprender(r);
@@ -3440,9 +3456,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.38";
+const VERSION = "13.39";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.39","2026-06-07","MODO TESTE «IA faz TUDO»: com o checkbox 🧪 ligado, a IA recebe o TEXTO CRU de cada trabalho e refaz título+nome+e‑mail do ZERO (autoridade total), em vez de só ajustar. CONSERTO crítico: o modelo numerado de anais agora anexa o «_raw» (bloco do trabalho) — sem isso a IA vinha CEGA (texto vazio) e por isso não corrigia nada nos anais. Agora a IA enxerga o bloco e reextrai. (O determinístico só corta os trabalhos.) Rode com a IA ligada (Render+Haiku) + o checkbox marcado."],
   ["13.38","2026-06-07","Nova opção (aba 🧠 IA): «✅ Conferir TODOS os trabalhos com IA (máxima qualidade)». Ligada, a IA (Haiku, nuvem) revisa nome/título de CADA trabalho — não só os marcados como suspeitos — pro resultado sair pronto pra entregar. O determinístico continua achando 100% dos e‑mails e cortando os trabalhos (de graça); a IA só confere/corrige, por isso fica barata. Custo aparece no «custo por e‑mail» (meta R$0,06). Desligada = comportamento de antes (só confere os ⚠, mais barato)."],
   ["13.37","2026-06-07","DOIS consertos grandes de QUALIDADE no modelo numerado (não só «achar o @», mas acertar nome e título): (1) TÍTULO completo — antes pegava só a ÚLTIMA linha do título (que quebra em 2‑3 linhas), agora junta todas → no 5CBDD46 os títulos «inteiros» foram de 73% → 100%. (2) Nome↔e‑mail por CONTEÚDO — antes pareava por POSIÇÃO, então um e‑mail quebrado/faltando no meio desalinhava todos os seguintes; agora casa cada e‑mail com o nome cujas iniciais/sobrenome batem → erro de nome 6%→3% (5CBDD46), 1% (F3D/1D5B7CCC). Anais com nomes muito fundidos (ex.: Anaisfinais) ainda têm ~13% — esses valem a passada da IA."],
   ["13.36","2026-06-07","Contagem agora mostra o TOTAL de e‑mails, não só os únicos. Na 📊 Cobertura: «capturei N e‑mails no total (M únicos = X% dos do PDF) · o PDF tem T no total (U únicos)». O TOTAL = 1 por autor‑com‑e‑mail (= linhas do Excel; conta o mesmo orientador que aparece em vários trabalhos). O % de cobertura segue medido nos ÚNICOS (é o que diz se faltou algum endereço). O relatório .csv também traz total e únicos separados."],
