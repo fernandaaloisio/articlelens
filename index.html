@@ -1409,6 +1409,64 @@ function parseModeloSobrenomeNum(text){
   }
   return works;
 }
+/* ───────────────────────────────────────────────────────────────────────────
+   MODELO "anais com e‑mail no FIM" (ex.: Jornada UNITINS) — NÃO tem "RESUMO".
+   Cada trabalho: TÍTULO / autores (Nome; com marcador) / [corpo] / Palavras‑chave /
+   Fonte / bloco numerado "1. afiliação… E‑mail: x" / "Pág. N". O e‑mail fica no FIM.
+   Âncora = o BLOCO de e‑mail numerado (fim do trabalho). Título+autores ficam no topo
+   do intervalo desde o fim do bloco anterior. */
+function parseModeloPalavrasChave(text){
+  const nPal=(text.match(/palavras[\- ]?chave/gi)||[]).length;
+  const nNum=(text.match(/^\s*\d{1,2}\s*[\.\)]\s.{0,200}e-?mail/gim)||[]).length;
+  if(nPal<5 || nNum<5) return [];                 // não é este formato
+  const L=text.split("\n").map(x=>x.replace(/\s+$/,""));
+  const MAILRE=/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/ig;
+  const numAff=l=>/^\s*\d{1,2}\s*[\.\)]\s/.test(l);
+  const isPag=l=>/^\s*P[áa]g\.?\s*\d+/i.test(l);
+  const bodyish=l=>{ const s=l.trim(); return /^(introdu|resumo|abstract|objetiv|metodolog|o presente|este (trabalho|estudo|artigo|resumo)|a presente|a pesquisa)/i.test(s) || /^[a-zà-ÿ]/.test(s); };
+  const isTitleLine=l=>{ const s=l.trim(); if(s.length<6) return false; if(/@/.test(s)||isPag(s)) return false;
+    if(/^\d/.test(s)) return false; if(/palavras|fonte de financ|^introdu|^resumo|^abstract|isbn|jornada de inicia/i.test(s)) return false;
+    return /[A-ZÁ-Ú]/.test(s) && /^[A-ZÁ-Ú"“]/.test(s); };
+  const tc=s=>s.toLowerCase().replace(/(^|\s|\p{Pd})\p{L}/gu,c=>c.toUpperCase());
+  const _loc=e=>(e.split("@")[0]||"").toLowerCase().replace(/[._\-]/g,"");
+  const _score=(nome,e)=>{ const loc=_loc(e); let sc=0; for(const tkn of _norm(nome).split(/\s+/).filter(x=>x.length>=3)) if(loc.includes(tkn)) sc+=tkn.length; return sc; };
+  // 1) blocos de e-mail (run de linhas "N. ..." com @, tolera continuação)
+  const blocks=[]; let i=0;
+  while(i<L.length){
+    if(numAff(L[i]) && /@/.test(L[i]+(L[i+1]||""))){
+      let j=i, mails=[];
+      while(j<L.length && (numAff(L[j]) || /^[a-z0-9._%+\-]+@/i.test(L[j].trim()) || /@/.test(L[j]))){
+        (L[j].match(MAILRE)||[]).forEach(e=>mails.push(e.toLowerCase().replace(/[.;,]+$/,"")));
+        j++; if(j<L.length && !numAff(L[j]) && !/@/.test(L[j])) break;
+      }
+      if(mails.length){ blocks.push({start:i,end:j-1,mails}); i=j; continue; }
+    }
+    i++;
+  }
+  // 2) cada trabalho = topo (título+autores) desde o fim do bloco anterior + e-mails do bloco
+  const works=[]; let prev=0;
+  for(const b of blocks){
+    const top=L.slice(prev,b.start).filter(x=>x.trim());
+    let k=0, tl=[];
+    while(k<top.length && tl.length<5){ if(isPag(top[k])){k++;continue;} if(isTitleLine(top[k])){ tl.push(top[k].trim()); k++; } else break; }
+    const title=tc(tl.join(" ").replace(/\s+/g," ").trim());
+    const names=[];
+    for(; k<top.length; k++){ const s=top[k].trim(); if(!s||/^\d{1,2}$/.test(s)) continue;
+      if(bodyish(s)||/palavras|fonte de financ/i.test(s)||/@/.test(s)) break;
+      s.split(/\s*;\s*/).forEach(p=>{ p=p.replace(/^\d+[\.\)]?\s*/,"").replace(/[.;]+$/,"").trim();
+        if(p.split(/\s+/).length>=2 && /^[A-ZÁ-Ú]/.test(p) && p.length<60 && !/universidad|curso|bolsist|orientad|professor|c[âa]mpus|instituto/i.test(p)) names.push(tc(p)); }); }
+    const seen=new Set(), em=[]; b.mails.forEach(e=>{ if(!seen.has(e)){ seen.add(e); em.push(e); } });
+    if(!em.length){ prev=b.end+1; continue; }
+    // pareia por conteúdo, resto por ordem
+    const usados=new Array(names.length).fill(false); const authors=[]; const semNome=[];
+    for(const e of em){ let best=-1,bs=0; for(let n=0;n<names.length;n++){ if(usados[n])continue; const sc=_score(names[n],e); if(sc>bs){bs=sc;best=n;} }
+      if(best>=0){ usados[best]=true; authors.push({name:names[best],email:e}); } else semNome.push(e); }
+    const rest=names.filter((_,n)=>!usados[n]); let ri=0; for(const e of semNome) authors.push({name:rest[ri++]||"", email:e});
+    works.push({ title, authors, all_emails:em, _raw:L.slice(prev,b.end+1).join("\n"), _modeloFmt:"palavras-fim" });
+    prev=b.end+1;
+  }
+  return works;
+}
 function cortarPorSumario(text){
   const pages = text.split("\f");
   if(pages.length<8) return null;
@@ -2375,12 +2433,18 @@ async function collectFromPDF(file, mode){
     const viaSum = cortarPorSumario(text);
     const viaSep = separarAnais(text);
     const viaMod = parseModeloSobrenomeNum(text);   // MODELO "SOBRENOME,Nome + e‑mail nº" ([] se não casar)
+    const viaPal = parseModeloPalavrasChave(text);  // MODELO "anais com e‑mail no FIM" (sem RESUMO) ([] se não casar)
     const comEmail = a => a ? a.filter(w=>(w.authors||[]).some(x=>x.email)).length : -1;
-    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod);
+    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal);
     // Prefere o SUMÁRIO (títulos oficiais, limpos). Só troca pro método antigo quando ele pega
     // MUITO mais e-mail (≥25% e +5) — aí o ganho compensa títulos um pouco menos limpos.
     let works;
-    if(eM>0 && eM>=eS && eM>=eP){
+    if(ePal>0 && ePal>=eS && ePal>=eP && ePal>=eM){
+      // anais SEM "RESUMO", e‑mail no fim (Jornada UNITINS) → o cortador específico desse formato
+      works = viaPal;
+      modelosUsados["Anais · e‑mail no fim (Palavras‑chave)"] = (modelosUsados["Anais · e‑mail no fim (Palavras‑chave)"]||0) + 1;
+      lastIndice = aplicarIndice(works, text);
+    } else if(eM>0 && eM>=eS && eM>=eP){
       // o MODELO específico casou e é o que mais pega e‑mail → usa ele (formato SOBRENOME,Nome rotulado por nº)
       works = viaMod;
       modelosUsados["SOBRENOME,Nome + e‑mail nº"] = (modelosUsados["SOBRENOME,Nome + e‑mail nº"]||0) + 1;
@@ -2401,6 +2465,19 @@ async function collectFromPDF(file, mode){
     }
   }
   let nomeModelo = modelo.nome;
+  if(!recs && modelo.tipo==="anais"){
+    // SEGURANÇA: é ANAIS (vários trabalhos) mas NENHUM cortador funcionou (formato novo, ex.: sem "RESUMO").
+    // NÃO tratar como 1 artigo (isso jogava todos os @ sob o título da CAPA, com nomes‑lixo). Em vez disso,
+    // captura cada @ como registro mínimo (contexto = _raw) p/ a IA reextrair e p/ revisão — nada some, sem capa falsa.
+    const ats=[...new Set(extractEmails(text).filter(e=>!_emailInstitucional(e)).map(e=>e.toLowerCase()))];
+    if(ats.length){
+      const low=text.toLowerCase();
+      recs = ats.map(e=>{ const idx=low.indexOf(e); const ctx=idx>=0?text.slice(Math.max(0,idx-1600),idx+200):"";
+        return { title:"", authors:[{name:"",email:e}], _raw:ctx, source_file:file.name }; });
+      nomeModelo = "Anais · formato não reconhecido (IA/revisar)";
+      modelosUsados[nomeModelo] = (modelosUsados[nomeModelo]||0) + 1;
+    }
+  }
   if(!recs){
     const title = extractTitle(text, null);              // periódico/artigo: 1 PDF = 1 artigo
     _ultimoModeloArtigo = "";
@@ -3537,9 +3614,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.46";
+const VERSION = "13.47";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.47","2026-06-07","Conserta anais que virava «1 artigo» com nomes‑lixo (ex.: Jornada UNITINS). CAUSA: esse anais NÃO tem «RESUMO», e os 3 cortadores dependiam dele → todos falhavam → o app tratava o PDF inteiro como 1 artigo, jogando todos os @ sob o título da CAPA e inventando nomes a partir do e‑mail (a IA nem entrava, pra ela era 1 artigo). AGORA: (1) novo modelo «Anais · e‑mail no fim» pra esse formato (autores no topo, e‑mail no bloco numerado depois das Palavras‑chave) — pega 92/96 e‑mails com títulos certos; (2) TRAVA: um anais detectado NUNCA mais vira «1 artigo» — se nenhum cortador reconhecer, captura cada @ com seu contexto p/ a IA/revisão, sem título de capa falso."],
   ["13.46","2026-06-07","Novo botão «⬇️ Relatório de descartes (.csv)» na 📊 Cobertura: um arquivo só com TUDO que não entrou no resultado e por quê — ① repetidos juntados (e‑mails preservados), ② PDFs travados (<95%, p/ revisar), ③ removidos sem e‑mail (marcando os que TINHAM @ mas a extração falhou). Pra equipe conferir os descartes de uma vez."],
   ["13.45","2026-06-07","TRANSPARÊNCIA: o app agora AVISA quando junta trabalhos repetidos. Quando o mesmo trabalho aparece 2×+ no PDF (ex.: seção de Resumos + seção de Artigos), o sistema junta numa linha só — mas antes fazia isso CALADO. Agora mostra em 📊 Cobertura «🔁 N trabalho(s) repetido(s) juntado(s)» com a lista (título, quantas vezes, e‑mails unidos), avisa por toast no fim, e lista no relatório .csv. E confirma: NENHUM e‑mail é perdido (os @ das cópias são unidos no trabalho mantido). Nada mais é descartado em silêncio."],
   ["13.44","2026-06-07","Recupera e‑mail com TLD truncado no PDF: quando o texto corta o domínio (ex.: «fulano@unitins» ou «fulano@unitins.» sem o «.br», com RESUMO logo abaixo), o app agora completa o final pelos domínios conhecidos (unitins→.br, gmail/hotmail/outlook→.com, uft/ifto→.edu.br). É a única «adivinhação», e segura (destino único). No F9322E18 recuperou 4 e‑mails de autor que estavam truncados (vanderleianascimento, kemmyllyclara, mariamikaelle, mirellacoelho → @unitins.br); únicos 77→80. NÃO altera e‑mail já completo."],
