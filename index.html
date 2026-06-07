@@ -592,7 +592,7 @@ function _precisaVerificar(a, r){
 function _pendentesCount(){
   _materializarOrfaos(); let n=0;
   allResults.forEach((r,ri)=>(r.authors||[]).forEach((a,ai)=>{
-    if(_precisaVerificar(a, r) && !_okSet.has(ri+"|"+ai)) n++; }));
+    if(!a._del && _precisaVerificar(a, r) && !_okSet.has(ri+"|"+ai)) n++; }));
   return n;
 }
 
@@ -2272,6 +2272,7 @@ function flattenRows(records){
   for(const rec of records){
     const title = rec.title || "(sem título)";
     for(const a of (rec.authors||[])){
+      if(a._del) continue;                                  // linha excluída manualmente
       if(!(a.email && a.email.trim())) continue;
       rows.push([title, a.name||"", a.email.trim(), rec.source_file||""]);
     }
@@ -2294,6 +2295,7 @@ function exportXLSX(records){
   const aoa = [['Título do Trabalho','Nome Completo','E-mail']];
   for(const r of records){
     for(const a of (r.authors||[])){               // SÓ autores COM e-mail (nunca exporta linha sem e-mail)
+      if(a._del) continue;                          // linha excluída manualmente
       if(!(a.email && a.email.trim())) continue;
       aoa.push([r.title||"(sem título)", a.name||"", a.email.trim()]);
     }
@@ -3077,7 +3079,7 @@ function renderResults(){
 
   let nAuthors=0, nEmails=0;
   allResults.forEach(r=>{
-    (r.authors||[]).forEach(a=>{ if(a.name||a.email) nAuthors++; if(a.email) nEmails++; });
+    (r.authors||[]).forEach(a=>{ if(a._del) return; if(a.name||a.email) nAuthors++; if(a.email) nEmails++; });
   });
   document.getElementById("sArticles").textContent = allResults.length;
   document.getElementById("sAuthors").textContent = nAuthors;
@@ -3087,11 +3089,11 @@ function renderResults(){
   let flat = [];
   allResults.forEach((r,ri)=>{
     const auths = (r.authors&&r.authors.length)?r.authors:[{name:"",email:""}];
-    auths.forEach((a,ai)=>flat.push({ri,ai,hasA:!!(r.authors&&r.authors.length),
+    auths.forEach((a,ai)=>{ if(a._del) return; flat.push({ri,ai,hasA:!!(r.authors&&r.authors.length),
       title:r.title||"(sem título)", name:a.name||"", email:a.email||"",
       src:r.source_file||"", corr:a._corr, inv:a._inv, rev:(a._revisar&&!_conferido(a)), _orphan:(!!a._orphan&&!_conferido(a)),
       noName:!!(a.email && !(a.name||"").trim()), noTitle:!_temTitulo(r.title),
-      mismatch:!!(a.email && a.name && !_conferido(a) && !_emailBate(a.name, a.email))}));
+      mismatch:!!(a.email && a.name && !_conferido(a) && !_emailBate(a.name, a.email))}); });
   });
   const totalFlat = flat.length;
   const adminMode = _ehAdmin();    // admin: vê ⚠ na frente e botão OK, mas baixa SEM bloqueio
@@ -3144,6 +3146,9 @@ function renderResults(){
     const okBtn = isPend
       ? '<button class="btn-ok-pend" data-ok-ri="'+r.ri+'" data-ok-ai="'+r.ai+'" title="Confirmar — linha vai para a posição normal" style="margin-left:6px;padding:2px 10px;font-size:12px;background:#28a745;color:#fff;border:none;border-radius:5px;cursor:pointer">OK</button>'
       : '';
+    const delBtn = r.hasA
+      ? '<button class="btn-del" data-del-ri="'+r.ri+'" data-del-ai="'+r.ai+'" title="Excluir esta linha do resultado" style="margin-left:6px;padding:2px 9px;font-size:12px;background:#c0392b;color:#fff;border:none;border-radius:5px;cursor:pointer">✕ excluir</button>'
+      : '';
     const rowStyle = isPend ? ' style="background:#fff8e1;"' : '';
     const tr = document.createElement("tr");
     tr.setAttribute("data-row-key", _okKey(r));
@@ -3155,13 +3160,20 @@ function renderResults(){
         ? '<td'+ed+di+' data-field="name">'+escapeHtml(r.name||"")+'</td>'+
           '<td class="'+cls+'"'+ed+di+' data-field="email">'+escapeHtml(r.email)+'</td>'
         : '<td>—</td><td>—</td>')+
-      '<td>'+badge+okBtn+'</td>';
+      '<td>'+badge+okBtn+delBtn+'</td>';
     body.appendChild(tr);
   });
   // delega clique nos botões OK
   body.querySelectorAll(".btn-ok-pend").forEach(btn=>{
     btn.onclick = ()=>{
       const key=btn.dataset.okRi+"|"+btn.dataset.okAi; _okSet.add(key); renderResults();
+    };
+  });
+  // EXCLUIR linha: marca o autor como removido (não some o trabalho todo nem bagunça os índices/OK)
+  body.querySelectorAll(".btn-del").forEach(btn=>{
+    btn.onclick = ()=>{
+      const r=allResults[+btn.dataset.delRi]; const a=r&&r.authors&&r.authors[+btn.dataset.delAi];
+      if(a){ a._del=true; toast("Linha excluída."); renderResults(); }
     };
   });
 
@@ -3778,9 +3790,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.57";
+const VERSION = "13.58";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.58","2026-06-07","Botão «✕ excluir» em cada linha (ao lado do OK): remove do resultado o que for lixo (e‑mail solto, fragmento, não‑autor) — some da tabela, da contagem, do Excel e do CSV, e deixa de contar como pendente. Não bagunça os OK já dados (usa marcação, não remove de verdade)."],
   ["13.57","2026-06-07","Detecta anais que NÃO tem «Resumo»/«Palavras-chave» (ex.: «Anais do I Seminário sobre o Agronegócio»): antes era tratado como 1 artigo (capa + e‑mails soltos). Agora, além de resumo/palavras-chave, o app reconhece anais pelo SUMÁRIO (índice com 4+ trabalhos) e pela capa de evento (anais/seminário/congresso/simpósio/jornada/mostra) com muitos e‑mails. Artigo único (1 trabalho) continua artigo — testado, sem falso positivo."],
   ["13.56","2026-06-07","Marca pra REVISAR o que faltava: agora linha SEM NOME (tem e‑mail mas sem autor) e trabalho SEM TÍTULO entram como ⚠ no topo — antes passavam batido (a IA marcava como «conferido» e escapavam). E o filtro institucional agora pega «secretariageral@…» (estava escapando porque «geral» vinha colado em «secretaria»); nomes comuns (sergio, seninha) NÃO são afetados. E‑mail tipo conced.org@ (sem nome) fica, mas marcado pra revisão."],
   ["13.55","2026-06-07","CORRIGE UMA VEZ, ARRUMA TODAS (autor que repete): (1) Auto — mesmo e‑mail = mesma pessoa: o app escolhe o melhor nome daquele e‑mail (o mais frequente/completo) e preenche/conserta TODAS as outras linhas do mesmo e‑mail sozinho, antes de você revisar. (2) Manual — ao editar o nome de um e‑mail na tabela, ele aplica esse nome em TODAS as linhas daquele e‑mail (avisa quantas) — acabou o retrabalho de arrumar o mesmo autor várias vezes."],
