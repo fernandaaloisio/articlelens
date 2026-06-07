@@ -471,7 +471,7 @@ const _okSet = new Set();
 // admin pula a verificação obrigatória (baixa direto). Só o login "user" é obrigado a dar OK.
 function _ehAdmin(){ try{ return localStorage.getItem(AUTH_KEY) !== "user"; }catch(_){ return true; } }
 // e-mail INSTITUCIONAL (caixa de setor, não de autor) — call center, secretaria, ouvidoria, etc.
-const _EMAIL_INST=/^(callcenter|contato|secretaria|secretariado|ouvidoria|atendimento|sac|imprensa|comunica[çc][ãa]o|coordena[çc][ãa]o|reitoria|diretoria|webmaster|biblioteca|n[úu]cleo|faen|den|revista|editora|anais|evento|congresso|simp[óo]sio|semin[áa]rio)\b/i;
+const _EMAIL_INST=/^(callcenter|contato|secretari[a-z]*|ouvidoria|atendimento|sac|imprensa|comunica[çc][ãa]o|coordena[çc][ãa]o|reitoria|diretoria|webmaster|biblioteca|n[úu]cleo|faen|revista|editora|anais|evento|congresso|simp[óo]sio|semin[áa]rio)\b/i;
 function _emailInstitucional(e){ return _EMAIL_INST.test((String(e).split("@")[0]||"")); }
 
 /* ===== MEMÓRIA PERMANENTE DE APRENDIZADO (e-mail → nome) =====
@@ -579,8 +579,11 @@ function _materializarOrfaos(){
     r._orphansAdded=true;
   });
 }
-// uma linha precisa de verificação? (e-mail não confere com nome, inválido, revisar, ou órfão)
-function _precisaVerificar(a){
+function _temTitulo(t){ t=(t||"").trim(); return t.length>5 && !/^\(sem t[íi]tulo\)/i.test(t); }
+// uma linha precisa de verificação? (sem nome, sem título, e-mail não confere, inválido, revisar, órfão)
+function _precisaVerificar(a, r){
+  if(a && a.email && !(a.name||"").trim()) return true;   // tem e-mail mas SEM nome → sempre revisar
+  if(r && !_temTitulo(r.title)) return true;               // trabalho SEM título → sempre revisar
   if(_conferido(a)) return false;                // conferido pela IA ou pela memória → não precisa
   const mm=!!(a.email && a.name && !_emailBate(a.name,a.email));
   return mm || a._inv || a._revisar || a._orphan;
@@ -589,7 +592,7 @@ function _precisaVerificar(a){
 function _pendentesCount(){
   _materializarOrfaos(); let n=0;
   allResults.forEach((r,ri)=>(r.authors||[]).forEach((a,ai)=>{
-    if(_precisaVerificar(a) && !_okSet.has(ri+"|"+ai)) n++; }));
+    if(_precisaVerificar(a, r) && !_okSet.has(ri+"|"+ai)) n++; }));
   return n;
 }
 
@@ -3078,13 +3081,14 @@ function renderResults(){
     auths.forEach((a,ai)=>flat.push({ri,ai,hasA:!!(r.authors&&r.authors.length),
       title:r.title||"(sem título)", name:a.name||"", email:a.email||"",
       src:r.source_file||"", corr:a._corr, inv:a._inv, rev:(a._revisar&&!_conferido(a)), _orphan:(!!a._orphan&&!_conferido(a)),
+      noName:!!(a.email && !(a.name||"").trim()), noTitle:!_temTitulo(r.title),
       mismatch:!!(a.email && a.name && !_conferido(a) && !_emailBate(a.name, a.email))}));
   });
   const totalFlat = flat.length;
   const adminMode = _ehAdmin();    // admin: vê ⚠ na frente e botão OK, mas baixa SEM bloqueio
   // ⚠ pendentes (⚠ && não confirmados com OK) ficam SEMPRE no topo (admin e usuário)
   const _okKey = x => x.ri+"|"+x.ai;
-  const ehAlerta = x => !!(x.mismatch || x.inv || x.rev || x._orphan);
+  const ehAlerta = x => !!(x.mismatch || x.inv || x.rev || x._orphan || x.noName || x.noTitle);
   const pendente  = x => ehAlerta(x) && !_okSet.has(_okKey(x));
   flat.sort((a,b)=>{ const pa=pendente(a)?0:1, pb=pendente(b)?0:1; return pa-pb; });
   // 🔍 filtro: busca + "só problemas"
@@ -3765,9 +3769,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.55";
+const VERSION = "13.56";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.56","2026-06-07","Marca pra REVISAR o que faltava: agora linha SEM NOME (tem e‑mail mas sem autor) e trabalho SEM TÍTULO entram como ⚠ no topo — antes passavam batido (a IA marcava como «conferido» e escapavam). E o filtro institucional agora pega «secretariageral@…» (estava escapando porque «geral» vinha colado em «secretaria»); nomes comuns (sergio, seninha) NÃO são afetados. E‑mail tipo conced.org@ (sem nome) fica, mas marcado pra revisão."],
   ["13.55","2026-06-07","CORRIGE UMA VEZ, ARRUMA TODAS (autor que repete): (1) Auto — mesmo e‑mail = mesma pessoa: o app escolhe o melhor nome daquele e‑mail (o mais frequente/completo) e preenche/conserta TODAS as outras linhas do mesmo e‑mail sozinho, antes de você revisar. (2) Manual — ao editar o nome de um e‑mail na tabela, ele aplica esse nome em TODAS as linhas daquele e‑mail (avisa quantas) — acabou o retrabalho de arrumar o mesmo autor várias vezes."],
   ["13.54","2026-06-07","ANTI-INVENÇÃO de nome: quando a IA não acha o dono de um e‑mail, ela às vezes MONTAVA um nome a partir do próprio e‑mail (ex.: vhictor.hr → «Vhictor Hr»; vitinho_agronomia → «Vitinho Agronomia»). Agora o app detecta isso (nome = só o e‑mail reformatado E que não aparece no texto fora do e‑mail) e deixa o nome VAZIO p/ revisão — melhor sem nome do que nome fabricado. Nome REAL que por acaso bate com o e‑mail (joao.silva → João Silva, que está escrito no texto) é mantido. A Cobertura mostra quantos foram esvaziados. Conferência: 0 nomes 100% inventados; só esses derivados do e‑mail."],
   ["13.53","2026-06-07","Dois ajustes finos: (1) corrige typo de provedor «gmail/hotmail/outlook.com.br» → «.com» (não existe .com.br nesses) — resolve o falso «e‑mail não entrou» do doribilac@gmail.com.br, que é só o mesmo autor digitado errado (o @gmail.com dele já entra). yahoo.com.br fica intacto (esse é real). (2) Prompt da IA reforçado: CADA e‑mail tem que vir com o NOME do dono (os nomes ficam no topo do trabalho, os e‑mails nas afiliações numeradas — casar por ordem/iniciais). Reduz «linha sem autor». Obs.: linha sem autor que sobra costuma ser FRAGMENTO de e‑mail partido no meio (ex.: «sion@gmail.com» = pedaço de «dara.passion@gmail.com»), não autor real."],
