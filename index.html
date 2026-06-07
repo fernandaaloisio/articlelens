@@ -2032,6 +2032,23 @@ async function aiFixHard(grupo){
 /* COLETA DE ANAIS PELA IA (agnóstica a formato): pica o TEXTO em blocos por tamanho e pede
    p/ a IA achar TODOS os trabalhos de cada bloco (título + autores{nome,e-mail}). Não depende de
    "RESUMO"/sumário — funciona em qualquer layout. O corte é só p/ caber no limite da IA. */
+/* Lê a lista de trabalhos da resposta da IA, TOLERANTE: aceita {"works":[...]}, array puro [...],
+   cercas ```json e até JSON CORTADO (salva até o último } válido). Evita "voltar vazio" à toa. */
+function _parseWorks(raw){
+  if(!raw) return [];
+  let s = String(raw).replace(/```+\s*json/gi,"").replace(/```+/g,"").trim();
+  let arr = null;
+  const m = s.match(/"works"\s*:\s*(\[[\s\S]*)/i);   // pega do "works":[ ... até o fim
+  if(m) arr = m[1]; else { const a = s.indexOf("["); if(a>=0) arr = s.slice(a); }
+  if(!arr) return [];
+  // fecha no ponto onde o array provavelmente termina
+  let end = arr.lastIndexOf("]"); let cand = end>0 ? arr.slice(0, end+1) : arr;
+  try{ return JSON.parse(cand); }catch(_){}
+  // truncado: salva até o último objeto } completo e fecha o array
+  const lastObj = arr.lastIndexOf("}");
+  if(lastObj>0){ try{ return JSON.parse(arr.slice(0, lastObj+1) + "]"); }catch(_){} }
+  return [];
+}
 async function aiExtrairBloco(chunk){
   const sys = "Você extrai TODOS os trabalhos de um trecho de ANAIS acadêmico (texto cru, vários trabalhos). "
     + "Para CADA trabalho: title (título completo) e authors = lista de {name: nome completo e próprio, SEM "
@@ -2040,11 +2057,11 @@ async function aiExtrairBloco(chunk){
     + "e-mail; se um trabalho aparecer cortado na borda do trecho, inclua mesmo assim o que der. APENAS JSON.";
   const user = 'Devolva {"works":[{"title":"...","authors":[{"name":"Nome Completo","email":"x@y"}]}]}.\n\nTEXTO:\n' + (chunk||"").slice(0,12000);
   const msgs=[{role:"system",content:sys},{role:"user",content:user}];
-  try{ return _aiJson(await aiChat(msgs,_repairModelNow())).works||[]; }
+  try{ return _parseWorks(await aiChat(msgs,_repairModelNow())); }
   catch(e){
     if(/\b404\b|not_found|model:/i.test(e.message)){
       if(_repairOK && _repairIdx<_repairCands.length-1){ _repairIdx++; try{ return await aiExtrairBloco(chunk); }catch(_){ } }
-      _repairOK=false; try{ return _aiJson(await aiChat(msgs,AI.model)).works||[]; }catch(_){ return []; }
+      _repairOK=false; try{ return _parseWorks(await aiChat(msgs,AI.model)); }catch(_){ return []; }
     }
     throw e;
   }
@@ -2054,18 +2071,22 @@ async function aiColetarAnais(text, fileName){
   const pages=(text||"").split("\f"); const chunks=[]; let buf="";
   for(const p of pages){ if(buf && (buf.length+p.length)>7000){ chunks.push(buf); buf=""; } buf += (buf?"\f":"")+p; }
   if(buf.trim()) chunks.push(buf);
-  const low=(text||"").toLowerCase(); const works=[];
+  const low=(text||"").toLowerCase(); const works=[]; let brutos=0, falhas=0;
   for(let i=0;i<chunks.length;i++){
     setStatus("🧠 IA lendo o anais — bloco "+(i+1)+"/"+chunks.length+"…"); setProgress(i,chunks.length,"IA");
-    let ws=[]; try{ ws=await aiExtrairBloco(chunks[i]); }catch(_){ }
+    let ws=[]; try{ ws=await aiExtrairBloco(chunks[i]); }catch(_){ falhas++; }
+    brutos += (ws||[]).length;
     for(const w of (ws||[])){
       const authors=(w&&w.authors||[]).map(a=>({name:(a.name||"").trim(), email:(a.email||"").trim().toLowerCase()}))
         .filter(a=>a.email && /@/.test(a.email) && low.includes(a.email) && !_emailInstitucional(a.email));
       if(authors.length) works.push({ title:(w.title||"").trim(), authors, _aiOk:true, _aiColetado:true, source_file:fileName });
     }
   }
+  _aiAnaisInfo = { blocos:chunks.length, trabalhosBrutos:brutos, trabalhos:works.length, falhas };
+  console.log("aiColetarAnais:", JSON.stringify(_aiAnaisInfo));
   return works;
 }
+let _aiAnaisInfo = null;   // diagnóstico da última coleta de anais pela IA (blocos, trabalhos achados, falhas)
 async function aiPairAuthorsEmails(names, emails, title){
   const sys = "Você associa autores de artigos acadêmicos aos seus e-mails, usando apelidos, "
     + "iniciais e sobrenomes. Responda APENAS com JSON válido, sem nenhum texto extra.";
@@ -3169,6 +3190,9 @@ function renderCobertura(ex){
   }
   const mu = Object.entries(modelosUsados||{});
   if(mu.length) html += "<br><br><b>📐 Modelos usados:</b> " + mu.map(([n,c])=>escapeHtml(n)+" ("+c+")").join(" · ");
+  if(_aiAnaisInfo) html += "<br><b>🧠 IA por blocos:</b> leu "+_aiAnaisInfo.blocos+" bloco(s), achou <b>"+_aiAnaisInfo.trabalhos+"</b> trabalho(s)"
+       + (_aiAnaisInfo.falhas?(" · "+_aiAnaisInfo.falhas+" bloco(s) falharam"):"")
+       + (_aiAnaisInfo.trabalhos===0?" — <b style='color:var(--danger)'>IA não retornou nada (caiu no determinístico). Confira conexão/modelo.</b>":"");
   // TRANSPARÊNCIA: trabalhos REPETIDOS que foram juntados (mesmo título em 2 seções do anais). Os e‑mails
   // foram PRESERVADOS (unidos na cópia mantida) — mas você é avisado do que foi juntado.
   if(lastDuplicatas && lastDuplicatas.length){
@@ -3673,9 +3697,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.49";
+const VERSION = "13.50";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.50","2026-06-07","Conserta a IA por blocos que «voltava vazia» (e por isso caía no determinístico, com erros de nome). CAUSA: o leitor de JSON só entendia {\"works\":[...]}; se a IA respondia com array puro [...], com cercas ```json ou JSON CORTADO, ele falhava. Agora o parser é tolerante (aceita os 3 casos e salva JSON truncado). + Diagnóstico em 📊 Cobertura: «🧠 IA por blocos: leu N bloco(s), achou M trabalho(s)» — assim dá pra VER se a IA realmente coletou (M>0) ou caiu no determinístico (M=0 → checar conexão). NOTA: o «leitor» de texto (PDF.js) não era o problema — todos os e‑mails já eram lidos; o que falhava era ler a RESPOSTA da IA."],
   ["13.49","2026-06-07","Esteira do anais SIMPLIFICADA: com a IA ligada, a IA é o COLETOR PRINCIPAL (lê o texto em blocos e extrai título+nome+e‑mail) — não precisa mais «vencer» o determinístico, ela assume sempre que devolver trabalhos. O determinístico (cortadores por RESUMO/sumário) virou só RESERVA pra quando a IA estiver desligada ou voltar vazia. Some a confusão dos vários modelos; a rede de segurança continua garantindo todo @. IMPORTANTE: após atualizar, faça Ctrl+Shift+R (recarga forçada) — senão o navegador usa a versão antiga em cache."],
   ["13.48","2026-06-07","ESTEIRA DO ANAIS REPENSADA (sua pergunta: «a IA precisa cortar?»). O corte deixou de ser «inteligente por formato» (que quebrava em todo anais novo) e virou AGNÓSTICO: o texto é picado em blocos por TAMANHO e a IA acha TODOS os trabalhos de cada bloco (título+nome+e‑mail). Funciona em qualquer layout, sem depender de RESUMO/sumário. + REDE DE SEGURANÇA determinística: TODO @ do PDF (não‑institucional) é garantido no resultado — se a IA ou o corte perder algum, ele entra com o contexto p/ a IA/revisão completar. Assim «não pegou todos os e‑mails» não acontece mais. (A IA por blocos exige a IA ligada; o corte por tamanho só serve p/ caber no limite dela.)"],
   ["13.47","2026-06-07","Conserta anais que virava «1 artigo» com nomes‑lixo (ex.: Jornada UNITINS). CAUSA: esse anais NÃO tem «RESUMO», e os 3 cortadores dependiam dele → todos falhavam → o app tratava o PDF inteiro como 1 artigo, jogando todos os @ sob o título da CAPA e inventando nomes a partir do e‑mail (a IA nem entrava, pra ela era 1 artigo). AGORA: (1) novo modelo «Anais · e‑mail no fim» pra esse formato (autores no topo, e‑mail no bloco numerado depois das Palavras‑chave) — pega 92/96 e‑mails com títulos certos; (2) TRAVA: um anais detectado NUNCA mais vira «1 artigo» — se nenhum cortador reconhecer, captura cada @ com seu contexto p/ a IA/revisão, sem título de capa falso."],
