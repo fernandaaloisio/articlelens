@@ -2029,6 +2029,43 @@ async function aiFixHard(grupo){
   }
 }
 
+/* COLETA DE ANAIS PELA IA (agnóstica a formato): pica o TEXTO em blocos por tamanho e pede
+   p/ a IA achar TODOS os trabalhos de cada bloco (título + autores{nome,e-mail}). Não depende de
+   "RESUMO"/sumário — funciona em qualquer layout. O corte é só p/ caber no limite da IA. */
+async function aiExtrairBloco(chunk){
+  const sys = "Você extrai TODOS os trabalhos de um trecho de ANAIS acadêmico (texto cru, vários trabalhos). "
+    + "Para CADA trabalho: title (título completo) e authors = lista de {name: nome completo e próprio, SEM "
+    + "titulação (Doutor/Mestre/Graduando/Orientador) e SEM ser o e-mail; email}. REGRAS DURAS: só use e-mail "
+    + "que APARECE no texto (NUNCA invente); junte nome quebrado entre linhas; inclua TODOS os autores que têm "
+    + "e-mail; se um trabalho aparecer cortado na borda do trecho, inclua mesmo assim o que der. APENAS JSON.";
+  const user = 'Devolva {"works":[{"title":"...","authors":[{"name":"Nome Completo","email":"x@y"}]}]}.\n\nTEXTO:\n' + (chunk||"").slice(0,12000);
+  const msgs=[{role:"system",content:sys},{role:"user",content:user}];
+  try{ return _aiJson(await aiChat(msgs,_repairModelNow())).works||[]; }
+  catch(e){
+    if(/\b404\b|not_found|model:/i.test(e.message)){
+      if(_repairOK && _repairIdx<_repairCands.length-1){ _repairIdx++; try{ return await aiExtrairBloco(chunk); }catch(_){ } }
+      _repairOK=false; try{ return _aiJson(await aiChat(msgs,AI.model)).works||[]; }catch(_){ return []; }
+    }
+    throw e;
+  }
+}
+async function aiColetarAnais(text, fileName){
+  // pica por PÁGINA (\f) acumulando ~7000 chars (trabalho raramente quebra; o dedup junta se quebrar)
+  const pages=(text||"").split("\f"); const chunks=[]; let buf="";
+  for(const p of pages){ if(buf && (buf.length+p.length)>7000){ chunks.push(buf); buf=""; } buf += (buf?"\f":"")+p; }
+  if(buf.trim()) chunks.push(buf);
+  const low=(text||"").toLowerCase(); const works=[];
+  for(let i=0;i<chunks.length;i++){
+    setStatus("🧠 IA lendo o anais — bloco "+(i+1)+"/"+chunks.length+"…"); setProgress(i,chunks.length,"IA");
+    let ws=[]; try{ ws=await aiExtrairBloco(chunks[i]); }catch(_){ }
+    for(const w of (ws||[])){
+      const authors=(w&&w.authors||[]).map(a=>({name:(a.name||"").trim(), email:(a.email||"").trim().toLowerCase()}))
+        .filter(a=>a.email && /@/.test(a.email) && low.includes(a.email) && !_emailInstitucional(a.email));
+      if(authors.length) works.push({ title:(w.title||"").trim(), authors, _aiOk:true, _aiColetado:true, source_file:fileName });
+    }
+  }
+  return works;
+}
 async function aiPairAuthorsEmails(names, emails, title){
   const sys = "Você associa autores de artigos acadêmicos aos seus e-mails, usando apelidos, "
     + "iniciais e sobrenomes. Responda APENAS com JSON válido, sem nenhum texto extra.";
@@ -2425,7 +2462,7 @@ async function collectFromPDF(file, mode){
     }catch(e){ console.warn("IA identificação indisponível, usando regra:", e.message); }
   }
   modelosUsados[modelo.nome] = (modelosUsados[modelo.nome]||0) + 1;
-  let recs = null;
+  let recs = null, nomeModelo = modelo.nome;
   if(modelo.tipo==="anais"){
     // Roda os DOIS métodos e escolhe o MELHOR (mais trabalhos COM e-mail) — assim nunca regride:
     //  • corte pelo SUMÁRIO (numerado OU pontilhado): título oficial, não pula trabalho.
@@ -2458,13 +2495,34 @@ async function collectFromPDF(file, mode){
     }
     // completa com trabalhos do CORPO que ficaram FORA do sumário (sumário incompleto), formato PV
     try{ const extra=scanCorpoPV(text, works); if(extra.length) works=works.concat(extra); }catch(_){}
+    // COLETA AGNÓSTICA PELA IA: pica o texto em blocos e a IA acha os trabalhos (independe de RESUMO/sumário/formato).
+    // Usa a IA quando ela pega ao menos tanto e‑mail quanto o determinístico (ela entende o layout do anais).
+    if(AI.enabled && AI.orchestrate){
+      try{
+        const wAI = await aiColetarAnais(text, file.name);
+        const cnt = a => a.reduce((s,w)=>s+(w.authors||[]).filter(x=>x.email).length,0);
+        if(cnt(wAI) > 0 && cnt(wAI) >= cnt(works)*0.85){
+          works = wAI; nomeModelo = "Anais · IA por blocos (agnóstico)";
+          modelosUsados[nomeModelo] = (modelosUsados[nomeModelo]||0) + 1;
+        }
+      }catch(e){ console.warn("aiColetarAnais:", e&&e.message); }
+    }
     works = _dedupWorks(works);     // tira trabalhos repetidos (mesmo título em 2 seções: Resumos + Artigos)
+    // REDE DE SEGURANÇA: garante que TODO @ do PDF (não‑institucional) esteja no resultado — se a IA ou o
+    // determinístico perdeu algum, ele entra como registro com CONTEXTO (a IA/revisão completa nome+título).
+    try{
+      const cap=new Set(); works.forEach(w=>(w.authors||[]).forEach(a=>{ if(a.email) cap.add(a.email.toLowerCase().trim()); }));
+      const low=text.toLowerCase();
+      const falta=[...new Set(extractEmails(text).filter(e=>!_emailInstitucional(e)).map(e=>e.toLowerCase()))].filter(e=>!cap.has(e));
+      for(const e of falta){ const idx=low.indexOf(e); const ctx=idx>=0?text.slice(Math.max(0,idx-1600),idx+200):"";
+        works.push({ title:"", authors:[{name:"",email:e}], _raw:ctx, _faltante:true }); }
+      if(falta.length) console.log("rede de segurança: "+falta.length+" @ recuperado(s) como registro");
+    }catch(_){}
     if(works.length){
       recs = works.map(w=>({title:w.title, authors:w.authors, all_emails:w.all_emails,
-                            _raw:w._raw, _fromIndex:w._fromIndex, source_file:file.name}));
+                            _raw:w._raw, _fromIndex:w._fromIndex, _aiColetado:w._aiColetado, source_file:file.name}));
     }
   }
-  let nomeModelo = modelo.nome;
   if(!recs && modelo.tipo==="anais"){
     // SEGURANÇA: é ANAIS (vários trabalhos) mas NENHUM cortador funcionou (formato novo, ex.: sem "RESUMO").
     // NÃO tratar como 1 artigo (isso jogava todos os @ sob o título da CAPA, com nomes‑lixo). Em vez disso,
@@ -2605,7 +2663,8 @@ async function processBatch(){
     if(fmt) setStatus("Formato detectado (sem IA): <b>"+escapeHtml(fmt)+"</b>");
     // ANAIS: a IA SEMPRE coleta cada trabalho (regra do projeto). ARTIGO/revista: só se "conferir TODOS"
     // estiver ligado, senão só os casos difíceis (⚠) — mais barato (o determinístico já vai bem em artigo).
-    const todosAlvos = allResults.filter(r => r._anais || AI.conferirTudo || casoDificil(r));
+    // _aiColetado = já veio da IA por blocos (não re-cobrar IA). Os stubs faltantes (sem _aiColetado) ENTRAM p/ a IA completar.
+    const todosAlvos = allResults.filter(r => !r._aiColetado && (r._anais || AI.conferirTudo || casoDificil(r)));
     let alvos = todosAlvos.slice(0, 800), amostraInfo=null;
     if(todosAlvos.length>800){ amostraInfo={ total: todosAlvos.length, conferidos: 800 }; }   // só p/ avisar o teto
     if(alvos.length){
@@ -3614,9 +3673,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.47";
+const VERSION = "13.48";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.48","2026-06-07","ESTEIRA DO ANAIS REPENSADA (sua pergunta: «a IA precisa cortar?»). O corte deixou de ser «inteligente por formato» (que quebrava em todo anais novo) e virou AGNÓSTICO: o texto é picado em blocos por TAMANHO e a IA acha TODOS os trabalhos de cada bloco (título+nome+e‑mail). Funciona em qualquer layout, sem depender de RESUMO/sumário. + REDE DE SEGURANÇA determinística: TODO @ do PDF (não‑institucional) é garantido no resultado — se a IA ou o corte perder algum, ele entra com o contexto p/ a IA/revisão completar. Assim «não pegou todos os e‑mails» não acontece mais. (A IA por blocos exige a IA ligada; o corte por tamanho só serve p/ caber no limite dela.)"],
   ["13.47","2026-06-07","Conserta anais que virava «1 artigo» com nomes‑lixo (ex.: Jornada UNITINS). CAUSA: esse anais NÃO tem «RESUMO», e os 3 cortadores dependiam dele → todos falhavam → o app tratava o PDF inteiro como 1 artigo, jogando todos os @ sob o título da CAPA e inventando nomes a partir do e‑mail (a IA nem entrava, pra ela era 1 artigo). AGORA: (1) novo modelo «Anais · e‑mail no fim» pra esse formato (autores no topo, e‑mail no bloco numerado depois das Palavras‑chave) — pega 92/96 e‑mails com títulos certos; (2) TRAVA: um anais detectado NUNCA mais vira «1 artigo» — se nenhum cortador reconhecer, captura cada @ com seu contexto p/ a IA/revisão, sem título de capa falso."],
   ["13.46","2026-06-07","Novo botão «⬇️ Relatório de descartes (.csv)» na 📊 Cobertura: um arquivo só com TUDO que não entrou no resultado e por quê — ① repetidos juntados (e‑mails preservados), ② PDFs travados (<95%, p/ revisar), ③ removidos sem e‑mail (marcando os que TINHAM @ mas a extração falhou). Pra equipe conferir os descartes de uma vez."],
   ["13.45","2026-06-07","TRANSPARÊNCIA: o app agora AVISA quando junta trabalhos repetidos. Quando o mesmo trabalho aparece 2×+ no PDF (ex.: seção de Resumos + seção de Artigos), o sistema junta numa linha só — mas antes fazia isso CALADO. Agora mostra em 📊 Cobertura «🔁 N trabalho(s) repetido(s) juntado(s)» com a lista (título, quantas vezes, e‑mails unidos), avisa por toast no fim, e lista no relatório .csv. E confirma: NENHUM e‑mail é perdido (os @ das cópias são unidos no trabalho mantido). Nada mais é descartado em silêncio."],
