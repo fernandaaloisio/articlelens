@@ -232,7 +232,7 @@
     <label class="fld"><input type="checkbox" id="aiOrch"> 🧠 IA orquestra a esteira (decide o corte 1× por PDF + confere amostra)</label>
     <label class="fld"><input type="checkbox" id="aiSample"> 💸 Conferir só uma AMOSTRA por formato (mais barato) — a IA aprende o padrão no 1º trabalho e confere poucos, em vez de cada caso</label>
     <label class="fld"><input type="checkbox" id="aiSameFmt"> 📎 Todos os PDFs têm a MESMA formatação (sonda só o 1º e reusa nos demais)</label>
-    <label class="fld"><input type="checkbox" id="aiTudo"> 🧪 IA faz TODA a extração de cada trabalho (título+nome+e‑mail do texto cru — o determinístico só corta; máxima qualidade, custa mais)</label>
+    <label class="fld"><input type="checkbox" id="aiTudo"> 🧪 IA faz TODA a extração também em ARTIGOS/revista (anais já usa a IA sempre; o determinístico só corta os trabalhos)</label>
     <div class="btn-bar" style="margin:4px 0">
       <button class="btn ghost" id="aiPresetRender" type="button">Preencher dados do meu Render</button>
     </div>
@@ -2384,7 +2384,8 @@ async function collectFromPDF(file, mode){
     if(_ultimoModeloArtigo){ nomeModelo = _ultimoModeloArtigo;
       modelosUsados[_ultimoModeloArtigo] = (modelosUsados[_ultimoModeloArtigo]||0) + 1; }
   }
-  recs.forEach(r=>r._modelo = nomeModelo);
+  const _ehAnais = (modelo.tipo==="anais");
+  recs.forEach(r=>{ r._modelo = nomeModelo; r._anais = _ehAnais; });   // _anais → IA SEMPRE coleta (extração completa) nesses
   // ───── GATE DE COBERTURA POR PDF (a esteira do usuário). DUAS medidas, com pesos diferentes:
   //   (A) % de E‑MAILS do PDF que entraram (@ reais, sem institucional) — trava RÍGIDA a META_COBERTURA.
   //       Esta é a confiável e JÁ reflete trabalho perdido: perdeu obra → perdeu os @ dela → a % cai.
@@ -2497,9 +2498,9 @@ async function processBatch(){
   if(AI.enabled && AI.orchestrate && allResults.length){
     const fmt = descreverFormato(allResults);
     if(fmt) setStatus("Formato detectado (sem IA): <b>"+escapeHtml(fmt)+"</b>");
-    // MÁXIMA QUALIDADE: se "conferir TODOS" estiver ligado, a IA revisa cada trabalho (nome/título),
-    // não só os suspeitos. Senão, só os casos difíceis (⚠) — mais barato.
-    const todosAlvos = AI.conferirTudo ? allResults.slice() : allResults.filter(casoDificil);
+    // ANAIS: a IA SEMPRE coleta cada trabalho (regra do projeto). ARTIGO/revista: só se "conferir TODOS"
+    // estiver ligado, senão só os casos difíceis (⚠) — mais barato (o determinístico já vai bem em artigo).
+    const todosAlvos = allResults.filter(r => r._anais || AI.conferirTudo || casoDificil(r));
     let alvos = todosAlvos.slice(0, 800), amostraInfo=null;
     if(todosAlvos.length>800){ amostraInfo={ total: todosAlvos.length, conferidos: 800 }; }   // só p/ avisar o teto
     if(alvos.length){
@@ -2527,8 +2528,8 @@ async function processBatch(){
           const f = fixes.find(x=>x.i===gi); const antesT = r.title; const mudouE=[]; let nomesCorr=false;
           const tinhaNomeQuebrado = temNomeQuebrado(r);
           if(f){
-           if(AI.conferirTudo){
-            // 🧪 "IA faz TUDO": a IA leu o TEXTO CRU e é AUTORIDADE TOTAL — refaz título e autores do zero.
+           if(AI.conferirTudo || r._anais){
+            // ANAIS (sempre) ou 🧪 "IA faz TUDO": a IA leu o TEXTO CRU e é AUTORIDADE TOTAL — refaz título e autores do zero.
             if(f.title && f.title.length>8 && f.title!==r.title){ r.title=f.title; nTit++; }
             if(Array.isArray(f.authors)){
               const novos = f.authors
@@ -3466,9 +3467,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.41";
+const VERSION = "13.42";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.42","2026-06-07","ANAIS agora usa a IA SEMPRE (automático): se a IA estiver ligada, todo trabalho de anais é coletado pela IA (título+nome+e‑mail), sem precisar marcar nada. O determinístico só corta os trabalhos; a IA coleta; o validador fecha. Os sinais de revisão continuam (⚠ por trabalho e ⛔ trava < 95%) — nada é confiado às cegas. O checkbox 🧪 agora serve só pra estender a IA também a ARTIGOS/revista (que no determinístico já vão bem). Para anais NÃO travar por falta de IA, mantenha a IA conectada (Render/Haiku)."],
   ["13.41","2026-06-07","Esteira do ANAIS reorganizada (a seu pedido): determinístico CORTA os trabalhos (acha tudo) → IA COLETA título+nome completo+e‑mail de cada um → VALIDADOR de e‑mail roda DE NOVO no fim (corrige typo de domínio, marca inválido). Antes o validador só rodava ANTES da IA, então os e‑mails que a IA coletava saíam sem validar; agora há uma 2ª passada do validador pós‑IA. Revista/artigo (1 PDF = 1 trabalho) segue no determinístico, que já vai bem. Para anais: ligar 🧪 «IA faz TODA a extração» na aba IA."],
   ["13.40","2026-06-07","TRAVA anti-perda no modo «IA faz tudo»: a IA NUNCA pode remover um e‑mail que o determinístico já capturou — ela só limpa nome/título. Antes, ao refazer um trabalho, a IA às vezes omitia um autor e o e‑mail sumia (no 892EAB ela derrubou 5 de 505). Agora todo e‑mail capturado é garantido na saída, com o nome da IA quando ela acertou ou o nome determinístico caso ela tenha omitido. Obs.: e‑mails truncados no PRÓPRIO PDF (texto acaba em «@hotmail» sem «.com») seguem fora — não dá pra capturar o que não está no texto."],
   ["13.39","2026-06-07","MODO TESTE «IA faz TUDO»: com o checkbox 🧪 ligado, a IA recebe o TEXTO CRU de cada trabalho e refaz título+nome+e‑mail do ZERO (autoridade total), em vez de só ajustar. CONSERTO crítico: o modelo numerado de anais agora anexa o «_raw» (bloco do trabalho) — sem isso a IA vinha CEGA (texto vazio) e por isso não corrigia nada nos anais. Agora a IA enxerga o bloco e reextrai. (O determinístico só corta os trabalhos.) Rode com a IA ligada (Render+Haiku) + o checkbox marcado."],
