@@ -2081,12 +2081,27 @@ async function aiExtrairBloco(chunk, dbg){
   return [];
 }
 let _aiDbgRaw="", _aiDbgErr="";
+/* O "nome" é só o e-mail reformatado? (ex.: vhictor.hr → "Vhictor Hr"; vitinho_agronomia → "Vitinho
+   Agronomia") E NÃO aparece no texto fora do e-mail → é INVENÇÃO. (Nome real que casa com o e-mail,
+   tipo "João Silva"/joao.silva, NÃO é pego porque "joão silva" aparece de verdade no texto.) */
+function _nomeDoEmail(name, email, lowSemEmail){
+  const nrm=s=>s.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+  const nTok=nrm(name).split(/\s+/).filter(w=>w.length>=2);
+  if(!nTok.length) return false;
+  const loc=nrm((email||"").split("@")[0]).split(/[._\-]+/).filter(Boolean);
+  const derivado = nTok.every(t=>loc.includes(t));      // todo "nome" veio do local-part do e-mail
+  if(!derivado) return false;
+  return !nrm(lowSemEmail||"").includes(nTok.join(" ")); // e não existe como nome real no texto
+}
 async function aiColetarAnais(text, fileName){
   // pica por PÁGINA (\f) acumulando ~7000 chars (trabalho raramente quebra; o dedup junta se quebrar)
   const pages=(text||"").split("\f"); const chunks=[]; let buf="";
   for(const p of pages){ if(buf && (buf.length+p.length)>7000){ chunks.push(buf); buf=""; } buf += (buf?"\f":"")+p; }
   if(buf.trim()) chunks.push(buf);
-  const low=(text||"").toLowerCase(); const works=[]; let brutos=0, falhas=0, semTexto=0;
+  const low=(text||"").toLowerCase();
+  // texto SEM os e-mails (p/ checar se um nome é REAL ou só foi MONTADO a partir do e-mail)
+  const lowSemEmail = low.replace(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/gi," ");
+  const works=[]; let brutos=0, falhas=0, semTexto=0, inventados=0;
   _aiDbgRaw=""; _aiDbgErr="";
   for(let i=0;i<chunks.length;i++){
     setStatus("🧠 IA lendo o anais — bloco "+(i+1)+"/"+chunks.length+"…"); setProgress(i,chunks.length,"IA");
@@ -2098,11 +2113,14 @@ async function aiColetarAnais(text, fileName){
                      if(_emailInstitucional(a.email)) return false;
                      if(!low.includes(a.email)){ semTexto++; return false; }   // IA devolveu @ que não está no texto
                      return true; });
+      // ANTI-INVENÇÃO: se o nome foi MONTADO do e-mail (ex.: vhictor.hr → "Vhictor Hr") e NÃO aparece
+      // no texto fora do e-mail → deixa VAZIO (melhor sem nome do que nome fabricado). Nome real fica.
+      authors.forEach(a=>{ if(a.name && _nomeDoEmail(a.name, a.email, lowSemEmail)){ a.name=""; inventados++; } });
       if(authors.length) works.push({ title:(w.title||"").trim(), authors, _aiOk:true, _aiColetado:true, source_file:fileName });
     }
   }
   _aiAnaisInfo = { blocos:chunks.length, trabalhosBrutos:brutos, trabalhos:works.length, falhas,
-                   semTexto, amostra:_aiDbgRaw, erro:_aiDbgErr };
+                   semTexto, inventados, amostra:_aiDbgRaw, erro:_aiDbgErr };
   console.log("aiColetarAnais:", JSON.stringify(_aiAnaisInfo));
   return works;
 }
@@ -3213,7 +3231,8 @@ function renderCobertura(ex){
   if(_aiAnaisInfo){
     html += "<br><b>🧠 IA por blocos:</b> leu "+_aiAnaisInfo.blocos+" bloco(s) · trabalhos brutos da IA <b>"+(_aiAnaisInfo.trabalhosBrutos||0)+"</b> · usados <b>"+_aiAnaisInfo.trabalhos+"</b>"
        + (_aiAnaisInfo.falhas?(" · "+_aiAnaisInfo.falhas+" falha(s) de rede"):"")
-       + (_aiAnaisInfo.semTexto?(" · "+_aiAnaisInfo.semTexto+" @ descartado(s) (não batiam com o texto)"):"");
+       + (_aiAnaisInfo.semTexto?(" · "+_aiAnaisInfo.semTexto+" @ descartado(s) (não batiam com o texto)"):"")
+       + (_aiAnaisInfo.inventados?(" · "+_aiAnaisInfo.inventados+" nome(s) fabricado(s) do e‑mail → deixados vazios p/ revisão"):"");
     if(_aiAnaisInfo.trabalhos===0){
       html += "<br><span style='color:var(--danger)'>⚠ IA não trouxe trabalhos usáveis.</span>";
       if(_aiAnaisInfo.erro) html += "<br><span style='color:var(--muted)'>erro da 1ª chamada: "+escapeHtml(_aiAnaisInfo.erro.slice(0,160))+"</span>";
@@ -3724,9 +3743,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.53";
+const VERSION = "13.54";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.54","2026-06-07","ANTI-INVENÇÃO de nome: quando a IA não acha o dono de um e‑mail, ela às vezes MONTAVA um nome a partir do próprio e‑mail (ex.: vhictor.hr → «Vhictor Hr»; vitinho_agronomia → «Vitinho Agronomia»). Agora o app detecta isso (nome = só o e‑mail reformatado E que não aparece no texto fora do e‑mail) e deixa o nome VAZIO p/ revisão — melhor sem nome do que nome fabricado. Nome REAL que por acaso bate com o e‑mail (joao.silva → João Silva, que está escrito no texto) é mantido. A Cobertura mostra quantos foram esvaziados. Conferência: 0 nomes 100% inventados; só esses derivados do e‑mail."],
   ["13.53","2026-06-07","Dois ajustes finos: (1) corrige typo de provedor «gmail/hotmail/outlook.com.br» → «.com» (não existe .com.br nesses) — resolve o falso «e‑mail não entrou» do doribilac@gmail.com.br, que é só o mesmo autor digitado errado (o @gmail.com dele já entra). yahoo.com.br fica intacto (esse é real). (2) Prompt da IA reforçado: CADA e‑mail tem que vir com o NOME do dono (os nomes ficam no topo do trabalho, os e‑mails nas afiliações numeradas — casar por ordem/iniciais). Reduz «linha sem autor». Obs.: linha sem autor que sobra costuma ser FRAGMENTO de e‑mail partido no meio (ex.: «sion@gmail.com» = pedaço de «dara.passion@gmail.com»), não autor real."],
   ["13.52","2026-06-07","ACHADO: o Render do usuário só aceita o modelo Opus 4.8 (Haiku/outros dão erro). A IA por blocos tentava Haiku barato primeiro → falhava → voltava vazia → caía no determinístico (com erros de nome). AGORA a IA por blocos usa DIRETO o modelo configurado na aba IA (o que funciona no seu Render). Assim ela coleta de verdade. OBS de custo: Opus é ~20× mais caro que Haiku; pra baratear vale habilitar um Haiku no proxy do Render."],
   ["13.51","2026-06-07","Diagnóstico fundo da IA por blocos: a 📊 Cobertura agora mostra os trabalhos BRUTOS que a IA devolveu, quantos @ foram descartados por «não baterem com o texto», e — quando dá 0 — o ERRO da chamada + uma AMOSTRA da resposta da IA. Serve pra achar por que a IA retorna 0 (resposta vazia? formato? @ que não está no texto?)."],
