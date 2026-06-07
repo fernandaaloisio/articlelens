@@ -232,6 +232,7 @@
     <label class="fld"><input type="checkbox" id="aiOrch"> 🧠 IA orquestra a esteira (decide o corte 1× por PDF + confere amostra)</label>
     <label class="fld"><input type="checkbox" id="aiSample"> 💸 Conferir só uma AMOSTRA por formato (mais barato) — a IA aprende o padrão no 1º trabalho e confere poucos, em vez de cada caso</label>
     <label class="fld"><input type="checkbox" id="aiSameFmt"> 📎 Todos os PDFs têm a MESMA formatação (sonda só o 1º e reusa nos demais)</label>
+    <label class="fld"><input type="checkbox" id="aiTudo"> ✅ Conferir TODOS os trabalhos com IA (máxima qualidade — confere nome/título de cada um, não só os suspeitos; custa mais)</label>
     <div class="btn-bar" style="margin:4px 0">
       <button class="btn ghost" id="aiPresetRender" type="button">Preencher dados do meu Render</button>
     </div>
@@ -1761,7 +1762,7 @@ function isAmbiguous(authors){
    Config salva no localStorage do navegador. A chave nunca sai daqui,
    exceto para o endpoint que VOCÊ configurar.
    ========================================================================= */
-const AI = { enabled:false, orchestrate:false, sample:true, sameFormat:true, baseURL:"", model:"claude-3-5-haiku-20241022", apiKey:"" };
+const AI = { enabled:false, orchestrate:false, sample:true, sameFormat:true, conferirTudo:false, baseURL:"", model:"claude-3-5-haiku-20241022", apiKey:"" };
 /* Rastreio de custo no próprio app (a partir dos tokens devolvidos pela Claude) */
 const AIPRICES = { "claude-3-5-sonnet":[3,15],"claude-3-7-sonnet":[3,15],"claude-3-5-haiku":[0.8,4],"claude-3-opus":[15,75],"claude-3-haiku":[0.25,1.25],
   "claude-opus-4":[15,75],"claude-sonnet-4":[3,15],"claude-haiku-4":[0.8,4] };
@@ -2494,9 +2495,9 @@ async function processBatch(){
   if(AI.enabled && AI.orchestrate && allResults.length){
     const fmt = descreverFormato(allResults);
     if(fmt) setStatus("Formato detectado (sem IA): <b>"+escapeHtml(fmt)+"</b>");
-    const todosAlvos = allResults.filter(casoDificil);
-    // Com Haiku (barato) resolvemos TODOS os casos com ⚠ — SEM amostrar — pros erros realmente
-    // pararem. (A "amostra" virava o calcanhar: deixava a maioria dos trabalhos sem conferir.)
+    // MÁXIMA QUALIDADE: se "conferir TODOS" estiver ligado, a IA revisa cada trabalho (nome/título),
+    // não só os suspeitos. Senão, só os casos difíceis (⚠) — mais barato.
+    const todosAlvos = AI.conferirTudo ? allResults.slice() : allResults.filter(casoDificil);
     let alvos = todosAlvos.slice(0, 800), amostraInfo=null;
     if(todosAlvos.length>800){ amostraInfo={ total: todosAlvos.length, conferidos: 800 }; }   // só p/ avisar o teto
     if(alvos.length){
@@ -3259,6 +3260,7 @@ function initAIUI(){
   document.getElementById("aiOrch").checked = !!AI.orchestrate;
   document.getElementById("aiSample").checked = AI.sample!==false;
   document.getElementById("aiSameFmt").checked = AI.sameFormat!==false;
+  { const _t=document.getElementById("aiTudo"); if(_t) _t.checked = !!AI.conferirTudo; }
   document.getElementById("aiBase").value  = AI.baseURL || "";
   document.getElementById("aiModel").value = AI.model || "";
   document.getElementById("aiKey").value   = AI.apiKey || "";
@@ -3306,6 +3308,7 @@ document.getElementById("aiSave").onclick = ()=>{
   AI.orchestrate = document.getElementById("aiOrch").checked;
   AI.sample = document.getElementById("aiSample").checked;
   AI.sameFormat = document.getElementById("aiSameFmt").checked;
+  { const _t=document.getElementById("aiTudo"); if(_t) AI.conferirTudo = _t.checked; }
   AI.baseURL = document.getElementById("aiBase").value.trim();
   AI.model   = document.getElementById("aiModel").value.trim() || "claude-3-5-haiku-20241022";
   AI.apiKey  = document.getElementById("aiKey").value.trim();
@@ -3437,9 +3440,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.37";
+const VERSION = "13.38";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.38","2026-06-07","Nova opção (aba 🧠 IA): «✅ Conferir TODOS os trabalhos com IA (máxima qualidade)». Ligada, a IA (Haiku, nuvem) revisa nome/título de CADA trabalho — não só os marcados como suspeitos — pro resultado sair pronto pra entregar. O determinístico continua achando 100% dos e‑mails e cortando os trabalhos (de graça); a IA só confere/corrige, por isso fica barata. Custo aparece no «custo por e‑mail» (meta R$0,06). Desligada = comportamento de antes (só confere os ⚠, mais barato)."],
   ["13.37","2026-06-07","DOIS consertos grandes de QUALIDADE no modelo numerado (não só «achar o @», mas acertar nome e título): (1) TÍTULO completo — antes pegava só a ÚLTIMA linha do título (que quebra em 2‑3 linhas), agora junta todas → no 5CBDD46 os títulos «inteiros» foram de 73% → 100%. (2) Nome↔e‑mail por CONTEÚDO — antes pareava por POSIÇÃO, então um e‑mail quebrado/faltando no meio desalinhava todos os seguintes; agora casa cada e‑mail com o nome cujas iniciais/sobrenome batem → erro de nome 6%→3% (5CBDD46), 1% (F3D/1D5B7CCC). Anais com nomes muito fundidos (ex.: Anaisfinais) ainda têm ~13% — esses valem a passada da IA."],
   ["13.36","2026-06-07","Contagem agora mostra o TOTAL de e‑mails, não só os únicos. Na 📊 Cobertura: «capturei N e‑mails no total (M únicos = X% dos do PDF) · o PDF tem T no total (U únicos)». O TOTAL = 1 por autor‑com‑e‑mail (= linhas do Excel; conta o mesmo orientador que aparece em vários trabalhos). O % de cobertura segue medido nos ÚNICOS (é o que diz se faltou algum endereço). O relatório .csv também traz total e únicos separados."],
   ["13.35","2026-06-07","Conserta e‑mail PARTIDO na quebra de linha: quando o «…@» termina a linha e o domínio (gmail.com) cai na linha de baixo, o e‑mail era perdido (o regex precisa de local@domínio juntos). Agora o app junta os dois antes de ler. Achado conferindo o 5CBDD46 (faltava 1: kamylasantos2019@gmail.com → agora 260/260 = 100%). Restrito p/ NUNCA colar dois e‑mails completos por engano (validado: F3D 373→373, Anaisfinais 803→803, sem perdas)."],
