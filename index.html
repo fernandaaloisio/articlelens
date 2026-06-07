@@ -591,6 +591,13 @@ function _pendentesCount(){
    ========================================================================= */
 /* Conserta acentos "soltos" de PDFs feitos em LaTeX (SBC/congressos):
    o PDF.js extrai o acento como caractere separado (´e→é, ˜a→ã, c¸→ç, m´etricas→métricas). */
+/* E‑MAIL QUEBRADO NA LINHA: "...kamyla@" no fim de uma linha e "gmail.com" na linha de baixo.
+   O regex de e‑mail precisa de local@domínio juntos, então junta o "…@" (ou domínio parcial SEM
+   ponto) com o domínio da linha seguinte. Restrito a parte-após-@ sem ponto p/ NUNCA colar dois
+   e‑mails completos (ex.: "a@x.br\nb@y.com" não é tocado). */
+function _juntarEmailQuebrado(s){
+  return s.replace(/([a-z0-9._%+\-]+@[a-z0-9\-]*)\n[ \t]*([a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.[a-z]{2,})/gi, "$1$2");
+}
 function consertarAcentos(s){
   if(!/[´˜ˆ^`¨¸ı]/.test(s)) return s;
   const M={ "´":"́", "˜":"̃", "ˆ":"̂", "^":"̂", "`":"̀", "¨":"̈" };
@@ -662,8 +669,9 @@ async function extractTextFromPDF(file){
     });
     out += lines.join("\n") + "\n\f\n";     // \f = marca de fim de página (p/ o separador de anais)
   }
-  const clean = consertarAcentos(out).normalize("NFC")   // junta acentos soltos (LaTeX) + compõe ç/ã
+  let clean = consertarAcentos(out).normalize("NFC")   // junta acentos soltos (LaTeX) + compõe ç/ã
                    .replace(/[ \t]+/g," ").replace(/\n{3,}/g,"\n\n").trim();
+  clean = _juntarEmailQuebrado(clean);                  // cola e‑mail partido na quebra de linha (…@ + domínio)
   if(!clean) throw new Error("PDF sem texto selecionável (provável imagem/escaneado — requer OCR)");
   return clean;
 }
@@ -3410,9 +3418,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.34";
+const VERSION = "13.35";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.35","2026-06-07","Conserta e‑mail PARTIDO na quebra de linha: quando o «…@» termina a linha e o domínio (gmail.com) cai na linha de baixo, o e‑mail era perdido (o regex precisa de local@domínio juntos). Agora o app junta os dois antes de ler. Achado conferindo o 5CBDD46 (faltava 1: kamylasantos2019@gmail.com → agora 260/260 = 100%). Restrito p/ NUNCA colar dois e‑mails completos por engano (validado: F3D 373→373, Anaisfinais 803→803, sem perdas)."],
   ["13.34","2026-06-07","PDF novo testado (anais UNITINS, 5CBDD46…): os modelos pegaram 100% (259/259 e‑mails, 98 trabalhos, modelo numerado). Limpeza: nomes não vêm mais com o número sobrescrito grudado (Farias¹ → Farias, Lopes³ → Lopes; também tira *†‡§)."],
   ["13.33","2026-06-07","CORREÇÃO do gate de trabalhos (a v13.32 travaria quase todo anais por engano!). A contagem de trabalhos é ruidosa (o «Resumo»+«Abstract» conta 2× por obra e o sumário lista itens sem e‑mail), então exigir 95% dela reprovava anais que estão 96‑100% completos. Agora: a % de E‑MAILS é a trava rígida (95%) — e ela já reflete trabalho perdido (perdeu obra → perdeu os @ dela). A % de TRABALHOS vs sumário virou informação e só trava em FALHA GROSSA (< 70%). Resultado: nenhum anais bom trava à toa; só trava quem realmente perdeu e‑mail (ex.: pdf_380, 91%) ou perdeu muitos trabalhos."],
   ["13.32","2026-06-07","Trava agora é a JUNÇÃO de DUAS medidas (a seu pedido): (A) % de e‑mails do PDF que entraram E (B) % de TRABALHOS localizados vs esperados (sumário; senão nº de RESUMO). Vale a PIOR das duas — então um PDF só passa se pegou ≥95% dos e‑mails E ≥95% dos trabalhos. A Cobertura e o relatório mostram as duas %. Varredura COMPLETA dos 345 PDFs da pasta (raiz + ARACE 138 + SBIE 185): 302 ≥95%, 28 sem e‑mail no texto, 15 abaixo de 95% (quase todos artigos pequenos perdendo 1 autor — cabeçalho sem «Instituição:», autor após quebra de página, etc.) → esses ficam TRAVADOS p/ revisão."],
