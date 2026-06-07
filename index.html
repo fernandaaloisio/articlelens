@@ -2913,14 +2913,16 @@ function renderCobertura(ex){
   const box=document.getElementById("coberturaBox"); if(!box) return;
   box.style.display=""; box.open=true;          // já abre o painel (com a verificação) após a coleta
   const idxN = lastIndice ? lastIndice.total : null;
+  // TOTAL de e‑mails coletados = 1 por autor‑com‑e‑mail (= linhas do Excel; conta repetições entre trabalhos)
+  const totCapt = allResults.reduce((s,w)=>s+(w.authors||[]).filter(a=>a.email).length,0);
   let _resAt="";
   if(_emailAlvo && _emailAlvo.uni.size>0){
     const cu=new Set(); allResults.forEach(w=>(w.authors||[]).forEach(a=>{if(a.email)cu.add(a.email.toLowerCase().trim());}));
     const p=Math.round(100*cu.size/_emailAlvo.uni.size);
-    _resAt=" · @ "+cu.size+"/"+_emailAlvo.uni.size+" ("+p+"%) "+(p>=90?"✅":p>=70?"⚠️":"❌");
+    _resAt=" · "+totCapt+" e‑mails ("+cu.size+" únicos · "+p+"%) "+(p>=90?"✅":p>=70?"⚠️":"❌");
   }
   document.getElementById("coberturaResumo").textContent =
-    "· "+allResults.length+" com e‑mail · "+ex.trabRem+" removidos"
+    "· "+allResults.length+" trabalhos · "+ex.trabRem+" removidos"
     + (idxN!=null ? " · índice "+idxN : "") + _resAt;
   let html = "<b>"+allResults.length+"</b> trabalhos coletados (todos com pelo menos 1 e‑mail).";
   if(idxN!=null) html += " O sumário do PDF lista <b>"+idxN+"</b> trabalhos.";
@@ -2943,10 +2945,12 @@ function renderCobertura(ex){
     const captUni=new Set();
     allResults.forEach(w=>(w.authors||[]).forEach(a=>{ if(a.email) captUni.add(a.email.toLowerCase().trim()); }));
     const c=captUni.size, pct=Math.round(100*c/alvoUni);
+    const alvoTot=_emailAlvo.tot||alvoUni;
     const cor = pct>=90?"var(--ok,#28a745)" : pct>=70?"var(--warn,#b8860b)" : "var(--danger)";
     const sinal = pct>=90?"✅" : pct>=70?"⚠️" : "❌";
-    html += "<br><b>Conferência (e‑mails):</b> o PDF tem <b>"+alvoUni+"</b> e‑mails (únicos) · capturei <b style='color:"+cor+"'>"+c+" ("+pct+"%)</b> "+sinal
-         + (pct<90?" · <b style='color:"+cor+"'>faltou recuperar "+(alvoUni-c)+"</b>":" · cobertura completa");
+    html += "<br><b>Conferência (e‑mails):</b> capturei <b style='color:"+cor+"'>"+totCapt+" e‑mails no total</b> ("+c+" únicos = "+pct+"% dos "+alvoUni+" do PDF) "+sinal
+         + " <span style='color:var(--muted)'>· o PDF tem "+alvoTot+" e‑mails no total ("+alvoUni+" únicos)</span>"
+         + (pct<90?" · <b style='color:"+cor+"'>faltou recuperar "+(alvoUni-c)+" únicos</b>":"");
     if(pct<100){   // LISTA os @ que escaparam (você vê exatamente o que falta — nada some em silêncio)
       const faltam=[..._emailAlvo.uni].filter(e=>!captUni.has(e));
       if(faltam.length) html += "<br><span style='color:var(--muted)'>e‑mails do PDF que NÃO entraram ("+faltam.length+"): "
@@ -3134,9 +3138,10 @@ document.getElementById("verificarIA").onclick = verificarIncertosIA;
   L.push(["RELATÓRIO DE COBERTURA",""]);
   L.push(["Trabalhos coletados (com e-mail)", allResults.length]);
   if(idxN!=null) L.push(["Trabalhos listados no sumário", idxN]);
-  L.push(["E-mails coletados (linhas)", nmail]);
+  L.push(["E-mails coletados (TOTAL = linhas)", nmail]);
+  L.push(["E-mails coletados (únicos)", captUni.size]);
+  L.push(["E-mails no PDF (TOTAL com repetições)", _emailAlvo?_emailAlvo.tot:alvo]);
   L.push(["E-mails únicos no PDF (alvo)", alvo]);
-  L.push(["E-mails únicos capturados", captUni.size]);
   if(alvo) L.push(["Cobertura de e-mail", Math.round(100*captUni.size/alvo)+"%"]);
   L.push(["Custo total (R$)", custoBRL.toFixed(2).replace(".",",")]);
   L.push(["Custo por e-mail (R$)", perBRL.toFixed(4).replace(".",",")+(perBRL<=0.06?" (OK, meta R$0,06)":" (ACIMA da meta R$0,06)")]);
@@ -3418,9 +3423,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.35";
+const VERSION = "13.36";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.36","2026-06-07","Contagem agora mostra o TOTAL de e‑mails, não só os únicos. Na 📊 Cobertura: «capturei N e‑mails no total (M únicos = X% dos do PDF) · o PDF tem T no total (U únicos)». O TOTAL = 1 por autor‑com‑e‑mail (= linhas do Excel; conta o mesmo orientador que aparece em vários trabalhos). O % de cobertura segue medido nos ÚNICOS (é o que diz se faltou algum endereço). O relatório .csv também traz total e únicos separados."],
   ["13.35","2026-06-07","Conserta e‑mail PARTIDO na quebra de linha: quando o «…@» termina a linha e o domínio (gmail.com) cai na linha de baixo, o e‑mail era perdido (o regex precisa de local@domínio juntos). Agora o app junta os dois antes de ler. Achado conferindo o 5CBDD46 (faltava 1: kamylasantos2019@gmail.com → agora 260/260 = 100%). Restrito p/ NUNCA colar dois e‑mails completos por engano (validado: F3D 373→373, Anaisfinais 803→803, sem perdas)."],
   ["13.34","2026-06-07","PDF novo testado (anais UNITINS, 5CBDD46…): os modelos pegaram 100% (259/259 e‑mails, 98 trabalhos, modelo numerado). Limpeza: nomes não vêm mais com o número sobrescrito grudado (Farias¹ → Farias, Lopes³ → Lopes; também tira *†‡§)."],
   ["13.33","2026-06-07","CORREÇÃO do gate de trabalhos (a v13.32 travaria quase todo anais por engano!). A contagem de trabalhos é ruidosa (o «Resumo»+«Abstract» conta 2× por obra e o sumário lista itens sem e‑mail), então exigir 95% dela reprovava anais que estão 96‑100% completos. Agora: a % de E‑MAILS é a trava rígida (95%) — e ela já reflete trabalho perdido (perdeu obra → perdeu os @ dela). A % de TRABALHOS vs sumário virou informação e só trava em FALHA GROSSA (< 70%). Resultado: nenhum anais bom trava à toa; só trava quem realmente perdeu e‑mail (ex.: pdf_380, 91%) ou perdeu muitos trabalhos."],
