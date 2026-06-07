@@ -2495,13 +2495,13 @@ async function collectFromPDF(file, mode){
     }
     // completa com trabalhos do CORPO que ficaram FORA do sumário (sumário incompleto), formato PV
     try{ const extra=scanCorpoPV(text, works); if(extra.length) works=works.concat(extra); }catch(_){}
-    // COLETA AGNÓSTICA PELA IA: pica o texto em blocos e a IA acha os trabalhos (independe de RESUMO/sumário/formato).
-    // Usa a IA quando ela pega ao menos tanto e‑mail quanto o determinístico (ela entende o layout do anais).
+    // ESTEIRA LIMPA (anais + IA): a IA é o COLETOR PRINCIPAL — pica o texto em blocos e acha os trabalhos
+    // (independe de RESUMO/sumário/formato). O determinístico acima vira só RESERVA (se a IA falhar/voltar vazia).
     if(AI.enabled && AI.orchestrate){
       try{
         const wAI = await aiColetarAnais(text, file.name);
         const cnt = a => a.reduce((s,w)=>s+(w.authors||[]).filter(x=>x.email).length,0);
-        if(cnt(wAI) > 0 && cnt(wAI) >= cnt(works)*0.85){
+        if(cnt(wAI) > 0){                       // a IA voltou trabalhos → ela é a autoridade (não precisa "vencer" o det)
           works = wAI; nomeModelo = "Anais · IA por blocos (agnóstico)";
           modelosUsados[nomeModelo] = (modelosUsados[nomeModelo]||0) + 1;
         }
@@ -3673,9 +3673,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.48";
+const VERSION = "13.49";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.49","2026-06-07","Esteira do anais SIMPLIFICADA: com a IA ligada, a IA é o COLETOR PRINCIPAL (lê o texto em blocos e extrai título+nome+e‑mail) — não precisa mais «vencer» o determinístico, ela assume sempre que devolver trabalhos. O determinístico (cortadores por RESUMO/sumário) virou só RESERVA pra quando a IA estiver desligada ou voltar vazia. Some a confusão dos vários modelos; a rede de segurança continua garantindo todo @. IMPORTANTE: após atualizar, faça Ctrl+Shift+R (recarga forçada) — senão o navegador usa a versão antiga em cache."],
   ["13.48","2026-06-07","ESTEIRA DO ANAIS REPENSADA (sua pergunta: «a IA precisa cortar?»). O corte deixou de ser «inteligente por formato» (que quebrava em todo anais novo) e virou AGNÓSTICO: o texto é picado em blocos por TAMANHO e a IA acha TODOS os trabalhos de cada bloco (título+nome+e‑mail). Funciona em qualquer layout, sem depender de RESUMO/sumário. + REDE DE SEGURANÇA determinística: TODO @ do PDF (não‑institucional) é garantido no resultado — se a IA ou o corte perder algum, ele entra com o contexto p/ a IA/revisão completar. Assim «não pegou todos os e‑mails» não acontece mais. (A IA por blocos exige a IA ligada; o corte por tamanho só serve p/ caber no limite dela.)"],
   ["13.47","2026-06-07","Conserta anais que virava «1 artigo» com nomes‑lixo (ex.: Jornada UNITINS). CAUSA: esse anais NÃO tem «RESUMO», e os 3 cortadores dependiam dele → todos falhavam → o app tratava o PDF inteiro como 1 artigo, jogando todos os @ sob o título da CAPA e inventando nomes a partir do e‑mail (a IA nem entrava, pra ela era 1 artigo). AGORA: (1) novo modelo «Anais · e‑mail no fim» pra esse formato (autores no topo, e‑mail no bloco numerado depois das Palavras‑chave) — pega 92/96 e‑mails com títulos certos; (2) TRAVA: um anais detectado NUNCA mais vira «1 artigo» — se nenhum cortador reconhecer, captura cada @ com seu contexto p/ a IA/revisão, sem título de capa falso."],
   ["13.46","2026-06-07","Novo botão «⬇️ Relatório de descartes (.csv)» na 📊 Cobertura: um arquivo só com TUDO que não entrou no resultado e por quê — ① repetidos juntados (e‑mails preservados), ② PDFs travados (<95%, p/ revisar), ③ removidos sem e‑mail (marcando os que TINHAM @ mas a extração falhou). Pra equipe conferir os descartes de uma vez."],
