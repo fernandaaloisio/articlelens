@@ -1361,7 +1361,10 @@ function parseModeloSobrenomeNum(text){
     // REGIÃO do trabalho = do RESUMO subindo até o TÍTULO (caixa alta)
     let k=r-1, steps=0; const region=[];
     while(k>=0 && steps++<30 && !isTitle(L[k]) && !/^\s*(RESUMO|ABSTRACT)\b/i.test(L[k]) && !/palavras?-?chave/i.test(L[k])){ region.unshift(L[k]); k--; }
-    const title = (k>=0 && isTitle(L[k])) ? tc(L[k].trim()) : "";
+    // TÍTULO = TODAS as linhas em caixa alta seguidas (o título quebra em 2‑3 linhas; antes pegava só a última)
+    let tl=[], kt=k;
+    while(kt>=0 && isTitle(L[kt]) && tl.length<5){ tl.unshift(L[kt].trim()); kt--; }
+    const title = tc(tl.join(" ").replace(/\s+/g," ").trim());
     // e-mails = TODOS os @ da região (afiliação corrida, quebra de linha, listas a,b e c)
     const emails=[]; region.forEach(l=>{ (l.match(MAILRE)||[]).forEach(e=>emails.push(e.toLowerCase().replace(/[.;,)]+$/,""))); });
     const seen=new Set(), em2=[]; for(const e of emails){ if(!seen.has(e)){ seen.add(e); em2.push(e); } }
@@ -1371,12 +1374,23 @@ function parseModeloSobrenomeNum(text){
     for(const l of region){ if(affish(l)) break; if(marker(l)||!l.trim()) continue; nameStr+=" "+l.trim(); }
     const names=nameStr.split(/\s*;\s*/).map(s=>s.trim()).filter(Boolean).map(nomeOrdem)
                  .filter(n=>n.split(/\s+/).length>=2 && n.length<60 && !_AFF_KW.test(n));
-    const balanced = names.length===em2.length && names.length>0;
-    const authors=[]; const mx=Math.max(names.length, em2.length);
-    for(let q=0;q<mx;q++){
-      const nm = balanced ? names[q] : (names.length>1 && names.length<em2.length ? "" : (names[q]||""));
-      authors.push({ name:nm, email:em2[q]||"" });
+    // PAREAMENTO POR CONTEÚDO (não por posição): casa cada e‑mail com o nome cujas iniciais/sobrenome
+    // batem. Robusto quando um e‑mail vem QUEBRADO/faltando — senão ele desalinhava TODOS por posição.
+    const _loc = e => (e.split("@")[0]||"").toLowerCase().replace(/[._\-]/g,"");
+    const _scoreNE = (nome,e) => { const loc=_loc(e); let sc=0;
+      for(const tkn of _norm(nome).split(/\s+/).filter(x=>x.length>=3)) if(loc.includes(tkn)) sc+=tkn.length;
+      return sc; };
+    const usados = new Array(names.length).fill(false);
+    const authors=[]; const semNome=[];
+    for(const e of em2){
+      let best=-1, bestSc=0;
+      for(let n=0;n<names.length;n++){ if(usados[n]) continue; const sc=_scoreNE(names[n],e); if(sc>bestSc){ bestSc=sc; best=n; } }
+      if(best>=0){ usados[best]=true; authors.push({ name:names[best], email:e }); }
+      else semNome.push(e);
     }
+    // e‑mails sem casamento de conteúdo (apelido genérico) → nomes restantes por ORDEM do documento
+    const restantes = names.filter((_,n)=>!usados[n]);
+    let ri=0; for(const e of semNome) authors.push({ name: restantes[ri++]||"", email:e });
     works.push({ title, authors, all_emails:em2, _modeloFmt:"numerado-email" });
   }
   return works;
@@ -3423,9 +3437,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.36";
+const VERSION = "13.37";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.37","2026-06-07","DOIS consertos grandes de QUALIDADE no modelo numerado (não só «achar o @», mas acertar nome e título): (1) TÍTULO completo — antes pegava só a ÚLTIMA linha do título (que quebra em 2‑3 linhas), agora junta todas → no 5CBDD46 os títulos «inteiros» foram de 73% → 100%. (2) Nome↔e‑mail por CONTEÚDO — antes pareava por POSIÇÃO, então um e‑mail quebrado/faltando no meio desalinhava todos os seguintes; agora casa cada e‑mail com o nome cujas iniciais/sobrenome batem → erro de nome 6%→3% (5CBDD46), 1% (F3D/1D5B7CCC). Anais com nomes muito fundidos (ex.: Anaisfinais) ainda têm ~13% — esses valem a passada da IA."],
   ["13.36","2026-06-07","Contagem agora mostra o TOTAL de e‑mails, não só os únicos. Na 📊 Cobertura: «capturei N e‑mails no total (M únicos = X% dos do PDF) · o PDF tem T no total (U únicos)». O TOTAL = 1 por autor‑com‑e‑mail (= linhas do Excel; conta o mesmo orientador que aparece em vários trabalhos). O % de cobertura segue medido nos ÚNICOS (é o que diz se faltou algum endereço). O relatório .csv também traz total e únicos separados."],
   ["13.35","2026-06-07","Conserta e‑mail PARTIDO na quebra de linha: quando o «…@» termina a linha e o domínio (gmail.com) cai na linha de baixo, o e‑mail era perdido (o regex precisa de local@domínio juntos). Agora o app junta os dois antes de ler. Achado conferindo o 5CBDD46 (faltava 1: kamylasantos2019@gmail.com → agora 260/260 = 100%). Restrito p/ NUNCA colar dois e‑mails completos por engano (validado: F3D 373→373, Anaisfinais 803→803, sem perdas)."],
   ["13.34","2026-06-07","PDF novo testado (anais UNITINS, 5CBDD46…): os modelos pegaram 100% (259/259 e‑mails, 98 trabalhos, modelo numerado). Limpeza: nomes não vêm mais com o número sobrescrito grudado (Farias¹ → Farias, Lopes³ → Lopes; também tira *†‡§)."],
