@@ -2292,9 +2292,10 @@ function _dedupWorks(works){
   // "mesmo título" = mesmos 8 primeiros termos (a mesma obra pode ser listada 2× com pequena
   // variação no fim, ex.: "…REVERBERAÇÕES NA FORMAÇÃO" vs "…PARA A FORMAÇÃO"). Exigir TAMBÉM o
   // 1º autor compatível evita juntar trabalhos realmente diferentes que comecem igual.
-  // chave do título = 8 primeiros termos SÓ alfanuméricos (imune a aspas/pontuação: «"RETRATOS…»
-  // e «RETRATOS…» viram a mesma chave).
-  const _tk=t=>_norm(t).replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(Boolean).slice(0,8).join(" ");
+  // chave = título COMPLETO (alfanumérico). Antes eram só os 8 PRIMEIROS termos, o que juntava obras
+  // DIFERENTES de uma série (ex.: "…Feira Municipal de Colmeia" × "…de Miranorte" — 8 termos iguais,
+  // fim diferente) e DESCARTAVA uma delas, perdendo e‑mails. Título completo só casa a MESMA obra.
+  const _tk=t=>_norm(t).replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(Boolean).join(" ");
   const _nomes=w=>new Set((w.authors||[]).map(a=>_norm(a.name)).filter(Boolean));
   const _mails=w=>new Set((w.authors||[]).map(a=>(a.email||"").toLowerCase()).filter(Boolean));
   const _interesecta=(A,B)=>{ for(const x of A) if(B.has(x)) return true; return false; };
@@ -2306,16 +2307,23 @@ function _dedupWorks(works){
     // mesmo título (8 termos) E (1º autor compatível  OU  compartilham um AUTOR  OU um E-MAIL):
     // as versões "resumo" e "expandida" do mesmo trabalho podem ter ordem/lista de autores diferente,
     // mas sempre dividem ao menos um autor ou e-mail. Sinal forte e seguro de ser a MESMA obra.
+    // MESMO trabalho = TÍTULO COMPLETO igual E (1º autor compatível OU compartilha autor/e‑mail).
+    // Com título completo, séries distintas ("…de Colmeia" × "…de Miranorte") nunca casam.
     const g=ordem.find(grp=> _tk(grp[0].title)===_tk(w.title) && (
         _compat((grp[0].authors&&grp[0].authors[0]&&grp[0].authors[0].name)||"", a1)
         || _interesecta(_nomes(grp[0]), nm) || _interesecta(_mails(grp[0]), ml) ));
     if(g) g.push(w); else ordem.push([w]);
   }
   return ordem.map(g=>{
-    if(g.length>1) g.sort((a,b)=> _matchScore(b)-_matchScore(a)
+    if(g.length<=1) return g[0];
+    g.sort((a,b)=> _matchScore(b)-_matchScore(a)
       || (b.authors||[]).filter(x=>x.email).length-(a.authors||[]).filter(x=>x.email).length
       || (b.authors||[]).length-(a.authors||[]).length );
-    return g[0];
+    // TRAVA anti-perda: une os e-mails de todas as versões na melhor (nunca descarta um @).
+    const base=g[0]; const vistos=new Set((base.authors||[]).map(a=>(a.email||"").toLowerCase()).filter(Boolean));
+    for(let i=1;i<g.length;i++) for(const a of (g[i].authors||[])){ const em=(a.email||"").toLowerCase().trim();
+      if(em && !vistos.has(em)){ base.authors.push(a); vistos.add(em); } }
+    return base;
   });
 }
 
@@ -3467,9 +3475,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.42";
+const VERSION = "13.43";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.43","2026-06-07","BUG GRAVE de e‑mails faltando (NÃO era a IA): o agrupador de trabalhos repetidos comparava só os 8 PRIMEIROS termos do título. Numa SÉRIE («Avaliação… Feira Municipal de Colmeia» × «…de Miranorte» × «…de Guarai»…), os 8 termos batem e elas dividem o mesmo orientador → o sistema achava que era o MESMO trabalho e DESCARTAVA as outras, perdendo dezenas de e‑mails. Agora compara o TÍTULO COMPLETO (séries não se confundem) e, ao juntar duas versões do mesmo trabalho, UNE os e‑mails (nunca descarta). No F9322E18: deixou de perder e voltou aos 77 únicos. Vale p/ TODOS os anais."],
   ["13.42","2026-06-07","ANAIS agora usa a IA SEMPRE (automático): se a IA estiver ligada, todo trabalho de anais é coletado pela IA (título+nome+e‑mail), sem precisar marcar nada. O determinístico só corta os trabalhos; a IA coleta; o validador fecha. Os sinais de revisão continuam (⚠ por trabalho e ⛔ trava < 95%) — nada é confiado às cegas. O checkbox 🧪 agora serve só pra estender a IA também a ARTIGOS/revista (que no determinístico já vão bem). Para anais NÃO travar por falta de IA, mantenha a IA conectada (Render/Haiku)."],
   ["13.41","2026-06-07","Esteira do ANAIS reorganizada (a seu pedido): determinístico CORTA os trabalhos (acha tudo) → IA COLETA título+nome completo+e‑mail de cada um → VALIDADOR de e‑mail roda DE NOVO no fim (corrige typo de domínio, marca inválido). Antes o validador só rodava ANTES da IA, então os e‑mails que a IA coletava saíam sem validar; agora há uma 2ª passada do validador pós‑IA. Revista/artigo (1 PDF = 1 trabalho) segue no determinístico, que já vai bem. Para anais: ligar 🧪 «IA faz TODA a extração» na aba IA."],
   ["13.40","2026-06-07","TRAVA anti-perda no modo «IA faz tudo»: a IA NUNCA pode remover um e‑mail que o determinístico já capturou — ela só limpa nome/título. Antes, ao refazer um trabalho, a IA às vezes omitia um autor e o e‑mail sumia (no 892EAB ela derrubou 5 de 505). Agora todo e‑mail capturado é garantido na saída, com o nome da IA quando ela acertou ou o nome determinístico caso ela tenha omitido. Obs.: e‑mails truncados no PRÓPRIO PDF (texto acaba em «@hotmail» sem «.com») seguem fora — não dá pra capturar o que não está no texto."],
