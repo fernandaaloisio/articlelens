@@ -2331,8 +2331,15 @@ function _dedupWorks(works){
       || (b.authors||[]).length-(a.authors||[]).length );
     // TRAVA anti-perda: une os e-mails de todas as versões na melhor (nunca descarta um @).
     const base=g[0]; const vistos=new Set((base.authors||[]).map(a=>(a.email||"").toLowerCase()).filter(Boolean));
+    let unidos=0;
     for(let i=1;i<g.length;i++) for(const a of (g[i].authors||[])){ const em=(a.email||"").toLowerCase().trim();
-      if(em && !vistos.has(em)){ base.authors.push(a); vistos.add(em); } }
+      if(em && !vistos.has(em)){ base.authors.push(a); vistos.add(em); unidos++; } }
+    // TRANSPARÊNCIA: registra o que foi juntado (mesmo título) p/ avisar o usuário — nada some calado.
+    try{ if(typeof lastDuplicatas!=="undefined") lastDuplicatas.push({
+      titulo: base.title||"(sem título)",
+      vezes: g.length,                                  // quantas cópias do mesmo título
+      emailsUnidos: unidos,                             // @ que vieram das cópias e não estavam na 1ª (preservados)
+      fonte: base.source_file||"" }); }catch(_){}
     return base;
   });
 }
@@ -2451,6 +2458,7 @@ function validarTudo(){               // ETAPA 3 — corrige e-mails (validador)
 }
 let lastRemovidos = [];       // trabalhos removidos por não ter e-mail (transparência)
 let lastRemovidosFull = [];   // os mesmos, registros COMPLETOS (p/ a IA tentar recuperar)
+let lastDuplicatas = [];      // trabalhos REPETIDOS juntados pelo dedup (transparência — nada some calado)
 /* No fim do validador: descarta autores SEM e-mail (sem utilidade) e trabalhos que ficaram vazios. */
 function excluirSemEmail(){
   let autRem=0;
@@ -2476,6 +2484,7 @@ async function processBatch(){
   errorsThisRun = [];
   modelosUsados = {};
   _pdfsBloqueados = [];                    // zera os PDFs travados por baixa cobertura
+  lastDuplicatas = [];                     // zera o registro de repetidos juntados
   _formatoIA = null; _lastFid = null;     // zera a identificação da IA por lote
   _emailAlvo = { tot:0, uni:new Set() };  // zera a meta de @ do lote
   _runTextos = [];                        // zera os textos do lote
@@ -2653,8 +2662,12 @@ async function processBatch(){
   const revMsg = inic.nFlag ? " · ⚠️ "+inic.nFlag+" nomes só com iniciais — REVISAR" : "";
   setStatus("Linha concluída: <b>"+trab+"</b> trabalhos com e‑mail"+idxMsg+" · "+ex.trabRem
             +" removidos (sem e‑mail)"+revMsg+". Gere o Excel quando quiser.");
+  const _nDup = (lastDuplicatas||[]).reduce((s,d)=>s+(d.vezes-1),0);
   if(_pdfsBloqueados && _pdfsBloqueados.length){
-    toast("⛔ "+_pdfsBloqueados.length+" PDF(s) TRAVADO(s) por cobertura < "+META_COBERTURA+"% — veja a lista em 📊 Cobertura e revise à mão. O resto está pronto.","warn");
+    toast("⛔ "+_pdfsBloqueados.length+" PDF(s) TRAVADO(s) por cobertura < "+META_COBERTURA+"% — veja em 📊 Cobertura e revise. "
+      +(_nDup?("🔁 "+_nDup+" repetido(s) juntado(s) (e‑mails preservados). "):"")+"O resto está pronto.","warn");
+  } else if(_nDup){
+    toast("Pronto: "+trab+" trabalhos. 🔁 "+_nDup+" repetido(s) juntado(s) (mesmo título 2×+; nenhum e‑mail perdido) — detalhe em 📊 Cobertura.","warn");
   } else {
     toast("Pronto: "+trab+" trabalhos. Clique em Excel/CSV para baixar.");
   }
@@ -3019,6 +3032,17 @@ function renderCobertura(ex){
   }
   const mu = Object.entries(modelosUsados||{});
   if(mu.length) html += "<br><br><b>📐 Modelos usados:</b> " + mu.map(([n,c])=>escapeHtml(n)+" ("+c+")").join(" · ");
+  // TRANSPARÊNCIA: trabalhos REPETIDOS que foram juntados (mesmo título em 2 seções do anais). Os e‑mails
+  // foram PRESERVADOS (unidos na cópia mantida) — mas você é avisado do que foi juntado.
+  if(lastDuplicatas && lastDuplicatas.length){
+    const totDup = lastDuplicatas.reduce((s,d)=>s+(d.vezes-1),0);
+    html += "<br><br><b>🔁 "+totDup+" trabalho(s) repetido(s) juntado(s)</b> (mesmo título aparecia 2×+ no PDF — ex.: seção Resumos + Artigos). "
+         + "<b>Nenhum e‑mail foi perdido</b> (os @ das cópias foram unidos no trabalho mantido):";
+    html += "<ul style='margin:6px 0 0 18px'>"
+         + lastDuplicatas.slice(0,30).map(d=>"<li>"+escapeHtml((d.titulo||"").slice(0,80))+" <span style='color:var(--muted)'>("+d.vezes+"× — "
+             + (d.emailsUnidos?("+"+d.emailsUnidos+" e‑mail(s) vindos das cópias"):"e‑mails idênticos")+")</span></li>").join("")
+         + (lastDuplicatas.length>30?"<li>…+"+(lastDuplicatas.length-30)+" outros</li>":"") + "</ul>";
+  }
   // PDFs TRAVADOS: nenhum modelo deu ≥90% → o usuário revisa à mão (a esteira não solta dado ruim calado).
   if(_pdfsBloqueados && _pdfsBloqueados.length){
     html += "<br><br><b style='color:var(--danger)'>⛔ "+_pdfsBloqueados.length+" PDF(s) TRAVADO(s)</b> — abaixo da meta ("+META_COBERTURA+"% de e‑mails; trabalhos só travam se < "+META_TRAB+"%). "
@@ -3207,6 +3231,8 @@ document.getElementById("verificarIA").onclick = verificarIncertosIA;
   L.push(["Custo por e-mail (R$)", perBRL.toFixed(4).replace(".",",")+(perBRL<=0.06?" (OK, meta R$0,06)":" (ACIMA da meta R$0,06)")]);
   L.push([]); L.push(["PDFs TRAVADOS (cobertura < "+META_COBERTURA+"%) ("+(_pdfsBloqueados?_pdfsBloqueados.length:0)+")","cobertura","e‑mails","trabalhos","modelo"]);
   (_pdfsBloqueados||[]).forEach(b=>L.push([b.file, b.pct+"%", (b.pctMail!=null?b.pctMail+"% ":"")+b.captados+"/"+b.alvo, (b.trabEsper?(b.pctTrab!=null?b.pctTrab+"% ":"")+b.trabCap+"/"+b.trabEsper:"—"), b.modelo]));
+  L.push([]); L.push(["TRABALHOS REPETIDOS JUNTADOS ("+(lastDuplicatas?lastDuplicatas.length:0)+")","vezes","e‑mails unidos (preservados)"]);
+  (lastDuplicatas||[]).forEach(d=>L.push([d.titulo, d.vezes, d.emailsUnidos]));
   const faltam = alvo ? [..._emailAlvo.uni].filter(e=>!captUni.has(e)) : [];
   L.push([]); L.push(["E-MAILS DO PDF QUE NÃO ENTRARAM ("+faltam.length+")",""]);
   faltam.forEach(e=>L.push([e,""]));
@@ -3485,9 +3511,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.44";
+const VERSION = "13.45";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.45","2026-06-07","TRANSPARÊNCIA: o app agora AVISA quando junta trabalhos repetidos. Quando o mesmo trabalho aparece 2×+ no PDF (ex.: seção de Resumos + seção de Artigos), o sistema junta numa linha só — mas antes fazia isso CALADO. Agora mostra em 📊 Cobertura «🔁 N trabalho(s) repetido(s) juntado(s)» com a lista (título, quantas vezes, e‑mails unidos), avisa por toast no fim, e lista no relatório .csv. E confirma: NENHUM e‑mail é perdido (os @ das cópias são unidos no trabalho mantido). Nada mais é descartado em silêncio."],
   ["13.44","2026-06-07","Recupera e‑mail com TLD truncado no PDF: quando o texto corta o domínio (ex.: «fulano@unitins» ou «fulano@unitins.» sem o «.br», com RESUMO logo abaixo), o app agora completa o final pelos domínios conhecidos (unitins→.br, gmail/hotmail/outlook→.com, uft/ifto→.edu.br). É a única «adivinhação», e segura (destino único). No F9322E18 recuperou 4 e‑mails de autor que estavam truncados (vanderleianascimento, kemmyllyclara, mariamikaelle, mirellacoelho → @unitins.br); únicos 77→80. NÃO altera e‑mail já completo."],
   ["13.43","2026-06-07","BUG GRAVE de e‑mails faltando (NÃO era a IA): o agrupador de trabalhos repetidos comparava só os 8 PRIMEIROS termos do título. Numa SÉRIE («Avaliação… Feira Municipal de Colmeia» × «…de Miranorte» × «…de Guarai»…), os 8 termos batem e elas dividem o mesmo orientador → o sistema achava que era o MESMO trabalho e DESCARTAVA as outras, perdendo dezenas de e‑mails. Agora compara o TÍTULO COMPLETO (séries não se confundem) e, ao juntar duas versões do mesmo trabalho, UNE os e‑mails (nunca descarta). No F9322E18: deixou de perder e voltou aos 77 únicos. Vale p/ TODOS os anais."],
   ["13.42","2026-06-07","ANAIS agora usa a IA SEMPRE (automático): se a IA estiver ligada, todo trabalho de anais é coletado pela IA (título+nome+e‑mail), sem precisar marcar nada. O determinístico só corta os trabalhos; a IA coleta; o validador fecha. Os sinais de revisão continuam (⚠ por trabalho e ⛔ trava < 95%) — nada é confiado às cegas. O checkbox 🧪 agora serve só pra estender a IA também a ARTIGOS/revista (que no determinístico já vão bem). Para anais NÃO travar por falta de IA, mantenha a IA conectada (Render/Haiku)."],
