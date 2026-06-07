@@ -535,17 +535,22 @@ function _limparInstitucional(){
 let _nomesReuFeito = false;
 function _reusarNomesPorEmail(){
   if(_nomesReuFeito) return; _nomesReuFeito = true;
-  const mapa = {};
+  // MESMO E-MAIL = MESMA PESSOA: escolhe o melhor nome por e-mail (não-vazio, ≥2 palavras, mais FREQUENTE
+  // e mais completo) e preenche/conserta as outras ocorrências — corrige UMA vez, arruma TODAS.
+  const cont = {};
   (allResults||[]).forEach(r=>(r.authors||[]).forEach(a=>{
-    if(a.email && a.name && _emailBate(a.name, a.email)){
-      const k=a.email.toLowerCase().trim(); if(!mapa[k]) mapa[k]=a.name;   // 1ª ocorrência confiável vence
+    if(a.email && a.name && a.name.trim().split(/\s+/).length>=2){
+      const k=a.email.toLowerCase().trim(); (cont[k]=cont[k]||{}); cont[k][a.name]=(cont[k][a.name]||0)+1;
     }
   }));
+  const mapa = {};
+  Object.entries(cont).forEach(([k,nomes])=>{
+    mapa[k] = Object.entries(nomes).sort((x,y)=> y[1]-x[1] || y[0].length-x[0].length)[0][0];
+  });
   (allResults||[]).forEach(r=>(r.authors||[]).forEach(a=>{
-    if(!a.email) return; const k=a.email.toLowerCase().trim(); if(!mapa[k]) return;
-    if(!a.name || !_emailBate(a.name, a.email)){           // sem nome OU nome não bate → reusa o confiável
-      a.name = mapa[k]; a._orphan = false; a._nomeReusado = true;
-    }
+    if(!a.email) return; const k=a.email.toLowerCase().trim(); const bom=mapa[k]; if(!bom) return;
+    // preenche se VAZIO, ou troca quando o nome atual não bate com o e-mail (provável erro) — nome real fica
+    if((!a.name || !_emailBate(a.name, a.email)) && a.name!==bom){ a.name = bom; a._orphan=false; a._nomeReusado = true; }
   }));
 }
 // PAREAMENTO dentro do trabalho: autor que tem NOME mas ficou SEM e-mail recebe um e-mail SOLTO
@@ -3548,6 +3553,23 @@ document.getElementById("resultBody").addEventListener("input", e=>{
   }
   aprender(r);                              // edição manual vira aprendizado (não repete o erro)
 });
+/* PROPAGA a correção: ao terminar de editar o NOME de um e-mail, aplica o MESMO nome em TODAS as outras
+   linhas com aquele e-mail (corrige uma vez → arruma todas; sem retrabalho). Roda no blur (não na digitação). */
+document.getElementById("resultBody").addEventListener("focusout", e=>{
+  const td = e.target.closest('td[contenteditable]'); if(!td) return;
+  if(td.dataset.field!=="name") return;
+  const r = allResults[+td.dataset.ri]; const a = r && r.authors && r.authors[+td.dataset.ai]; if(!a) return;
+  const nome=(a.name||"").trim(), email=(a.email||"").toLowerCase().trim();
+  if(!nome || !email) return;
+  let n=0;
+  (allResults||[]).forEach(w=>(w.authors||[]).forEach(x=>{
+    if(x!==a && x.email && x.email.toLowerCase().trim()===email && (x.name||"")!==nome){
+      x.name=nome; x._memOk=true; x._nomeReusado=true; n++;
+    }
+  }));
+  try{ _memAprender(email, nome, true); }catch(_){}
+  if(n){ toast("✅ Nome aplicado às "+(n+1)+" linhas do e‑mail "+email+" (sem retrabalho)."); renderResults(); }
+});
 
 /* =========================================================================
    Controles da IA opcional
@@ -3743,9 +3765,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.54";
+const VERSION = "13.55";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.55","2026-06-07","CORRIGE UMA VEZ, ARRUMA TODAS (autor que repete): (1) Auto — mesmo e‑mail = mesma pessoa: o app escolhe o melhor nome daquele e‑mail (o mais frequente/completo) e preenche/conserta TODAS as outras linhas do mesmo e‑mail sozinho, antes de você revisar. (2) Manual — ao editar o nome de um e‑mail na tabela, ele aplica esse nome em TODAS as linhas daquele e‑mail (avisa quantas) — acabou o retrabalho de arrumar o mesmo autor várias vezes."],
   ["13.54","2026-06-07","ANTI-INVENÇÃO de nome: quando a IA não acha o dono de um e‑mail, ela às vezes MONTAVA um nome a partir do próprio e‑mail (ex.: vhictor.hr → «Vhictor Hr»; vitinho_agronomia → «Vitinho Agronomia»). Agora o app detecta isso (nome = só o e‑mail reformatado E que não aparece no texto fora do e‑mail) e deixa o nome VAZIO p/ revisão — melhor sem nome do que nome fabricado. Nome REAL que por acaso bate com o e‑mail (joao.silva → João Silva, que está escrito no texto) é mantido. A Cobertura mostra quantos foram esvaziados. Conferência: 0 nomes 100% inventados; só esses derivados do e‑mail."],
   ["13.53","2026-06-07","Dois ajustes finos: (1) corrige typo de provedor «gmail/hotmail/outlook.com.br» → «.com» (não existe .com.br nesses) — resolve o falso «e‑mail não entrou» do doribilac@gmail.com.br, que é só o mesmo autor digitado errado (o @gmail.com dele já entra). yahoo.com.br fica intacto (esse é real). (2) Prompt da IA reforçado: CADA e‑mail tem que vir com o NOME do dono (os nomes ficam no topo do trabalho, os e‑mails nas afiliações numeradas — casar por ordem/iniciais). Reduz «linha sem autor». Obs.: linha sem autor que sobra costuma ser FRAGMENTO de e‑mail partido no meio (ex.: «sion@gmail.com» = pedaço de «dara.passion@gmail.com»), não autor real."],
   ["13.52","2026-06-07","ACHADO: o Render do usuário só aceita o modelo Opus 4.8 (Haiku/outros dão erro). A IA por blocos tentava Haiku barato primeiro → falhava → voltava vazia → caía no determinístico (com erros de nome). AGORA a IA por blocos usa DIRETO o modelo configurado na aba IA (o que funciona no seu Render). Assim ela coleta de verdade. OBS de custo: Opus é ~20× mais caro que Haiku; pra baratear vale habilitar um Haiku no proxy do Render."],
