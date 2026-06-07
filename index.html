@@ -1344,7 +1344,8 @@ function parseModeloSobrenomeNum(text){
   const flip=s=>{ const m=s.split(/,\s*/); if(m.length<2) return s.trim();
     const sob=m[0].trim().toLowerCase().replace(/(^|\s|\p{Pd})\p{L}/gu,c=>c.toUpperCase());
     return (m.slice(1).join(" ").trim()+" "+sob).replace(/\s+/g," ").trim(); };
-  const nomeOrdem=s=>{ s=s.trim().replace(/^\d+[\.\)]?\s*/,"").replace(/\s*\d+\s*$/,"").replace(/[.;]+$/,"").trim();
+  const nomeOrdem=s=>{ s=s.trim().replace(/[¹²³⁰-⁹\*†‡§]/g,"")   // tira sobrescritos ¹²³/marcadores colados no nome
+                             .replace(/^\d+[\.\)]?\s*/,"").replace(/\s*\d+\s*$/,"").replace(/[.;]+$/,"").trim();
     return /,/.test(s) ? flip(s) : tc(s); };   // "SOBRENOME, Nome"→flip ; "Nome Completo"→title-case
   const resumos=[]; L.forEach((l,i)=>{ if(/^\s*(RESUMO|ABSTRACT)\b/i.test(l)) resumos.push(i); });
   const works=[];
@@ -3409,9 +3410,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.33";
+const VERSION = "13.34";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.34","2026-06-07","PDF novo testado (anais UNITINS, 5CBDD46…): os modelos pegaram 100% (259/259 e‑mails, 98 trabalhos, modelo numerado). Limpeza: nomes não vêm mais com o número sobrescrito grudado (Farias¹ → Farias, Lopes³ → Lopes; também tira *†‡§)."],
   ["13.33","2026-06-07","CORREÇÃO do gate de trabalhos (a v13.32 travaria quase todo anais por engano!). A contagem de trabalhos é ruidosa (o «Resumo»+«Abstract» conta 2× por obra e o sumário lista itens sem e‑mail), então exigir 95% dela reprovava anais que estão 96‑100% completos. Agora: a % de E‑MAILS é a trava rígida (95%) — e ela já reflete trabalho perdido (perdeu obra → perdeu os @ dela). A % de TRABALHOS vs sumário virou informação e só trava em FALHA GROSSA (< 70%). Resultado: nenhum anais bom trava à toa; só trava quem realmente perdeu e‑mail (ex.: pdf_380, 91%) ou perdeu muitos trabalhos."],
   ["13.32","2026-06-07","Trava agora é a JUNÇÃO de DUAS medidas (a seu pedido): (A) % de e‑mails do PDF que entraram E (B) % de TRABALHOS localizados vs esperados (sumário; senão nº de RESUMO). Vale a PIOR das duas — então um PDF só passa se pegou ≥95% dos e‑mails E ≥95% dos trabalhos. A Cobertura e o relatório mostram as duas %. Varredura COMPLETA dos 345 PDFs da pasta (raiz + ARACE 138 + SBIE 185): 302 ≥95%, 28 sem e‑mail no texto, 15 abaixo de 95% (quase todos artigos pequenos perdendo 1 autor — cabeçalho sem «Instituição:», autor após quebra de página, etc.) → esses ficam TRAVADOS p/ revisão."],
   ["13.31","2026-06-07","Piso da trava subiu de 90% → 95%. Agora um PDF só é aceito se algum modelo pegar ≥95% dos e‑mails; abaixo disso ele é TRAVADO (⛔) p/ revisão manual. Mais rígido (a seu pedido). Lembrando que a % é um termômetro (o alvo vem do regex de @), então de vez em quando trava um PDF que na prática já está completo — é só revisar e liberar."],
