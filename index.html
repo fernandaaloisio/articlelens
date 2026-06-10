@@ -60,7 +60,7 @@
   .drop b{color:var(--text)}
 
   .meter{height:8px;background:var(--bg);border:1px solid var(--border);border-radius:999px;overflow:hidden;margin:14px 0 6px}
-  .meter>span{display:block;height:100%;background:linear-gradient(90deg,var(--accent-dim),var(--accent));width:0%}
+  .meter>span{display:block;height:100%;background:linear-gradient(90deg,var(--accent-dim),var(--accent));width:0%;transition:width .25s ease}
   .meter-label{font-size:12px;color:var(--muted)}
 
   /* ---------- Lista de arquivos ---------- */
@@ -2112,7 +2112,9 @@ async function aiColetarAnais(text, fileName){
   const works=[]; let brutos=0, falhas=0, semTexto=0, inventados=0;
   _aiDbgRaw=""; _aiDbgErr="";
   for(let i=0;i<chunks.length;i++){
-    setStatus("🧠 IA lendo o anais — bloco "+(i+1)+"/"+chunks.length+"…"); setProgress(i,chunks.length,"IA");
+    { const pctIA=Math.round((i/chunks.length)*100);
+      const pm=document.getElementById("progMeter"); if(pm) pm.style.width=pctIA+"%";
+      setStatus("🧠 IA lendo o anais — bloco <b>"+(i+1)+"/"+chunks.length+"</b> ("+pctIA+"%)… (modelo "+(AI.model||"")+")"); }
     let ws=[]; try{ ws=await aiExtrairBloco(chunks[i], i===0); }catch(_){ falhas++; }
     brutos += (ws||[]).length;
     for(const w of (ws||[])){
@@ -3790,9 +3792,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.58";
+const VERSION = "13.59";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.59","2026-06-07","Barra de carregamento da IA: ao processar anais, a barra agora enche conforme a IA lê cada bloco e mostra «🧠 IA lendo o anais — bloco X/Y (Z%)» com o modelo — assim dá pra acompanhar (Opus é lento) em vez de parecer travado. Barra com animação suave."],
   ["13.58","2026-06-07","Botão «✕ excluir» em cada linha (ao lado do OK): remove do resultado o que for lixo (e‑mail solto, fragmento, não‑autor) — some da tabela, da contagem, do Excel e do CSV, e deixa de contar como pendente. Não bagunça os OK já dados (usa marcação, não remove de verdade)."],
   ["13.57","2026-06-07","Detecta anais que NÃO tem «Resumo»/«Palavras-chave» (ex.: «Anais do I Seminário sobre o Agronegócio»): antes era tratado como 1 artigo (capa + e‑mails soltos). Agora, além de resumo/palavras-chave, o app reconhece anais pelo SUMÁRIO (índice com 4+ trabalhos) e pela capa de evento (anais/seminário/congresso/simpósio/jornada/mostra) com muitos e‑mails. Artigo único (1 trabalho) continua artigo — testado, sem falso positivo."],
   ["13.56","2026-06-07","Marca pra REVISAR o que faltava: agora linha SEM NOME (tem e‑mail mas sem autor) e trabalho SEM TÍTULO entram como ⚠ no topo — antes passavam batido (a IA marcava como «conferido» e escapavam). E o filtro institucional agora pega «secretariageral@…» (estava escapando porque «geral» vinha colado em «secretaria»); nomes comuns (sergio, seninha) NÃO são afetados. E‑mail tipo conced.org@ (sem nome) fica, mas marcado pra revisão."],
