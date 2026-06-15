@@ -176,7 +176,9 @@
 <div id="loginOverlay" style="position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px">
   <div style="width:min(420px,94vw);background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:30px;box-shadow:0 12px 50px rgba(0,0,0,.5)">
     <div style="font-size:26px;font-weight:800;letter-spacing:-.5px">Seven <span style="color:var(--accent)">Coleta de @</span></div>
-    <p style="color:var(--muted);margin:6px 0 22px;font-size:14px">🔒 Acesso restrito. Digite sua senha de acesso.</p>
+    <p style="color:var(--muted);margin:6px 0 22px;font-size:14px">🔒 Acesso restrito. Digite seu nome e a senha de acesso.</p>
+    <label class="fld" style="display:block;margin-bottom:5px;font-size:13px;color:var(--muted)">Nome</label>
+    <input type="text" id="loginName" placeholder="seu nome" autocomplete="name" style="width:100%;box-sizing:border-box;margin-bottom:14px">
     <label class="fld" style="display:block;margin-bottom:5px;font-size:13px;color:var(--muted)">Senha</label>
     <input type="password" id="loginPw" placeholder="sua senha de acesso" style="width:100%;box-sizing:border-box;margin-bottom:14px">
     <button class="btn primary" id="loginBtn" style="width:100%">Entrar</button>
@@ -3734,13 +3736,16 @@ renderFileQueue();
 
 /* ===== LOGIN com perfis (admin / usuário) validado no proxy Render ===== */
 const AUTH_KEY = "articlelens_auth";   // "admin" | "user"
+const PESSOA_KEY = "articlelens_pessoa";   // nome de quem está usando (p/ histórico de coletas)
+function getPessoa(){ try{ return (localStorage.getItem(PESSOA_KEY)||"").trim(); }catch(_){ return ""; } }
 const RENDER_ENDPOINT = "https://articlelens-zeyl.onrender.com/v1";   // proxy do Render (valida ADMIN_TOKEN/USER_TOKEN)
 function showLogin(){
   const b = document.getElementById("loginBase");
   // endpoint do Render JÁ vem preenchido (a equipe só digita a senha). Ignora resíduo (ex.: openrouter salvo).
   b.value = (AI.baseURL && /onrender\.com/i.test(AI.baseURL)) ? AI.baseURL : RENDER_ENDPOINT;
+  const nm = document.getElementById("loginName"); if(nm) nm.value = getPessoa();
   document.getElementById("loginOverlay").style.display = "flex";
-  setTimeout(()=>document.getElementById("loginPw").focus(), 50);
+  setTimeout(()=>document.getElementById(nm && nm.value ? "loginPw" : "loginName").focus(), 50);
 }
 function hideLogin(){ document.getElementById("loginOverlay").style.display = "none"; }
 /* Aplica permissões conforme o perfil */
@@ -3764,6 +3769,8 @@ async function doLogin(){
   const msg  = document.getElementById("loginMsg");
   const base = document.getElementById("loginBase").value.trim().replace(/\/+$/,"");
   const pw   = document.getElementById("loginPw").value.trim();
+  const nome = document.getElementById("loginName").value.trim();
+  if(!nome){ msg.innerHTML = '<span style="color:var(--danger)">Digite seu nome.</span>'; return; }
   if(!base){ msg.innerHTML = '<span style="color:var(--danger)">Informe o endpoint do Render.</span>'; return; }
   if(!pw){   msg.innerHTML = '<span style="color:var(--danger)">Digite a senha.</span>'; return; }
   msg.innerHTML = "<span style='color:var(--muted)'>entrando…</span>";
@@ -3789,7 +3796,7 @@ async function doLogin(){
     AI.baseURL = base; AI.apiKey = pw; AI.enabled = true; AI.orchestrate = true;
     if(!/claude/i.test(AI.model||"")) AI.model = "claude-3-5-haiku-20241022";  // corrige resíduo (ex.: llama3.1)
     saveAIConfig();
-    try{ localStorage.setItem(AUTH_KEY, role); }catch(_){}
+    try{ localStorage.setItem(AUTH_KEY, role); localStorage.setItem(PESSOA_KEY, nome); }catch(_){}
     initAIUI(); applyRole(role);
     hideLogin();
     toast(role==="admin" ? "Bem-vindo, Admin! IA conectada." : "Bem-vindo! É só adicionar os PDFs.");
@@ -3797,6 +3804,7 @@ async function doLogin(){
 }
 document.getElementById("loginBtn").onclick = doLogin;
 document.getElementById("loginPw").addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
+document.getElementById("loginName").addEventListener("keydown", e=>{ if(e.key==="Enter") document.getElementById("loginPw").focus(); });
 document.getElementById("logoutBtn").onclick = ()=>{
   try{ localStorage.removeItem(AUTH_KEY); }catch(_){}
   showLogin();
@@ -3807,7 +3815,7 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.62";
+const VERSION = "13.63";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
   ["13.61","2026-06-15","Conserta o TRAVAMENTO em anais GIGANTE: um PDF enorme (ex.: «III Congresso», 10 milhões de caracteres e 2.522 e‑mails) viraria ~1.450 chamadas à IA (uma por bloco) → horas e custo enorme, parecendo travado. Agora, acima de 80 blocos, o app NÃO usa a IA por bloco — coleta no determinístico (rápido e grátis) e a rede de segurança garante todos os e‑mails. Avisa por mensagem. Para esses gigantes, a IA por bloco só compensa com Haiku barato."],
