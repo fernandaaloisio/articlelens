@@ -2109,6 +2109,15 @@ async function aiColetarAnais(text, fileName){
   const pages=(text||"").split("\f"); const chunks=[]; let buf="";
   for(const p of pages){ if(buf && (buf.length+p.length)>7000){ chunks.push(buf); buf=""; } buf += (buf?"\f":"")+p; }
   if(buf.trim()) chunks.push(buf);
+  // TRAVA anti-congelamento: anais GIGANTE (ex.: 10 milhões de chars = ~1450 blocos) faria centenas/milhares
+  // de chamadas à IA (horas + custo altíssimo, principalmente com Opus). Acima do limite, NÃO usa a IA por
+  // blocos — cai no determinístico (rápido/grátis) + a rede de segurança garante os e-mails. Avisa o usuário.
+  if(chunks.length > MAX_BLOCOS_IA){
+    _aiAnaisInfo = { blocos:chunks.length, trabalhos:0, gigante:true, limite:MAX_BLOCOS_IA };
+    toast("📚 Anais MUITO grande ("+chunks.length+" blocos / ~"+Math.round((text||"").length/1000)+"k caracteres). "
+      +"A IA por bloco seria lenta e cara demais — usei a coleta determinística (a rede de segurança garante os e‑mails).","warn");
+    return [];
+  }
   const low=(text||"").toLowerCase();
   // texto SEM os e-mails (p/ checar se um nome é REAL ou só foi MONTADO a partir do e-mail)
   const lowSemEmail = low.replace(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/gi," ");
@@ -2435,6 +2444,7 @@ let _pdfsBloqueados = [];  // PDFs cuja cobertura ficou < META_COBERTURA (nenhum
 let _ultimoModeloArtigo = ""; // qual sub-modelo de ARTIGO (periódico) pegou os autores (p/ nomear o modelo)
 const META_COBERTURA = 95; // % mínimo de E‑MAILS capturados p/ aceitar a coleta de um PDF (trava rígida)
 const META_TRAB = 70;      // % mínimo de TRABALHOS localizados vs sumário; só trava em falha GROSSA (contagem de obra é ruidosa)
+const MAX_BLOCOS_IA = 80;  // teto de blocos p/ a IA por bloco (acima disso = anais gigante → determinístico, p/ não travar)
 /* O e-mail PARECE ser deste autor? (local-part contém algum token do nome, ou as iniciais). */
 function _emailBate(name, email){
   if(!email || !/@/.test(email)) return true;            // sem e-mail → não marca como erro
@@ -3797,9 +3807,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.60";
+const VERSION = "13.61";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.61","2026-06-15","Conserta o TRAVAMENTO em anais GIGANTE: um PDF enorme (ex.: «III Congresso», 10 milhões de caracteres e 2.522 e‑mails) viraria ~1.450 chamadas à IA (uma por bloco) → horas e custo enorme, parecendo travado. Agora, acima de 80 blocos, o app NÃO usa a IA por bloco — coleta no determinístico (rápido e grátis) e a rede de segurança garante todos os e‑mails. Avisa por mensagem. Para esses gigantes, a IA por bloco só compensa com Haiku barato."],
   ["13.60","2026-06-07","Login da EQUIPE simplificado: o endereço do servidor (Render) agora vem JÁ PREENCHIDO e fica escondido em «⚙ servidor» — a equipe só digita a senha e entra. Antes o campo de endpoint vinha vazio (ou com openrouter) e travava o pessoal. Senha de equipe (USER_TOKEN) entra como não‑admin (sem abas de IA/Custos); senha de admin entra como admin."],
   ["13.59","2026-06-07","Barra de carregamento da IA: ao processar anais, a barra agora enche conforme a IA lê cada bloco e mostra «🧠 IA lendo o anais — bloco X/Y (Z%)» com o modelo — assim dá pra acompanhar (Opus é lento) em vez de parecer travado. Barra com animação suave."],
   ["13.58","2026-06-07","Botão «✕ excluir» em cada linha (ao lado do OK): remove do resultado o que for lixo (e‑mail solto, fragmento, não‑autor) — some da tabela, da contagem, do Excel e do CSV, e deixa de contar como pendente. Não bagunça os OK já dados (usa marcação, não remove de verdade)."],
