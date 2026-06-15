@@ -111,7 +111,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get("/", (req, res) => res.json({ ok: true, service: "articlelens-proxy" }));
+app.get("/", (req, res) => res.json({ ok: true, service: "articlelens-proxy", db: dbReady, logins: USERS.length + dbUsers.length }));
 
 function authOK(req, res) {
   if (!hasAuth()) return true;                           // nenhuma senha configurada = aberto
