@@ -191,12 +191,30 @@
   </div>
 </div>
 
+<!-- Modal: trocar a própria senha -->
+<div id="pwOverlay" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:20px">
+  <div style="width:min(380px,94vw);background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:26px;box-shadow:0 12px 50px rgba(0,0,0,.5)">
+    <div style="font-size:18px;font-weight:800;margin-bottom:4px">🔑 Trocar minha senha</div>
+    <p style="color:var(--muted);margin:4px 0 18px;font-size:13px">A nova senha passa a valer pra você entrar no app.</p>
+    <label class="fld" style="display:block;margin-bottom:5px;font-size:13px;color:var(--muted)">Nova senha</label>
+    <input type="password" id="pwNova" placeholder="nova senha" style="width:100%;box-sizing:border-box;margin-bottom:12px">
+    <label class="fld" style="display:block;margin-bottom:5px;font-size:13px;color:var(--muted)">Repita a nova senha</label>
+    <input type="password" id="pwNova2" placeholder="repita" style="width:100%;box-sizing:border-box;margin-bottom:16px">
+    <div class="row" style="gap:10px">
+      <button class="btn primary" id="pwSalvar" type="button" style="flex:1">Salvar</button>
+      <button class="btn ghost" id="pwCancelar" type="button" style="flex:0 0 auto">Cancelar</button>
+    </div>
+    <div id="pwMsg" style="margin-top:12px;font-size:13px;min-height:16px"></div>
+  </div>
+</div>
+
 <div class="wrap">
 
   <header class="top">
     <div class="logo">Seven <span class="lens">Coleta de @</span></div>
     <span class="badge" id="verBadge" title="Clique para ver as novidades" style="cursor:pointer;border-color:var(--accent);color:var(--accent)">v—</span>
     <span class="badge" id="roleBadge" style="margin-left:auto">🔑 Admin</span>
+    <button class="btn ghost" id="trocarSenhaBtn" type="button" style="flex:0 0 auto" title="Trocar a minha senha">🔑 Senha</button>
     <button class="btn ghost" id="logoutBtn" type="button" style="flex:0 0 auto">Sair</button>
     <div class="tagline">Coleta <b>título</b>, <b>nome completo</b> e <b>e-mail</b> dos trabalhos em PDFs acadêmicos.</div>
   </header>
@@ -207,6 +225,7 @@
     <div class="tab active" data-tab="pdf"  role="tab"><span class="ico">📄</span>PDF</div>
     <div class="tab"        data-tab="ia"   role="tab"><span class="ico">🧠</span>IA</div>
     <div class="tab"        data-tab="cost" data-admin="1" role="tab"><span class="ico">💰</span>Custos</div>
+    <div class="tab"        data-tab="users" data-admin="1" role="tab"><span class="ico">👥</span>Usuários</div>
   </div>
 
   <!-- Aba PDF -->
@@ -346,6 +365,38 @@
     </div>
 
     <p class="aihelp" style="margin-top:10px">⚠️ Valor estimado (preços padrão da tabela). O limite oficial e inquebrável você define no painel da Anthropic (Billing → Limits).</p>
+  </section>
+
+  <!-- Aba Usuários (admin) -->
+  <section class="panel" id="panel-users" data-admin="1">
+    <h3 style="margin:0 0 4px">👥 Usuários</h3>
+    <p class="aihelp" style="margin:0 0 16px">Crie um login (nome + senha) pra cada pessoa. Cada uma entra com a senha dela e pode trocá‑la sozinha no botão <b>🔑 Senha</b> lá em cima.</p>
+
+    <div id="usersSemBanco" style="display:none;background:var(--bg-soft);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px;font-size:13px">
+      ⚠️ O banco de dados ainda não está ligado. Configure <code>DATABASE_URL</code> no Render pra criar logins por aqui.
+    </div>
+
+    <!-- novo login -->
+    <div style="background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:18px">
+      <h4 style="margin:0 0 10px">➕ Novo login</h4>
+      <div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <label class="fld" style="flex:1;min-width:140px;display:block">Nome
+          <input type="text" id="nuNome" placeholder="ex.: Jhen" style="width:100%;box-sizing:border-box"></label>
+        <label class="fld" style="flex:1;min-width:140px;display:block">Senha
+          <input type="text" id="nuSenha" placeholder="senha dela" style="width:100%;box-sizing:border-box"></label>
+        <label class="fld" style="flex:0 0 auto;display:block">Perfil
+          <select id="nuPapel" style="box-sizing:border-box">
+            <option value="user">Usuário (só coleta)</option>
+            <option value="admin">Admin (vê tudo)</option>
+          </select></label>
+        <button class="btn primary" id="nuAdd" type="button" style="flex:0 0 auto">Adicionar</button>
+      </div>
+      <div id="nuMsg" style="margin-top:8px;font-size:13px;min-height:16px"></div>
+    </div>
+
+    <div class="btn-bar" style="margin:0 0 10px"><button class="btn ghost" id="usersRefresh" type="button">↻ Atualizar</button></div>
+    <div id="usersList"></div>
+    <div id="usersFixos" style="margin-top:18px"></div>
   </section>
 
   <!-- LINHA DE PRODUÇÃO (só na aba PDF) -->
@@ -2944,8 +2995,120 @@ document.querySelectorAll(".tab").forEach(tab=>{
     _mostrarFluxoPDF(tab.dataset.tab === "pdf");
     if(tab.dataset.tab === "cost") loadUsage();
     if(tab.dataset.tab === "ia") renderRun();    // mostra o relatório da IA ao abrir a aba
+    if(tab.dataset.tab === "users") carregarUsuarios();
   };
 });
+
+/* ===== Conta: trocar a própria senha + (admin) gerenciar usuários ===== */
+function _proxyRoot(){ return (AI.baseURL||"").replace(/\/+$/,"").replace(/\/v1$/,""); }
+function _authHeaders(){ return { "Content-Type":"application/json", "Authorization":"Bearer "+(AI.apiKey||"") }; }
+
+// --- modal: trocar minha senha ---
+const pwOverlay = document.getElementById("pwOverlay");
+function abrirTrocarSenha(){
+  document.getElementById("pwNova").value = "";
+  document.getElementById("pwNova2").value = "";
+  document.getElementById("pwMsg").innerHTML = "";
+  pwOverlay.style.display = "flex";
+  setTimeout(()=>document.getElementById("pwNova").focus(), 50);
+}
+function fecharTrocarSenha(){ pwOverlay.style.display = "none"; }
+async function salvarNovaSenha(){
+  const msg = document.getElementById("pwMsg");
+  const n1 = document.getElementById("pwNova").value.trim();
+  const n2 = document.getElementById("pwNova2").value.trim();
+  if(n1.length < 4){ msg.innerHTML = '<span style="color:var(--danger)">A senha precisa ter pelo menos 4 caracteres.</span>'; return; }
+  if(n1 !== n2){ msg.innerHTML = '<span style="color:var(--danger)">As duas senhas não são iguais.</span>'; return; }
+  msg.innerHTML = "<span style='color:var(--muted)'>salvando…</span>";
+  try{
+    const r = await fetch(_proxyRoot()+"/senha", { method:"POST", headers:_authHeaders(), body: JSON.stringify({ nova: n1 }) });
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok){ msg.innerHTML = '<span style="color:var(--danger)">'+escapeHtml((j.error&&j.error.message)||("Erro "+r.status))+'</span>'; return; }
+    // a senha É o token de acesso: atualiza pra sessão continuar funcionando
+    AI.apiKey = n1; saveAIConfig();
+    msg.innerHTML = '<span style="color:var(--ok,#2e7d32)">Senha trocada! ✔</span>';
+    toast("Senha trocada com sucesso.");
+    setTimeout(fecharTrocarSenha, 900);
+  }catch(e){ msg.innerHTML = '<span style="color:var(--danger)">Falha de conexão: '+escapeHtml(e.message)+'</span>'; }
+}
+document.getElementById("trocarSenhaBtn").onclick = abrirTrocarSenha;
+document.getElementById("pwCancelar").onclick = fecharTrocarSenha;
+document.getElementById("pwSalvar").onclick = salvarNovaSenha;
+document.getElementById("pwNova2").addEventListener("keydown", e=>{ if(e.key==="Enter") salvarNovaSenha(); });
+
+// --- (admin) painel de usuários ---
+async function carregarUsuarios(){
+  const lista = document.getElementById("usersList");
+  const semBanco = document.getElementById("usersSemBanco");
+  const fixosEl = document.getElementById("usersFixos");
+  lista.innerHTML = '<p class="aihelp">carregando…</p>';
+  try{
+    const r = await fetch(_proxyRoot()+"/usuarios", { headers:_authHeaders() });
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok){ lista.innerHTML = '<p class="aihelp" style="color:var(--danger)">'+escapeHtml((j.error&&j.error.message)||("Erro "+r.status))+'</p>'; return; }
+    semBanco.style.display = j.disabled ? "block" : "none";
+    // logins fixos do Render (só leitura)
+    const fx = j.fixos||[];
+    fixosEl.innerHTML = fx.length ? ('<h4 style="margin:0 0 6px">🔒 Logins fixos (Render)</h4><p class="aihelp" style="margin:0 0 8px">Definidos nas variáveis do Render — não dá pra trocar a senha por aqui.</p>'
+      + fx.map(u=>'<span class="badge" style="margin:0 6px 6px 0;display:inline-block">'+(u.papel==="admin"?"🔑 ":"👤 ")+escapeHtml(u.nome)+'</span>').join('')) : "";
+    const itens = j.itens||[];
+    if(!itens.length){ lista.innerHTML = j.disabled ? "" : '<p class="aihelp">Nenhum login criado ainda. Adicione acima.</p>'; return; }
+    let html = '<table style="width:100%;border-collapse:collapse;font-size:14px"><thead><tr style="text-align:left;color:var(--muted)">'
+      + '<th style="padding:6px 8px">Nome</th><th style="padding:6px 8px">Perfil</th><th style="padding:6px 8px">Senha</th><th></th></tr></thead><tbody>';
+    for(const u of itens){
+      html += '<tr style="border-top:1px solid var(--border)">'
+        + '<td style="padding:8px">'+escapeHtml(u.nome)+'</td>'
+        + '<td style="padding:8px">'+(u.papel==="admin"?"🔑 Admin":"👤 Usuário")+'</td>'
+        + '<td style="padding:8px;font-family:monospace">'+escapeHtml(u.senha||"")+'</td>'
+        + '<td style="padding:8px;text-align:right;white-space:nowrap">'
+        +   '<button class="btn ghost u-reset" data-id="'+u.id+'" data-nome="'+escapeHtml(u.nome)+'" type="button" style="padding:4px 8px">Trocar senha</button> '
+        +   '<button class="btn ghost u-del" data-id="'+u.id+'" data-nome="'+escapeHtml(u.nome)+'" type="button" style="padding:4px 8px;color:var(--danger)">Excluir</button>'
+        + '</td></tr>';
+    }
+    html += '</tbody></table>';
+    lista.innerHTML = html;
+    lista.querySelectorAll(".u-del").forEach(b=> b.onclick = ()=> excluirUsuario(b.dataset.id, b.dataset.nome));
+    lista.querySelectorAll(".u-reset").forEach(b=> b.onclick = ()=> redefinirUsuario(b.dataset.id, b.dataset.nome));
+  }catch(e){ lista.innerHTML = '<p class="aihelp" style="color:var(--danger)">Falha de conexão: '+escapeHtml(e.message)+'</p>'; }
+}
+async function adicionarUsuario(){
+  const msg = document.getElementById("nuMsg");
+  const nome = document.getElementById("nuNome").value.trim();
+  const senha = document.getElementById("nuSenha").value.trim();
+  const papel = document.getElementById("nuPapel").value;
+  if(!nome || !senha){ msg.innerHTML = '<span style="color:var(--danger)">Preencha nome e senha.</span>'; return; }
+  msg.innerHTML = "<span style='color:var(--muted)'>salvando…</span>";
+  try{
+    const r = await fetch(_proxyRoot()+"/usuarios", { method:"POST", headers:_authHeaders(), body: JSON.stringify({ nome, senha, papel }) });
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok){ msg.innerHTML = '<span style="color:var(--danger)">'+escapeHtml((j.error&&j.error.message)||("Erro "+r.status))+'</span>'; return; }
+    msg.innerHTML = '<span style="color:var(--ok,#2e7d32)">Login criado! ✔</span>';
+    document.getElementById("nuNome").value = ""; document.getElementById("nuSenha").value = "";
+    carregarUsuarios();
+  }catch(e){ msg.innerHTML = '<span style="color:var(--danger)">Falha de conexão: '+escapeHtml(e.message)+'</span>'; }
+}
+async function excluirUsuario(id, nome){
+  if(!confirm('Excluir o login de "'+nome+'"? Essa pessoa não vai mais conseguir entrar.')) return;
+  try{
+    const r = await fetch(_proxyRoot()+"/usuarios/excluir", { method:"POST", headers:_authHeaders(), body: JSON.stringify({ id }) });
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok){ toast((j.error&&j.error.message)||("Erro "+r.status), "err"); return; }
+    toast('Login de "'+nome+'" excluído.'); carregarUsuarios();
+  }catch(e){ toast("Falha: "+e.message, "err"); }
+}
+async function redefinirUsuario(id, nome){
+  const nova = prompt('Nova senha para "'+nome+'":');
+  if(nova===null) return;
+  if(nova.trim().length < 4){ toast("Senha muito curta (mínimo 4).", "err"); return; }
+  try{
+    const r = await fetch(_proxyRoot()+"/usuarios/senha", { method:"POST", headers:_authHeaders(), body: JSON.stringify({ id, senha: nova.trim() }) });
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok){ toast((j.error&&j.error.message)||("Erro "+r.status), "err"); return; }
+    toast('Senha de "'+nome+'" trocada.'); carregarUsuarios();
+  }catch(e){ toast("Falha: "+e.message, "err"); }
+}
+document.getElementById("nuAdd").onclick = adicionarUsuario;
+document.getElementById("usersRefresh").onclick = carregarUsuarios;
 
 
 /* ===== Painel de custos (admin) ===== */
@@ -3817,7 +3980,7 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.64";
+const VERSION = "13.65";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
   ["13.61","2026-06-15","Conserta o TRAVAMENTO em anais GIGANTE: um PDF enorme (ex.: «III Congresso», 10 milhões de caracteres e 2.522 e‑mails) viraria ~1.450 chamadas à IA (uma por bloco) → horas e custo enorme, parecendo travado. Agora, acima de 80 blocos, o app NÃO usa a IA por bloco — coleta no determinístico (rápido e grátis) e a rede de segurança garante todos os e‑mails. Avisa por mensagem. Para esses gigantes, a IA por bloco só compensa com Haiku barato."],

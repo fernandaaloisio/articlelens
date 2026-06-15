@@ -28,12 +28,15 @@ function buildUsers(){
   if (process.env.ACCESS_TOKEN) list.push({ name: "Admin", pass: process.env.ACCESS_TOKEN, role: "admin" }); // compat
   return list;
 }
-const USERS    = buildUsers();
-const HAS_AUTH = USERS.length > 0;
-console.log("Logins configurados:", USERS.map(u => u.role + ":" + u.name).join(", ") || "(nenhum — acesso aberto)");
+const USERS  = buildUsers();   // logins fixos do Render (variáveis de ambiente)
+let   dbUsers = [];            // logins guardados no banco (admin cria; cada um troca a própria senha)
+console.log("Logins fixos (Render):", USERS.map(u => u.role + ":" + u.name).join(", ") || "(nenhum)");
 
-function findUser(tok){ return tok ? (USERS.find(u => u.pass === tok) || null) : null; }
+function allUsers(){ return USERS.concat(dbUsers); }
+function hasAuth(){ return USERS.length > 0 || dbUsers.length > 0; }
+function findUser(tok){ return tok ? (allUsers().find(u => u.pass === tok) || null) : null; }
 function roleOf(tok){ const u = findUser(tok); return u ? u.role : null; }
+function currentUser(req){ return findUser((req.headers["authorization"]||"").replace(/^Bearer\s+/i,"").trim()); }
 
 /* ----- Rastreio de custo ----- */
 const fs = require("fs");
@@ -65,6 +68,13 @@ function addUsage(model, u){
  * Se DATABASE_URL não estiver definida, o histórico fica desativado e a IA segue
  * funcionando normal (nada quebra). Quando o banco for criado, ele ativa sozinho. */
 let pool = null, dbReady = false;
+async function loadDbUsers(){
+  if (!dbReady || !pool) { dbUsers = []; return; }
+  try {
+    const r = await pool.query("SELECT id, nome, senha, papel FROM usuarios ORDER BY id");
+    dbUsers = r.rows.map(x => ({ id: x.id, name: x.nome, pass: x.senha, role: x.papel }));
+  } catch (e) { console.error("loadDbUsers erro:", e.message); }
+}
 if (process.env.DATABASE_URL) {
   try {
     const { Pool } = require("pg");
@@ -72,17 +82,24 @@ if (process.env.DATABASE_URL) {
       connectionString: process.env.DATABASE_URL,
       ssl: /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? false : { rejectUnauthorized: false },
     });
-    pool.query(`CREATE TABLE IF NOT EXISTS coletas (
-      id SERIAL PRIMARY KEY,
-      criado_em TIMESTAMPTZ DEFAULT now(),
-      pessoa TEXT, perfil TEXT, arquivos TEXT,
-      trabalhos INTEGER, emails INTEGER,
-      custo_usd NUMERIC(12,6), modelo TEXT
-    )`).then(() => { dbReady = true; console.log("DB pronto — histórico de coletas ativo."); })
-       .catch(e => console.error("DB erro ao criar tabela:", e.message));
+    (async () => {
+      await pool.query(`CREATE TABLE IF NOT EXISTS coletas (
+        id SERIAL PRIMARY KEY, criado_em TIMESTAMPTZ DEFAULT now(),
+        pessoa TEXT, perfil TEXT, arquivos TEXT,
+        trabalhos INTEGER, emails INTEGER, custo_usd NUMERIC(12,6), modelo TEXT
+      )`);
+      await pool.query(`CREATE TABLE IF NOT EXISTS usuarios (
+        id SERIAL PRIMARY KEY, criado_em TIMESTAMPTZ DEFAULT now(),
+        nome TEXT NOT NULL, senha TEXT NOT NULL, papel TEXT NOT NULL DEFAULT 'user'
+      )`);
+      await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS usuarios_nome_uniq ON usuarios (lower(nome))`);
+      dbReady = true;
+      await loadDbUsers();
+      console.log("DB pronto — histórico + usuários ativos. Logins no banco:", dbUsers.length);
+    })().catch(e => console.error("DB erro init:", e.message));
   } catch (e) { console.error("pg indisponível:", e.message); }
 } else {
-  console.log("DATABASE_URL não definida — histórico DESATIVADO (a IA segue funcionando).");
+  console.log("DATABASE_URL não definida — histórico/usuários DESATIVADOS (a IA segue funcionando).");
 }
 
 // CORS
@@ -97,7 +114,7 @@ app.use((req, res, next) => {
 app.get("/", (req, res) => res.json({ ok: true, service: "articlelens-proxy" }));
 
 function authOK(req, res) {
-  if (!HAS_AUTH) return true;                            // nenhuma senha configurada = aberto
+  if (!hasAuth()) return true;                           // nenhuma senha configurada = aberto
   const tok = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "").trim();
   if (!roleOf(tok)) { res.status(401).json({ error: { message: "Senha inválida." } }); return false; }
   return true;
@@ -106,7 +123,7 @@ function authOK(req, res) {
 // Login: confere a senha e devolve o perfil (admin | user) e o nome da pessoa (se a senha for individual)
 app.post("/login", (req, res) => {
   const pw = ((req.body && req.body.password) || (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "")).trim();
-  if (!HAS_AUTH) return res.json({ ok: true, role: "admin", name: "" });   // sem senha = tudo liberado
+  if (!hasAuth()) return res.json({ ok: true, role: "admin", name: "" });   // sem senha = tudo liberado
   const u = findUser(pw);
   if (!u) return res.status(401).json({ error: { message: "Senha incorreta." } });
   res.json({ ok: true, role: u.role, name: (u.name === "Admin" || u.name === "Equipe") ? "" : u.name });
@@ -181,6 +198,79 @@ app.get("/historico", async (req, res) => {
       FROM coletas GROUP BY 1 ORDER BY custo_usd DESC`);
     res.json({ itens: lista.rows, totais: tot.rows[0], porPessoa: porPessoa.rows });
   } catch (e) { res.status(500).json({ error: { message: e.message } }); }
+});
+
+/* ---- Usuários no banco: admin cria/exclui/redefine; cada um troca a PRÓPRIA senha ---- */
+function ehAdminReq(req){ const u = currentUser(req); return !!(u && u.role === "admin"); }
+
+// admin lista os logins do banco (mostra a senha pra ele poder repassar)
+app.get("/usuarios", async (req, res) => {
+  if (!ehAdminReq(req)) return res.status(403).json({ error: { message: "Apenas admin." } });
+  if (!dbReady) return res.json({ disabled: true, itens: [], fixos: USERS.map(u => ({ nome: u.name, papel: u.role })) });
+  await loadDbUsers();
+  res.json({ itens: dbUsers.map(u => ({ id: u.id, nome: u.name, papel: u.role, senha: u.pass })),
+             fixos: USERS.map(u => ({ nome: u.name, papel: u.role })) });
+});
+
+// admin cria um login
+app.post("/usuarios", async (req, res) => {
+  if (!ehAdminReq(req)) return res.status(403).json({ error: { message: "Apenas admin." } });
+  if (!dbReady) return res.status(400).json({ error: { message: "Banco não configurado (DATABASE_URL)." } });
+  const b = req.body || {};
+  const nome  = (b.nome  || "").trim();
+  const senha = (b.senha || "").trim();
+  const papel = b.papel === "admin" ? "admin" : "user";
+  if (!nome || !senha) return res.status(400).json({ error: { message: "Informe nome e senha." } });
+  if (senha.length < 4) return res.status(400).json({ error: { message: "Senha muito curta (mínimo 4 caracteres)." } });
+  if (findUser(senha)) return res.status(409).json({ error: { message: "Essa senha já está em uso por outro login." } });
+  try {
+    const r = await pool.query("INSERT INTO usuarios (nome, senha, papel) VALUES ($1,$2,$3) RETURNING id",
+      [nome.slice(0,120), senha.slice(0,200), papel]);
+    await loadDbUsers();
+    res.json({ ok: true, id: r.rows[0].id });
+  } catch (e) {
+    if (/uniq|duplicate/i.test(e.message)) return res.status(409).json({ error: { message: "Já existe um login com esse nome." } });
+    res.status(500).json({ error: { message: e.message } });
+  }
+});
+
+// admin exclui um login
+app.post("/usuarios/excluir", async (req, res) => {
+  if (!ehAdminReq(req)) return res.status(403).json({ error: { message: "Apenas admin." } });
+  if (!dbReady) return res.status(400).json({ error: { message: "Banco não configurado." } });
+  const id = parseInt((req.body || {}).id);
+  if (!id) return res.status(400).json({ error: { message: "id inválido." } });
+  try { await pool.query("DELETE FROM usuarios WHERE id=$1", [id]); await loadDbUsers(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: { message: e.message } }); }
+});
+
+// admin redefine a senha de um login
+app.post("/usuarios/senha", async (req, res) => {
+  if (!ehAdminReq(req)) return res.status(403).json({ error: { message: "Apenas admin." } });
+  if (!dbReady) return res.status(400).json({ error: { message: "Banco não configurado." } });
+  const b = req.body || {};
+  const id = parseInt(b.id);
+  const nova = (b.senha || "").trim();
+  if (!id || !nova) return res.status(400).json({ error: { message: "Informe o login e a nova senha." } });
+  if (nova.length < 4) return res.status(400).json({ error: { message: "Senha muito curta (mínimo 4)." } });
+  const dono = findUser(nova);
+  if (dono && dono.id !== id) return res.status(409).json({ error: { message: "Essa senha já está em uso." } });
+  try { await pool.query("UPDATE usuarios SET senha=$1 WHERE id=$2", [nova.slice(0,200), id]); await loadDbUsers(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: { message: e.message } }); }
+});
+
+// a PRÓPRIA pessoa troca a senha (autentica com a senha atual no Bearer)
+app.post("/senha", async (req, res) => {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: { message: "Faça login primeiro." } });
+  if (u.id == null) return res.status(400).json({ error: { message: "Esse login é fixo do servidor; só o admin troca (no Render)." } });
+  if (!dbReady) return res.status(400).json({ error: { message: "Banco não configurado." } });
+  const nova = ((req.body || {}).nova || "").trim();
+  if (!nova || nova.length < 4) return res.status(400).json({ error: { message: "Nova senha muito curta (mínimo 4)." } });
+  const dono = findUser(nova);
+  if (dono && dono.id !== u.id) return res.status(409).json({ error: { message: "Essa senha já está em uso." } });
+  try { await pool.query("UPDATE usuarios SET senha=$1 WHERE id=$2", [nova.slice(0,200), u.id]); await loadDbUsers(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: { message: e.message } }); }
 });
 
 // Lista de modelos disponíveis na conta (útil pra escolher o nome certo)
