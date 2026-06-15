@@ -176,12 +176,15 @@
 <div id="loginOverlay" style="position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:20px">
   <div style="width:min(420px,94vw);background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:30px;box-shadow:0 12px 50px rgba(0,0,0,.5)">
     <div style="font-size:26px;font-weight:800;letter-spacing:-.5px">Seven <span style="color:var(--accent)">Coleta de @</span></div>
-    <p style="color:var(--muted);margin:6px 0 22px;font-size:14px">🔒 Acesso restrito. Entre com sua senha.</p>
-    <label class="fld" style="display:block;margin-bottom:5px;font-size:13px;color:var(--muted)">Endpoint (URL do Render + /v1)</label>
-    <input type="text" id="loginBase" placeholder="https://articlelens-proxy.onrender.com/v1" style="width:100%;box-sizing:border-box;margin-bottom:14px">
+    <p style="color:var(--muted);margin:6px 0 22px;font-size:14px">🔒 Acesso restrito. Digite sua senha de acesso.</p>
     <label class="fld" style="display:block;margin-bottom:5px;font-size:13px;color:var(--muted)">Senha</label>
-    <input type="password" id="loginPw" placeholder="sua senha de acesso" style="width:100%;box-sizing:border-box;margin-bottom:18px">
+    <input type="password" id="loginPw" placeholder="sua senha de acesso" style="width:100%;box-sizing:border-box;margin-bottom:14px">
     <button class="btn primary" id="loginBtn" style="width:100%">Entrar</button>
+    <details style="margin-top:14px">
+      <summary style="cursor:pointer;font-size:12px;color:var(--muted)">⚙ servidor (já configurado — não precisa mexer)</summary>
+      <label class="fld" style="display:block;margin:8px 0 5px;font-size:12px;color:var(--muted)">Endpoint (URL do Render + /v1)</label>
+      <input type="text" id="loginBase" placeholder="https://...onrender.com/v1" style="width:100%;box-sizing:border-box">
+    </details>
     <div id="loginMsg" style="margin-top:14px;font-size:13px;min-height:18px"></div>
   </div>
 </div>
@@ -3721,9 +3724,11 @@ renderFileQueue();
 
 /* ===== LOGIN com perfis (admin / usuário) validado no proxy Render ===== */
 const AUTH_KEY = "articlelens_auth";   // "admin" | "user"
+const RENDER_ENDPOINT = "https://articlelens-zeyl.onrender.com/v1";   // proxy do Render (valida ADMIN_TOKEN/USER_TOKEN)
 function showLogin(){
   const b = document.getElementById("loginBase");
-  if(!b.value) b.value = AI.baseURL || "";
+  // endpoint do Render JÁ vem preenchido (a equipe só digita a senha). Ignora resíduo (ex.: openrouter salvo).
+  b.value = (AI.baseURL && /onrender\.com/i.test(AI.baseURL)) ? AI.baseURL : RENDER_ENDPOINT;
   document.getElementById("loginOverlay").style.display = "flex";
   setTimeout(()=>document.getElementById("loginPw").focus(), 50);
 }
@@ -3792,9 +3797,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.59";
+const VERSION = "13.60";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
+  ["13.60","2026-06-07","Login da EQUIPE simplificado: o endereço do servidor (Render) agora vem JÁ PREENCHIDO e fica escondido em «⚙ servidor» — a equipe só digita a senha e entra. Antes o campo de endpoint vinha vazio (ou com openrouter) e travava o pessoal. Senha de equipe (USER_TOKEN) entra como não‑admin (sem abas de IA/Custos); senha de admin entra como admin."],
   ["13.59","2026-06-07","Barra de carregamento da IA: ao processar anais, a barra agora enche conforme a IA lê cada bloco e mostra «🧠 IA lendo o anais — bloco X/Y (Z%)» com o modelo — assim dá pra acompanhar (Opus é lento) em vez de parecer travado. Barra com animação suave."],
   ["13.58","2026-06-07","Botão «✕ excluir» em cada linha (ao lado do OK): remove do resultado o que for lixo (e‑mail solto, fragmento, não‑autor) — some da tabela, da contagem, do Excel e do CSV, e deixa de contar como pendente. Não bagunça os OK já dados (usa marcação, não remove de verdade)."],
   ["13.57","2026-06-07","Detecta anais que NÃO tem «Resumo»/«Palavras-chave» (ex.: «Anais do I Seminário sobre o Agronegócio»): antes era tratado como 1 artigo (capa + e‑mails soltos). Agora, além de resumo/palavras-chave, o app reconhece anais pelo SUMÁRIO (índice com 4+ trabalhos) e pela capa de evento (anais/seminário/congresso/simpósio/jornada/mostra) com muitos e‑mails. Artigo único (1 trabalho) continua artigo — testado, sem falso positivo."],
