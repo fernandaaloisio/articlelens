@@ -3770,13 +3770,12 @@ async function doLogin(){
   const base = document.getElementById("loginBase").value.trim().replace(/\/+$/,"");
   const pw   = document.getElementById("loginPw").value.trim();
   const nome = document.getElementById("loginName").value.trim();
-  if(!nome){ msg.innerHTML = '<span style="color:var(--danger)">Digite seu nome.</span>'; return; }
   if(!base){ msg.innerHTML = '<span style="color:var(--danger)">Informe o endpoint do Render.</span>'; return; }
   if(!pw){   msg.innerHTML = '<span style="color:var(--danger)">Digite a senha.</span>'; return; }
   msg.innerHTML = "<span style='color:var(--muted)'>entrando…</span>";
   const root = base.replace(/\/v1$/,"");
   try{
-    let role = null;
+    let role = null, provName = "";
     // tenta o /login (perfis); se o proxy ainda não tiver, cai no /v1/models como admin
     let r = await fetch(root + "/login", { method:"POST",
       headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ password: pw }) });
@@ -3790,13 +3789,16 @@ async function doLogin(){
     } else if(!r.ok){
       msg.innerHTML = '<span style="color:var(--danger)">Erro '+r.status+' — confira o endpoint.</span>'; return;
     } else {
-      role = (await r.json()).role || "user";
+      const j = await r.json(); role = j.role || "user"; provName = (j.name||"").trim();
     }
+    // nome: o digitado tem prioridade; senão usa o que veio da senha individual. Se não houver nenhum, pede.
+    const nomeFinal = nome || provName;
+    if(!nomeFinal){ msg.innerHTML = '<span style="color:var(--danger)">Digite seu nome.</span>'; document.getElementById("loginName").focus(); return; }
     // sucesso: configura a IA e libera o app conforme o perfil
     AI.baseURL = base; AI.apiKey = pw; AI.enabled = true; AI.orchestrate = true;
     if(!/claude/i.test(AI.model||"")) AI.model = "claude-3-5-haiku-20241022";  // corrige resíduo (ex.: llama3.1)
     saveAIConfig();
-    try{ localStorage.setItem(AUTH_KEY, role); localStorage.setItem(PESSOA_KEY, nome); }catch(_){}
+    try{ localStorage.setItem(AUTH_KEY, role); localStorage.setItem(PESSOA_KEY, nomeFinal); }catch(_){}
     initAIUI(); applyRole(role);
     hideLogin();
     toast(role==="admin" ? "Bem-vindo, Admin! IA conectada." : "Bem-vindo! É só adicionar os PDFs.");
@@ -3815,7 +3817,7 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.63";
+const VERSION = "13.64";
 const VERSION_DATE = "2026-06-07";
 const CHANGELOG = [
   ["13.61","2026-06-15","Conserta o TRAVAMENTO em anais GIGANTE: um PDF enorme (ex.: «III Congresso», 10 milhões de caracteres e 2.522 e‑mails) viraria ~1.450 chamadas à IA (uma por bloco) → horas e custo enorme, parecendo travado. Agora, acima de 80 blocos, o app NÃO usa a IA por bloco — coleta no determinístico (rápido e grátis) e a rede de segurança garante todos os e‑mails. Avisa por mensagem. Para esses gigantes, a IA por bloco só compensa com Haiku barato."],
