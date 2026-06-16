@@ -1651,6 +1651,43 @@ function cortarPorRodapeNum(text){
   }
   return works;
 }
+/* ÚLTIMO RECURSO p/ anais SEM rótulos (ex.: "Jornada Odontológica"): formato "número → TÍTULO (Title Case) →
+   AUTORES + afiliação → e‑mail PELADO (1 por trabalho) → Objetivo/Palavras‑chave". Sem RESUMO/Introdução/sumário
+   e título NÃO é CAIXA ALTA, então os outros cortadores não pegam. Aqui o e‑mail é a ÂNCORA: o trabalho é o bloco
+   ACIMA dele. Título duvidoso fica VAZIO (a IA completa). Devolve [] se não render (não atrapalha outros formatos). */
+function cortarPorEmailSolto(text){
+  const EMAILG=/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
+  const INST=/universidade|universit|hospital|faculdade|instituto|centro\b|unimontes|ufmg|secretaria|prefeitura|\bcnpq\b|\bcapes\b|fapemig/i;
+  const LABEL=/^(objetivo|palavras|conclus|resultado|metodolog|material|discuss|introdu|agradec|refer|relato|resumo|abstract)/i;
+  const limpa=a=>a.replace(/[\d¹²³⁰⁴⁵⁶⁷⁸⁹*]+/g,"").replace(/\s+/g," ").replace(/^[,;.\s]+|[,;.\s]+$/g,"").trim();
+  const nomeOk=n=>{const t=(n||"").split(/\s+/).filter(x=>x.length>1);return t.length>=2&&t.length<=6&&/^[A-ZÀ-Ý]/.test(n||"");};
+  const nrm=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+  const ehAutor=l=>/,/.test(l) && /[A-ZÀ-Ý][a-zà-ÿ]+\s+[A-ZÀ-Ý]/.test(l) && !LABEL.test(l);
+  const works=[]; let m; const vistos=new Set();
+  while((m=EMAILG.exec(text))){
+    const email=m[0].toLowerCase().replace(/[.,;]+$/,""); if(vistos.has(email)) continue; vistos.add(email);
+    if(_emailInstitucional && _emailInstitucional(email)) continue;
+    const block=text.slice(Math.max(0,m.index-900), m.index);
+    let lines=block.split(/\n/).map(s=>s.trim()).filter(Boolean);
+    let numIdx=-1; for(let k=lines.length-1;k>=0;k--){ if(/^\d{1,4}$/.test(lines[k])){ numIdx=k; break; } }
+    const corpo = numIdx>=0 ? lines.slice(numIdx+1) : lines.slice(-6);
+    let aIdx=corpo.findIndex(ehAutor);
+    let titulo="", autoresLinha="";
+    if(aIdx>=0){ titulo=corpo.slice(0,aIdx).filter(l=>!INST.test(l)&&!LABEL.test(l)).join(" ").trim(); autoresLinha=corpo.slice(aIdx).join(" "); }
+    else { autoresLinha=corpo.join(" "); }
+    if(LABEL.test(titulo)||INST.test(titulo)) titulo="";
+    const cutInst=autoresLinha.search(INST);
+    const nomesStr=cutInst>0?autoresLinha.slice(0,cutInst):autoresLinha;
+    const nomes=nomesStr.split(/[,;]/).map(limpa).filter(nomeOk);
+    const loc=nrm(email.split("@")[0]);
+    const dono=nomes.find(n=>{const t=nrm(n).split(/\s+/).filter(x=>x.length>2);return t.some(x=>loc.includes(x));}) || nomes[0] || "";
+    const authors=nomes.length?nomes.map(n=>({name:n,email:n===dono?email:""})):[{name:"",email}];
+    works.push({title:(titulo||"").replace(/\s+/g," ").slice(0,200), authors, _raw:text.slice(Math.max(0,m.index-900),m.index+60)});
+  }
+  // self‑validação: só vale se rendeu vários trabalhos COM e‑mail (senão deixa os outros/​rede de segurança)
+  if(works.filter(w=>w.authors.some(a=>a.email)).length < 8) return [];
+  return works;
+}
 /* ===== DEFESA UNIVERSAL "não errar feio": nunca deixar um RÓTULO/instituição/fragmento virar título ou nome.
    Vale pra QUALQUER formato e qualquer método (determinístico OU IA). Quando detecta lixo, ESVAZIA o campo
    (vira ⚠ pra revisar) em vez de mostrar errado. ===== */
@@ -2864,7 +2901,8 @@ async function collectFromPDF(file, mode){
     const viaRod = cortarPorRodapeNum(text);        // MODELO "rodapé numerado" (autor nº ↔ e‑mail nº), ex.: UNITINS ([] se não casar)
     const miolo = _pularCapaSumario(text);          // sem capa/sumário gigante → IA e rede de segurança sem ruído
     const comEmail = a => a ? a.filter(w=>(w.authors||[]).some(x=>x.email)).length : -1;
-    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod);
+    const viaEmail = cortarPorEmailSolto(text);     // ÚLTIMO RECURSO: anais sem rótulos, e‑mail pelado (ex.: Jornada Odontológica) ([] se não render)
+    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eEmail = comEmail(viaEmail);
     // Prefere o SUMÁRIO (títulos oficiais, limpos). Só troca pro método antigo quando ele pega
     // MUITO mais e-mail (≥25% e +5) — aí o ganho compensa títulos um pouco menos limpos.
     let works;
@@ -2891,6 +2929,11 @@ async function collectFromPDF(file, mode){
     } else if(viaSum && viaSum.length && !(eP > eS*1.25 && eP > eS+5)){
       works = viaSum;
       lastIndice = {total: viaSum._sumario.total, fixed: viaSum._sumario.localizados, viaSumario:true, naoLoc: viaSum._sumario.naoLoc};
+    } else if(eEmail>0 && eEmail>=eS && eEmail>=eP && eEmail>=eM && eEmail>=ePal && eEmail>=eI && eEmail>=eRod){
+      // ÚLTIMO RECURSO: anais sem rótulos, e‑mail pelado (Jornada Odontológica) — os outros não pegaram
+      works = viaEmail;
+      modelosUsados["Anais · e‑mail‑âncora (sem rótulos)"] = (modelosUsados["Anais · e‑mail‑âncora (sem rótulos)"]||0) + 1;
+      lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
     } else {
       works = viaSep || [];
       lastIndice = aplicarIndice(works, text);            // títulos oficiais do sumário (grátis), se houver
@@ -4337,9 +4380,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.76";
+const VERSION = "13.77";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.77","2026-06-16","Novo formato de anais reconhecido (ex.: «Jornada Odontológica da Unimontes»): trabalhos SEM «RESUMO/Introdução/sumário», com título em Title Case e e‑mail «pelado» (sem rótulo «E‑mail:») — nenhum cortador pegava, então caía tudo na rede de segurança (e‑mails soltos sem título/nome). Novo cortador de ÚLTIMO RECURSO usa o e‑mail como âncora: o trabalho é o bloco acima dele (título + autores + afiliação), pareando o e‑mail ao autor pelo nome. No Jornada: 44 trabalhos, 44 e‑mails, ~45 nomes, ~30 títulos limpos — e os títulos duvidosos ficam pra IA completar. Bem travado: só entra quando nenhum outro cortador pega (não atrapalha III Congresso/UNITINS)."],
   ["13.76","2026-06-16","REGRA GERAL nova (vale p/ qualquer PDF, não só um): a IA preenche SÓ AS LACUNAS — trabalho sem título, e‑mail sem nome, ou caso difícil (⚠). Antes a regra «usar IA em TODO anais» mandava os 2.000+ trabalhos (até 800) pra IA mesmo quando o determinístico já tinha trazido tudo limpo — daí o custo R$9 e o resultado pior. Agora: o que já saiu limpo NÃO vai pra IA (rápido/grátis); num PDF NOVO de formato desconhecido, a maioria vira «lacuna» e a IA entra de verdade pra completar. Os e‑mails continuam 100% garantidos pela rede de segurança, com ou sem IA — a IA só melhora título/nome do que faltou."],
   ["13.75","2026-06-16","CONSERTO de regressão: a IA estava ASSUMINDO um anais gigante que o determinístico já fazia LIMPO e DE GRAÇA (ex.: III Congresso), piorando o resultado (títulos repetidos, afiliação virando título, trabalhos sem e‑mail) e cobrando à toa (R$9). Agora: se o determinístico já está limpo e numeroso (≥20 trabalhos e ≥70% com título de verdade), o app NÃO gasta IA. E quando a IA roda, ela só ASSUME se trouxer MAIS e‑mail E com títulos não piores que os do determinístico — senão mantém o determinístico. Resultado: III Congresso volta a sair limpo a custo ZERO; UNITINS sai pelo cortador de rodapé numerado, também grátis."],
   ["13.74","2026-06-16","CONFERÊNCIA pelo sumário mais completa: além de mostrar «sumário lista N · localizei L», agora LISTA os TÍTULOS exatos dos trabalhos do sumário que NÃO foram encontrados no corpo — na tela (📋) e no relatório de cobertura (CSV). Assim, em vez de só saber que «faltam 16», você vê QUAIS 16 e vai conferir direto no PDF."],
