@@ -2960,7 +2960,10 @@ async function collectFromPDF(file, mode){
       try{
         const wAI = await aiColetarAnais(miolo, file.name);
         const qAI = _qualidadeAnais(wAI);
-        if(cntE(wAI) > cntE(works) && qAI.score >= qDet.score - 0.05){   // a IA só assume se for MELHOR, não pior
+        // Quando o determinístico NÃO está limpo, a IA é a autoridade (ela entende o formato): assume se cobrir
+        // ~igual ou mais e‑mail (≥80% do det) E os títulos não forem piores. Assim ela LIMPA um determinístico
+        // ruim (nomes/títulos errados, ex.: listas "nomes; … e‑mails;") em vez de ficar refém da contagem.
+        if(cntE(wAI) >= cntE(works)*0.8 && qAI.score >= qDet.score - 0.05 && qAI.comEmail>0){
           works = wAI; nomeModelo = "Anais · IA por blocos (agnóstico)";
           modelosUsados[nomeModelo] = (modelosUsados[nomeModelo]||0) + 1;
         }
@@ -4390,9 +4393,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.78";
+const VERSION = "13.79";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.79","2026-06-16","Ajuste na divisão de trabalho IA × determinístico (geral, p/ formatos novos): quando o determinístico NÃO sai limpo (ex.: anais com «nomes; … e‑mails;» em listas separadas, que confunde o pareamento nome↔e‑mail), agora a IA ASSUME e refaz a coleta — ela entende o formato. Antes a trava exigia a IA ter MAIS e‑mails que o determinístico, mas um cortador ruim inflava a contagem e prendia o resultado errado. Agora a IA assume se cobrir ~igual ou mais e‑mail e com títulos não piores. Continua valendo: se o determinístico já saiu limpo (III Congresso, UNITINS), a IA é dispensada (grátis)."],
   ["13.78","2026-06-16","Conserto GERAL de e‑mail no cabeçalho (ajuda TODO anais): quando o trabalho tem título+autores certos mas o e‑mail está no bloco «AUTORIA:»/afiliação (sem rótulo «E‑mail:» nem «Autor correspondente»), o app agora PEGA esse e‑mail do cabeçalho e atribui ao autor. No «Encontro Científico dos Acadêmicos de Medicina» (tudo em CAIXA ALTA, nomes abreviados tipo «SANTOS, A.C.S»): saltou de 11 → 108 e‑mails com título limpo. E de quebra o III Congresso subiu de 1.700 → 2.057 e‑mails. Sem regressão nos outros. Obs.: nesse anais médico os nomes vêm abreviados no próprio PDF (sobrenome + iniciais), então o «nome completo» fica como o PDF traz."],
   ["13.77","2026-06-16","Novo formato de anais reconhecido (ex.: «Jornada Odontológica da Unimontes»): trabalhos SEM «RESUMO/Introdução/sumário», com título em Title Case e e‑mail «pelado» (sem rótulo «E‑mail:») — nenhum cortador pegava, então caía tudo na rede de segurança (e‑mails soltos sem título/nome). Novo cortador de ÚLTIMO RECURSO usa o e‑mail como âncora: o trabalho é o bloco acima dele (título + autores + afiliação), pareando o e‑mail ao autor pelo nome. No Jornada: 44 trabalhos, 44 e‑mails, ~45 nomes, ~30 títulos limpos — e os títulos duvidosos ficam pra IA completar. Bem travado: só entra quando nenhum outro cortador pega (não atrapalha III Congresso/UNITINS)."],
   ["13.76","2026-06-16","REGRA GERAL nova (vale p/ qualquer PDF, não só um): a IA preenche SÓ AS LACUNAS — trabalho sem título, e‑mail sem nome, ou caso difícil (⚠). Antes a regra «usar IA em TODO anais» mandava os 2.000+ trabalhos (até 800) pra IA mesmo quando o determinístico já tinha trazido tudo limpo — daí o custo R$9 e o resultado pior. Agora: o que já saiu limpo NÃO vai pra IA (rápido/grátis); num PDF NOVO de formato desconhecido, a maioria vira «lacuna» e a IA entra de verdade pra completar. Os e‑mails continuam 100% garantidos pela rede de segurança, com ou sem IA — a IA só melhora título/nome do que faltou."],
