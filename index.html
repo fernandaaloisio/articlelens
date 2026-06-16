@@ -2278,6 +2278,16 @@ function _nomeDoEmail(name, email, lowSemEmail){
   if(!derivado) return false;
   return !nrm(lowSemEmail||"").includes(nTok.join(" ")); // e não existe como nome real no texto
 }
+/* O e-mail (devolvido pela IA) existe no texto COMO E-MAIL e não é só o PEDAÇO FINAL de um maior?
+   A IA às vezes trunca o começo do local-part (ex.: "edson@x" → "son@x"); como "son@x" é substring de
+   "edson@x", o includes() simples deixava passar e a linha saía SEM NOME. Aqui exige que o e-mail NÃO venha
+   colado a um caractere de e-mail antes dele (início de palavra) — assim o truncado é rejeitado (o e-mail
+   inteiro já é capturado, com nome, em outra linha). */
+function _emailNoTexto(low, email){
+  if(!email || !low.includes(email)) return false;
+  const esc = email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp("(?:^|[^a-z0-9._%+\\-])" + esc, "i").test(low);
+}
 async function aiColetarAnais(text, fileName){
   // pica por PÁGINA (\f) acumulando ~7000 chars (trabalho raramente quebra; o dedup junta se quebrar)
   const pages=(text||"").split("\f"); const chunks=[]; let buf="";
@@ -2327,7 +2337,7 @@ async function aiColetarAnais(text, fileName){
       const authors=(w&&w.authors||[]).map(a=>({name:(a.name||"").trim(), email:(a.email||"").trim().toLowerCase()}))
         .filter(a=>{ if(!a.email||!/@/.test(a.email)) return false;
                      if(_emailInstitucional(a.email)) return false;
-                     if(!low.includes(a.email)){ semTexto++; return false; }   // IA devolveu @ que não está no texto
+                     if(!_emailNoTexto(low, a.email)){ semTexto++; return false; }   // IA devolveu @ truncado/inventado (não está no texto com início de palavra)
                      return true; });
       // ANTI-INVENÇÃO: se o nome foi MONTADO do e-mail (ex.: vhictor.hr → "Vhictor Hr") e NÃO aparece
       // no texto fora do e-mail → deixa VAZIO (melhor sem nome do que nome fabricado). Nome real fica.
@@ -4212,9 +4222,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.70";
+const VERSION = "13.71";
 const VERSION_DATE = "2026-06-15";
 const CHANGELOG = [
+  ["13.71","2026-06-15","Conserta linhas SEM NOME por e‑mail TRUNCADO pela IA: às vezes a IA cortava o começo do e‑mail (ex.: «edson@x» virava «son@x»). Como «son@x» é um pedaço de «edson@x», a trava anti‑invenção (que só checava se o texto «contém» o e‑mail) deixava passar — e a linha saía com o e‑mail errado e sem nome. Agora a trava exige que o e‑mail apareça com INÍCIO DE PALAVRA (não colado a outro e‑mail), então o truncado é rejeitado e fica só o e‑mail inteiro (que já vem com o nome certo em outra linha). No anais da UNITINS isso tira ~23 linhas‑lixo sem nome."],
   ["13.70","2026-06-15","Passa a usar o Haiku 4.5 (claude‑haiku‑4‑5) por padrão — MUITO mais barato que o Opus (US$ 1/US$ 5 por milhão de tokens, contra US$ 5/US$ 25 do Opus = 5× mais barato), com qualidade ótima pra ler texto e achar autor/e‑mail. Todo mundo é migrado pro Haiku 4.5 automaticamente uma vez (se você quiser voltar pro Opus de propósito na aba IA, sua escolha é respeitada). Também corrigi a tabela de preços do painel de Custos (o Opus 4.x estava sendo contado como US$ 15/US$ 75, que é o preço do Opus 3 antigo — agora mostra o valor certo)."],
   ["13.69","2026-06-15","Tempo na barra de progresso: agora mostra «⏱ X decorrido · ~Y restante» enquanto coleta (tanto na fila de PDFs quanto na leitura da IA por blocos), e o tempo TOTAL ao concluir («Linha concluída: … · ⏱ 2min 14s»). Assim dá pra saber quanto falta em vez de parecer travado."],
   ["13.68","2026-06-15","A IA agora AJUDA em anais GIGANTE sem travar nem errar feio (lição do «III Congresso»). Antes: a IA lia 1 bloco por chamada → num PDF de 2.000+ trabalhos seriam ~1.450 chamadas (horas/caro) → travava, e a trava de segurança desligava a IA e caía num determinístico que às vezes não conhecia o formato → saía lixo (Título com «Agradecimentos», Nome com «Palavras-chave»). Agora, 3 defesas: (1) RESGATE ESCALÁVEL — em anais gigante a IA faz UMA leitura e DESCOBRE o padrão (a «âncora» que separa os trabalhos); um cortador genérico aplica em TODO o PDF de graça, em segundos. (2) CONTROLE DE QUALIDADE — o resultado (da IA OU do determinístico) só é aceito se a maioria tiver título de verdade + e-mail; senão não é mostrado. (3) ANTI-LIXO universal — nenhum rótulo (Agradecimentos/Financiamento/Palavras-chave/CEP), instituição ou fragmento vira título/nome: o campo fica VAZIO e marcado pra revisar. Vale pra qualquer formato futuro."],
