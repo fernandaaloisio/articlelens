@@ -672,6 +672,23 @@ function _pendentesCount(){
 function _juntarEmailQuebrado(s){
   return s.replace(/([a-z0-9._%+\-]+@[a-z0-9\-]*)\n[ \t]*([a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.[a-z]{2,})/gi, "$1$2");
 }
+/* REPARA e‑mail com ESPAÇO no meio (o PDF mete espaço junto do @ ou antes do TLD): "x@ gmail.com",
+   "bb.com. br", "gmail. com" → junta. Conservador: o 2º nível só liga TLDs conhecidos, p/ não colar frase. */
+function _repararEmailEspacos(s){
+  s = s.replace(/([a-z0-9._%+\-]+)\s*@\s*([a-z0-9])/gi, "$1@$2");                                       // espaço junto do @
+  s = s.replace(/(@[a-z0-9.\-]*[a-z0-9])\s*\.\s*(com|br|org|net|edu|gov|info|inf|co|gob)\b/gi, "$1.$2"); // ". br" / ". com"
+  s = s.replace(/(@[a-z0-9.\-]+\.[a-z]{2,4})\s*\.\s*(br|com)\b/gi, "$1.$2");                             // 2º nível "x.com . br"
+  return s;
+}
+/* PULA capa + SUMÁRIO: num anais gigante o sumário (Título …… 123) ocupa centenas de páginas no começo e só
+   gera RUÍDO pra IA e pra rede de segurança. Acha o fim do sumário (última linha pontilhada) e devolve só o
+   MIOLO. Conservador: só corta se houver ≥6 linhas de sumário no começo (1ª metade) — senão devolve igual. */
+function _pularCapaSumario(text){
+  const re=/\.{4,}\s*\d{1,4}\s*$/gm; let last=-1, n=0, m;
+  while((m=re.exec(text))){ last=m.index+m[0].length; n++; }
+  if(n<6 || last<0 || last>(text||"").length*0.5) return text;   // sem sumário no começo → não corta
+  return text.slice(last);
+}
 /* TLD truncado no PRÓPRIO PDF: o texto acaba em "fulano@unitins" ou "fulano@unitins." (sem .br) e vem
    RESUMO/quebra logo depois. Completa SÓ domínios óbvios (lista branca) — é o único "palpite", e seguro
    porque o destino é único (unitins→.br, gmail→.com…). NÃO toca e‑mail já completo (@unitins.br fica). */
@@ -758,6 +775,7 @@ async function extractTextFromPDF(file){
   }
   let clean = consertarAcentos(out).normalize("NFC")   // junta acentos soltos (LaTeX) + compõe ç/ã
                    .replace(/[ \t]+/g," ").replace(/\n{3,}/g,"\n\n").trim();
+  clean = _repararEmailEspacos(clean);                  // tira espaço de dentro do e‑mail (x@ gmail / bb.com. br)
   clean = _juntarEmailQuebrado(clean);                  // cola e‑mail partido na quebra de linha (…@ + domínio)
   clean = _completarTLD(clean);                         // completa TLD truncado no PDF (@unitins → @unitins.br)
   if(!clean) throw new Error("PDF sem texto selecionável (provável imagem/escaneado — requer OCR)");
@@ -1595,6 +1613,41 @@ function cortarPorAncora(text, ancoraSrc){
     authors = uniq;
     if(!titulo && !authors.length) continue;
     works.push({ title:titulo, authors, _raw: text.slice(Math.max(0,ini-700), Math.min(text.length, fim)) });
+  }
+  return works;
+}
+/* BIBLIOTECA DE RODAPÉS — anais com RODAPÉ NUMERADO (ex.: UNITINS): título em CAPS, autores em Title‑Case com
+   nº sobrescrito ("Maria Santos1; João Lima2;…"), e‑mail nos rodapés numerados ("1. cargo… E‑mail: x"). Liga
+   autor↔e‑mail PELO NÚMERO — determinístico, grátis, com nome certo. Devolve [] quando não é esse formato. */
+function cortarPorRodapeNum(text){
+  const reIntro=/Introdu[çc][aã]o\s*:/gi; const intros=[]; let m;
+  while((m=reIntro.exec(text))) intros.push(m.index);
+  if(intros.length<6) return [];
+  const ehCAPS=l=>{const L=(l.match(/\p{L}/gu)||[]);return L.length>=4 && (l.match(/\p{Lu}/gu)||[]).length/L.length>0.7;};
+  const limpa=a=>a.replace(/[\d¹²³⁰⁴⁵⁶⁷⁸⁹*]+/g,"").replace(/\s+/g," ").replace(/^[,;.\s]+|[,;.\s]+$/g,"").trim();
+  const nomeOk=n=>n && n.split(/\s+/).filter(x=>x.length>1).length>=2;
+  const works=[];
+  for(let i=0;i<intros.length;i++){
+    const ini=intros[i], fim=(i+1<intros.length)?intros[i+1]:text.length;
+    const header=text.slice(Math.max(0,ini-950),ini);
+    const corpo=text.slice(ini,fim);
+    const numEmail={}; let f; const reF=/(\d{1,2})\s*[\.\)]\s*[^@\n]*?[Ee]\s*-?\s*mail\s*:?\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})/g;
+    while((f=reF.exec(corpo))) numEmail[f[1]]=f[2].toLowerCase();
+    if(!Object.keys(numEmail).length) continue;
+    const hjoin=header.replace(/\n/g," "); const numNome={}; let a;
+    const reA=/([A-ZÀ-Ý][A-Za-zÀ-ÿ.'\- ]{2,50}?)\s*(\d{1,2})\s*(?=[;,]|$)/g;
+    while((a=reA.exec(hjoin))){ const nm=limpa(a[1]); if(nomeOk(nm)) numNome[a[2]]=nm; }
+    const linhas=header.split(/\n/).map(s=>s.trim()).filter(Boolean)
+      .filter(l=>!/\.{3,}/.test(l)).filter(l=>!/^\d+$/.test(l)).filter(l=>!/^P[áa]g\./i.test(l))
+      .filter(l=>!/CONHECIMENTO|MOSTRA DE PESQUISA|ISBN|^[ÁA]REA\b/i.test(l))
+      .filter(l=>!/^CI[ÊE]NCIAS (SOCIAIS|DA SA[ÚU]DE|EXATAS|HUMANAS|AGR[ÁA]RIAS|BIOL)/i.test(l));
+    const ehAutor=l=>/[a-zà-ÿ]/.test(l) && !ehCAPS(l) && (/;/.test(l) || /[A-Za-zÀ-ÿ]\d/.test(l));
+    let aStart=-1; for(let k=linhas.length-1;k>=0;k--){ if(ehAutor(linhas[k])) aStart=k; else if(aStart>=0) break; }
+    let titL=[]; if(aStart>0){ let k=aStart-1; while(k>=0 && ehCAPS(linhas[k]) && !/;/.test(linhas[k])){ titL.unshift(linhas[k]); k--; } }
+    const titulo=titL.join(" ").replace(/\s+/g," ").trim();
+    const authors=[]; const vis=new Set();
+    for(const num of Object.keys(numEmail)){ const em=numEmail[num], nm=numNome[num]||""; if(em && !vis.has(em)){ authors.push({name:nm,email:em}); vis.add(em);} }
+    if(authors.length) works.push({title:titulo, authors, _raw:text.slice(Math.max(0,ini-950),fim)});
   }
   return works;
 }
@@ -2806,12 +2859,19 @@ async function collectFromPDF(file, mode){
     const viaMod = parseModeloSobrenomeNum(text);   // MODELO "SOBRENOME,Nome + e‑mail nº" ([] se não casar)
     const viaPal = parseModeloPalavrasChave(text);  // MODELO "anais com e‑mail no FIM" (sem RESUMO) ([] se não casar)
     const viaIntro = cortarPorIntroducao(text);     // MODELO "resumos com Introdução:/Autor correspondente" ([] se não casar)
+    const viaRod = cortarPorRodapeNum(text);        // MODELO "rodapé numerado" (autor nº ↔ e‑mail nº), ex.: UNITINS ([] se não casar)
+    const miolo = _pularCapaSumario(text);          // sem capa/sumário gigante → IA e rede de segurança sem ruído
     const comEmail = a => a ? a.filter(w=>(w.authors||[]).some(x=>x.email)).length : -1;
-    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro);
+    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod);
     // Prefere o SUMÁRIO (títulos oficiais, limpos). Só troca pro método antigo quando ele pega
     // MUITO mais e-mail (≥25% e +5) — aí o ganho compensa títulos um pouco menos limpos.
     let works;
-    if(eI>0 && eI>=eS && eI>=eP && eI>=eM && eI>=ePal){
+    if(eRod>0 && eRod>=eS && eRod>=eP && eRod>=eM && eRod>=ePal && eRod>=eI){
+      // anais de RODAPÉ NUMERADO (autor nº ↔ e‑mail nº, ex.: UNITINS) — determinístico, grátis, nome certo
+      works = viaRod;
+      modelosUsados["Anais · rodapé numerado"] = (modelosUsados["Anais · rodapé numerado"]||0) + 1;
+      lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
+    } else if(eI>0 && eI>=eS && eI>=eP && eI>=eM && eI>=ePal){
       // anais de RESUMOS (Introdução:/Autor correspondente) — milhares de trabalhos, determinístico e limpo
       works = viaIntro;
       modelosUsados["Anais · resumos (Introdução/Autor correspondente)"] = (modelosUsados["Anais · resumos (Introdução/Autor correspondente)"]||0) + 1;
@@ -2839,7 +2899,7 @@ async function collectFromPDF(file, mode){
     // (independe de RESUMO/sumário/formato). O determinístico acima vira só RESERVA (se a IA falhar/voltar vazia).
     if(AI.enabled && AI.orchestrate){
       try{
-        const wAI = await aiColetarAnais(text, file.name);
+        const wAI = await aiColetarAnais(miolo, file.name);
         const cnt = a => a.reduce((s,w)=>s+(w.authors||[]).filter(x=>x.email).length,0);
         if(cnt(wAI) > 0){                       // a IA voltou trabalhos → ela é a autoridade (não precisa "vencer" o det)
           works = wAI; nomeModelo = "Anais · IA por blocos (agnóstico)";
@@ -2852,9 +2912,9 @@ async function collectFromPDF(file, mode){
     // determinístico perdeu algum, ele entra como registro com CONTEXTO (a IA/revisão completa nome+título).
     try{
       const cap=new Set(); works.forEach(w=>(w.authors||[]).forEach(a=>{ if(a.email) cap.add(a.email.toLowerCase().trim()); }));
-      const low=text.toLowerCase();
-      const falta=[...new Set(extractEmails(text).filter(e=>!_emailInstitucional(e)).map(e=>e.toLowerCase()))].filter(e=>!cap.has(e));
-      for(const e of falta){ const idx=low.indexOf(e); const ctx=idx>=0?text.slice(Math.max(0,idx-1600),idx+200):"";
+      const low=miolo.toLowerCase();
+      const falta=[...new Set(extractEmails(miolo).filter(e=>!_emailInstitucional(e)).map(e=>e.toLowerCase()))].filter(e=>!cap.has(e));
+      for(const e of falta){ const idx=low.indexOf(e); const ctx=idx>=0?miolo.slice(Math.max(0,idx-1600),idx+200):"";
         works.push({ title:"", authors:[{name:"",email:e}], _raw:ctx, _faltante:true }); }
       if(falta.length) console.log("rede de segurança: "+falta.length+" @ recuperado(s) como registro");
     }catch(_){}
@@ -4260,9 +4320,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.72";
-const VERSION_DATE = "2026-06-15";
+const VERSION = "13.73";
+const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.73","2026-06-16","Três melhorias pra anais (pedido): (1) REPARA o e‑mail antes de coletar — o PDF mete espaço dentro do e‑mail («x@ gmail.com», «bb.com. br») e perdia o fim; agora junta certinho (sem colar frase). (2) PULA capa e SUMÁRIO gigante — num anais de milhares de páginas, o índice (Título …… 123) só atrapalhava a IA e a rede de segurança; agora o app trabalha direto no miolo (mais barato e menos lixo). (3) BIBLIOTECA DE RODAPÉS: novo cortador pro formato «rodapé numerado» (autor com nº no topo ↔ e‑mail no rodapé «1. … E‑mail: x», ex.: UNITINS) — liga autor↔e‑mail pelo número, com título e nome certos, SEM IA (grátis). No anais da UNITINS: 55 trabalhos, 136 e‑mails, 52 títulos, de graça."],
   ["13.72","2026-06-15","RECUPERA o NOME de e‑mails que ficavam sem nome, lendo os RODAPÉS do anais de 2 jeitos (nome REAL do texto, nunca inventado): (1) numerado — liga o autor do topo «Nome¹» ao rodapé «1. … E‑mail: x» pelo número; (2) nomeado — «Nome, cargo … E‑mail: x». No anais da UNITINS recuperou 9 de 11 dos que estavam sem nome (Samuel de O Almeida, Agno L F da Silva, Brennda Sousa Mota, Marisa Brito…). Só preenche nome vazio/ruim — não mexe nos que já estavam certos. Os raros que sobram (página com layout diferente) ficam marcados pra revisar."],
   ["13.71","2026-06-15","Conserta linhas SEM NOME por e‑mail TRUNCADO pela IA: às vezes a IA cortava o começo do e‑mail (ex.: «edson@x» virava «son@x»). Como «son@x» é um pedaço de «edson@x», a trava anti‑invenção (que só checava se o texto «contém» o e‑mail) deixava passar — e a linha saía com o e‑mail errado e sem nome. Agora a trava exige que o e‑mail apareça com INÍCIO DE PALAVRA (não colado a outro e‑mail), então o truncado é rejeitado e fica só o e‑mail inteiro (que já vem com o nome certo em outra linha). No anais da UNITINS isso tira ~23 linhas‑lixo sem nome."],
   ["13.70","2026-06-15","Passa a usar o Haiku 4.5 (claude‑haiku‑4‑5) por padrão — MUITO mais barato que o Opus (US$ 1/US$ 5 por milhão de tokens, contra US$ 5/US$ 25 do Opus = 5× mais barato), com qualidade ótima pra ler texto e achar autor/e‑mail. Todo mundo é migrado pro Haiku 4.5 automaticamente uma vez (se você quiser voltar pro Opus de propósito na aba IA, sua escolha é respeitada). Também corrigi a tabela de preços do painel de Custos (o Opus 4.x estava sendo contado como US$ 15/US$ 75, que é o preço do Opus 3 antigo — agora mostra o valor certo)."],
