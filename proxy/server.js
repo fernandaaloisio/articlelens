@@ -43,6 +43,9 @@ const fs = require("fs");
 const USAGE_FILE = "/tmp/articlelens_usage.json";
 // Preços USD por 1 milhão de tokens [entrada, saída] (ajuste se a Anthropic mudar)
 const PRICES = {
+  "claude-haiku-4-5":  [1, 5],     // Haiku 4.5 (atual, barato)
+  "claude-sonnet-4":   [3, 15],    // Sonnet 4.x
+  "claude-opus-4":     [5, 25],    // Opus 4.x (NÃO é 15/75 — isso é Opus 3)
   "claude-3-5-sonnet": [3, 15],
   "claude-3-7-sonnet": [3, 15],
   "claude-3-5-haiku":  [0.8, 4],
@@ -139,7 +142,7 @@ app.post("/v1/chat/completions", async (req, res) => {
     const { model, messages = [], max_tokens } = req.body || {};
     const sys  = messages.filter(m => m.role === "system").map(m => m.content).join("\n");
     const msgs = messages.filter(m => m.role !== "system").map(m => ({ role: m.role, content: m.content }));
-    const mdl  = model || "claude-3-5-sonnet-20240620";
+    const mdl  = model || "claude-haiku-4-5-20251001";
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": ANTHROPIC_VERSION },
