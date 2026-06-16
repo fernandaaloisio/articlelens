@@ -78,9 +78,9 @@
   .xbtn:hover{color:var(--danger);background:rgba(255,93,108,.1)}
 
   /* ---------- Inputs ---------- */
-  textarea,input[type=text],input[type=url]{
+  textarea,input[type=text],input[type=url],input[type=password],input[type=number]{
     width:100%;background:var(--bg);border:1px solid var(--border);border-radius:10px;
-    color:var(--text);padding:12px 13px;font-family:inherit;font-size:14px;resize:vertical}
+    color:var(--text);padding:12px 13px;font-family:inherit;font-size:14px;resize:vertical;box-sizing:border-box}
   textarea:focus,input:focus{outline:none;border-color:var(--accent)}
   textarea{min-height:150px;font-family:"DM Mono",monospace;font-size:13px}
   label.fld{display:block;font-size:12px;color:var(--muted);margin:14px 0 5px}
@@ -1544,6 +1544,57 @@ function parseModeloPalavrasChave(text){
   }
   return works;
 }
+/* Anais de RESUMOS com seção "Introdução:" por trabalho (ex.: III Congresso de Educação/UNIMONTES, milhares de
+   trabalhos). Cada trabalho: TÍTULO (maiúsc.) → AUTORES (maiúsc.; ";" ou e‑mail inline) → "Introdução: …" →
+   "Palavras‑chave: …" → opcional "Autor correspondente: email". Determinístico/grátis; cobre PDFs gigantes
+   sem IA. Devolve [] quando o formato NÃO é esse (não interfere nos outros anais). */
+function cortarPorIntroducao(text){
+  const reIntro = /Introdu[çc][aã]o\s*:/gi;
+  const reAC = /Autor correspondente:\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/i;
+  const EMAIL1 = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+  const EMAILG = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+  const intros = []; let m;
+  while((m = reIntro.exec(text))) intros.push(m.index);
+  if(intros.length < 15) return [];                         // não é esse formato
+  const ehCAPS = l => { const L=(l.match(/\p{L}/gu)||[]); return L.length>=4 && (l.match(/\p{Lu}/gu)||[]).length/L.length > 0.7; };
+  const ehAutorLinha = l => /;/.test(l) || /\p{L}\d/u.test(l) || EMAIL1.test(l);
+  const limpaNome = a => a.replace(/[\d¹²³⁰⁴⁵⁶⁷⁸⁹*]+/g,"").replace(/\s+/g," ").replace(/^[,;.\s]+|[,;.\s]+$/g,"").trim();
+  const nomeOk = n => n && n.split(/\s+/).filter(p=>p.length>1).length>=2;
+  const works = [];
+  for(let i=0;i<intros.length;i++){
+    const ini=intros[i], fim=(i+1<intros.length)?intros[i+1]:text.length;
+    const header = text.slice(Math.max(0,ini-700), ini);
+    const linhas = header.split(/\n/).map(s=>s.trim()).filter(Boolean)
+      .filter(l=>!/\.{3,}/.test(l)).filter(l=>!/^\d+$/.test(l));    // tira sumário (pontilhados) e nº de página
+    let ai=linhas.length-1; while(ai>=0 && !ehCAPS(linhas[ai])) ai--;
+    let autorLinhas=[], j=ai;
+    while(j>=0 && ehCAPS(linhas[j]) && ehAutorLinha(linhas[j])){ autorLinhas.unshift(linhas[j]); j--; }
+    if(!autorLinhas.length && ai>=0 && ehCAPS(linhas[ai])){ autorLinhas=[linhas[ai]]; j=ai-1; }
+    let titLinhas=[]; while(j>=0 && ehCAPS(linhas[j])){ titLinhas.unshift(linhas[j]); j--; }
+    const titulo = titLinhas.join(" ").replace(/\s+/g," ").trim();
+    const blocoAutor = autorLinhas.join(" ");
+    let authors=[];
+    const inline = blocoAutor.match(EMAILG)||[];
+    if(inline.length){                                       // formato 2: "NOME n, email  NOME n, email"
+      const re=/([A-Za-zÀ-Ÿ][A-Za-zÀ-Ÿ.'\- ]+?)\s*\d*\s*,?\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g; let mm;
+      while((mm=re.exec(blocoAutor))){ const n=limpaNome(mm[1]); if(nomeOk(n)) authors.push({name:n, email:mm[2].toLowerCase()}); }
+    } else {                                                 // formato 1: nomes por ";" + "Autor correspondente:" no fim
+      const nomes = blocoAutor.split(/;/).map(limpaNome).filter(nomeOk);
+      let email=""; const corpo=text.slice(ini,fim); const ac=corpo.match(reAC); if(ac) email=ac[1].toLowerCase();
+      authors = nomes.map((n,idx)=>({name:n, email: idx===0?email:""}));   // 1º autor; o pareamento por nome corrige depois
+      if(!nomes.length && email) authors=[{name:"",email}];
+    }
+    // dedup de autores por nome (o PDF às vezes repete o 1º autor: "GABRIELLA…; GABRIELLA…")
+    const seen=new Map(); const uniq=[];
+    for(const a of authors){ const k=(a.name||"").toLowerCase().trim();
+      if(!k){ uniq.push(a); continue; }
+      if(!seen.has(k)){ seen.set(k,a); uniq.push(a); } else if(a.email && !seen.get(k).email){ seen.get(k).email=a.email; } }
+    authors = uniq;
+    if(!titulo && !authors.length) continue;
+    works.push({ title:titulo, authors, _raw: text.slice(Math.max(0,ini-700), Math.min(text.length, fim)) });
+  }
+  return works;
+}
 function cortarPorSumario(text){
   const pages = text.split("\f");
   if(pages.length<8) return null;
@@ -2626,12 +2677,18 @@ async function collectFromPDF(file, mode){
     const viaSep = separarAnais(text);
     const viaMod = parseModeloSobrenomeNum(text);   // MODELO "SOBRENOME,Nome + e‑mail nº" ([] se não casar)
     const viaPal = parseModeloPalavrasChave(text);  // MODELO "anais com e‑mail no FIM" (sem RESUMO) ([] se não casar)
+    const viaIntro = cortarPorIntroducao(text);     // MODELO "resumos com Introdução:/Autor correspondente" ([] se não casar)
     const comEmail = a => a ? a.filter(w=>(w.authors||[]).some(x=>x.email)).length : -1;
-    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal);
+    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro);
     // Prefere o SUMÁRIO (títulos oficiais, limpos). Só troca pro método antigo quando ele pega
     // MUITO mais e-mail (≥25% e +5) — aí o ganho compensa títulos um pouco menos limpos.
     let works;
-    if(ePal>0 && ePal>=eS && ePal>=eP && ePal>=eM){
+    if(eI>0 && eI>=eS && eI>=eP && eI>=eM && eI>=ePal){
+      // anais de RESUMOS (Introdução:/Autor correspondente) — milhares de trabalhos, determinístico e limpo
+      works = viaIntro;
+      modelosUsados["Anais · resumos (Introdução/Autor correspondente)"] = (modelosUsados["Anais · resumos (Introdução/Autor correspondente)"]||0) + 1;
+      lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
+    } else if(ePal>0 && ePal>=eS && ePal>=eP && ePal>=eM){
       // anais SEM "RESUMO", e‑mail no fim (Jornada UNITINS) → o cortador específico desse formato
       works = viaPal;
       modelosUsados["Anais · e‑mail no fim (Palavras‑chave)"] = (modelosUsados["Anais · e‑mail no fim (Palavras‑chave)"]||0) + 1;
@@ -4060,9 +4117,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.66";
-const VERSION_DATE = "2026-06-07";
+const VERSION = "13.67";
+const VERSION_DATE = "2026-06-15";
 const CHANGELOG = [
+  ["13.67","2026-06-15","ANAIS GIGANTE de RESUMOS agora sai LIMPO (ex.: «III Congresso de Educação», +2.000 trabalhos): esse formato (TÍTULO em maiúsculas → autores → «Introdução:» → «Palavras‑chave:» → «Autor correspondente: e‑mail») não era reconhecido e o resultado vinha todo errado (a coluna Título pegava «Agradecimentos/Financiamento» e a coluna Nome pegava «Palavras‑chave:»). Novo cortador determinístico (grátis, sem IA, não trava): reconhece o formato e extrai título + autores + e‑mail de cada trabalho — 2.013 trabalhos, ~1.840 títulos limpos e ~1.700 e‑mails certos, com pareamento nome↔e‑mail. Suporta também autores com e‑mail «inline» (NOME, e‑mail). NÃO afeta os outros anais (devolve vazio quando o formato é outro). Login: campo Nome e Senha agora têm o MESMO tamanho (a Senha estava sem estilo). CSV sem a coluna «Fonte»."],
   ["13.61","2026-06-15","Conserta o TRAVAMENTO em anais GIGANTE: um PDF enorme (ex.: «III Congresso», 10 milhões de caracteres e 2.522 e‑mails) viraria ~1.450 chamadas à IA (uma por bloco) → horas e custo enorme, parecendo travado. Agora, acima de 80 blocos, o app NÃO usa a IA por bloco — coleta no determinístico (rápido e grátis) e a rede de segurança garante todos os e‑mails. Avisa por mensagem. Para esses gigantes, a IA por bloco só compensa com Haiku barato."],
   ["13.60","2026-06-07","Login da EQUIPE simplificado: o endereço do servidor (Render) agora vem JÁ PREENCHIDO e fica escondido em «⚙ servidor» — a equipe só digita a senha e entra. Antes o campo de endpoint vinha vazio (ou com openrouter) e travava o pessoal. Senha de equipe (USER_TOKEN) entra como não‑admin (sem abas de IA/Custos); senha de admin entra como admin."],
   ["13.59","2026-06-07","Barra de carregamento da IA: ao processar anais, a barra agora enche conforme a IA lê cada bloco e mostra «🧠 IA lendo o anais — bloco X/Y (Z%)» com o modelo — assim dá pra acompanhar (Opus é lento) em vez de parecer travado. Barra com animação suave."],
