@@ -2305,10 +2305,13 @@ async function aiColetarAnais(text, fileName){
   const lowSemEmail = low.replace(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/gi," ");
   const works=[]; let brutos=0, falhas=0, semTexto=0, inventados=0;
   _aiDbgRaw=""; _aiDbgErr="";
+  const _tIA = { t0: Date.now() };   // cronômetro da leitura por blocos
   for(let i=0;i<chunks.length;i++){
     { const pctIA=Math.round((i/chunks.length)*100);
       const pm=document.getElementById("progMeter"); if(pm) pm.style.width=pctIA+"%";
-      setStatus("🧠 IA lendo o anais — bloco <b>"+(i+1)+"/"+chunks.length+"</b> ("+pctIA+"%)… (modelo "+(AI.model||"")+")"); }
+      const eta=_etaTxt(_tIA, i, chunks.length);
+      setStatus("🧠 IA lendo o anais — bloco <b>"+(i+1)+"/"+chunks.length+"</b> ("+pctIA+"%)… (modelo "+(AI.model||"")+")"
+        + (eta? " <span style='color:var(--muted)'>· "+eta+"</span>":"")); }
     let ws=[]; try{ ws=await aiExtrairBloco(chunks[i], i===0); }catch(_){ falhas++; }
     brutos += (ws||[]).length;
     for(const w of (ws||[])){
@@ -2898,6 +2901,7 @@ function excluirSemEmail(){
 async function processBatch(){
   if(!fileQueue.length){ toast("Nenhum arquivo na fila.", "warn"); return; }
   const total = fileQueue.length; let done = 0;
+  _batchTimer = { t0: Date.now() };          // cronômetro da coleta (tempo decorrido/estimado)
   errorsThisRun = [];
   modelosUsados = {};
   _pdfsBloqueados = [];                    // zera os PDFs travados por baixa cobertura
@@ -3079,8 +3083,9 @@ async function processBatch(){
   const trab = allResults.length;
   const idxMsg = lastIndice ? " · índice esperava "+lastIndice.total : "";
   const revMsg = inic.nFlag ? " · ⚠️ "+inic.nFlag+" nomes só com iniciais — REVISAR" : "";
+  const _tempoTot = _batchTimer ? " · ⏱ "+_fmtDur(Date.now()-_batchTimer.t0) : "";
   setStatus("Linha concluída: <b>"+trab+"</b> trabalhos com e‑mail"+idxMsg+" · "+ex.trabRem
-            +" removidos (sem e‑mail)"+revMsg+". Gere o Excel quando quiser.");
+            +" removidos (sem e‑mail)"+revMsg+_tempoTot+". Gere o Excel quando quiser.");
   const _nDup = (lastDuplicatas||[]).reduce((s,d)=>s+(d.vezes-1),0);
   if(_pdfsBloqueados && _pdfsBloqueados.length){
     toast("⛔ "+_pdfsBloqueados.length+" PDF(s) TRAVADO(s) por cobertura < "+META_COBERTURA+"% — veja em 📊 Cobertura e revise. "
@@ -3097,12 +3102,23 @@ async function processBatch(){
    UI — abas, progresso, status, toasts
    ========================================================================= */
 function setStatus(html){ document.getElementById("statusMsg").innerHTML = html; }
+// ---- tempo decorrido / estimado (mostra no progresso) ----
+let _batchTimer = null;
+function _fmtDur(ms){ const s=Math.max(0,Math.round(ms/1000)); if(s<60) return s+"s"; const m=Math.floor(s/60), r=s%60; return m+"min"+(r?(" "+r+"s"):""); }
+function _etaTxt(timer, done, total){
+  if(!timer) return "";
+  let s = "⏱ "+_fmtDur(Date.now()-timer.t0)+" decorrido";
+  if(done>0 && total>0 && done<total){ const el=Date.now()-timer.t0; s += " · ~"+_fmtDur(el/done*(total-done))+" restante"; }
+  return s;
+}
 function setProgress(done,total,name){
   const pct = total? Math.round(done/total*100) : 0;
   document.getElementById("progMeter").style.width = pct+"%";
-  setStatus(name
+  const eta = _etaTxt(_batchTimer, done, total);
+  const sufixo = eta ? " <span style='color:var(--muted)'>· "+eta+"</span>" : "";
+  setStatus((name
     ? "Processando "+(done+1)+" de "+total+" — <b>"+escapeHtml(name)+"</b>"
-    : "Processando "+done+" de "+total+" ("+pct+"%)...");
+    : "Processando "+done+" de "+total+" ("+pct+"%)...") + sufixo);
 }
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 
@@ -4187,9 +4203,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.68";
+const VERSION = "13.69";
 const VERSION_DATE = "2026-06-15";
 const CHANGELOG = [
+  ["13.69","2026-06-15","Tempo na barra de progresso: agora mostra «⏱ X decorrido · ~Y restante» enquanto coleta (tanto na fila de PDFs quanto na leitura da IA por blocos), e o tempo TOTAL ao concluir («Linha concluída: … · ⏱ 2min 14s»). Assim dá pra saber quanto falta em vez de parecer travado."],
   ["13.68","2026-06-15","A IA agora AJUDA em anais GIGANTE sem travar nem errar feio (lição do «III Congresso»). Antes: a IA lia 1 bloco por chamada → num PDF de 2.000+ trabalhos seriam ~1.450 chamadas (horas/caro) → travava, e a trava de segurança desligava a IA e caía num determinístico que às vezes não conhecia o formato → saía lixo (Título com «Agradecimentos», Nome com «Palavras-chave»). Agora, 3 defesas: (1) RESGATE ESCALÁVEL — em anais gigante a IA faz UMA leitura e DESCOBRE o padrão (a «âncora» que separa os trabalhos); um cortador genérico aplica em TODO o PDF de graça, em segundos. (2) CONTROLE DE QUALIDADE — o resultado (da IA OU do determinístico) só é aceito se a maioria tiver título de verdade + e-mail; senão não é mostrado. (3) ANTI-LIXO universal — nenhum rótulo (Agradecimentos/Financiamento/Palavras-chave/CEP), instituição ou fragmento vira título/nome: o campo fica VAZIO e marcado pra revisar. Vale pra qualquer formato futuro."],
   ["13.67","2026-06-15","ANAIS GIGANTE de RESUMOS agora sai LIMPO (ex.: «III Congresso de Educação», +2.000 trabalhos): esse formato (TÍTULO em maiúsculas → autores → «Introdução:» → «Palavras‑chave:» → «Autor correspondente: e‑mail») não era reconhecido e o resultado vinha todo errado (a coluna Título pegava «Agradecimentos/Financiamento» e a coluna Nome pegava «Palavras‑chave:»). Novo cortador determinístico (grátis, sem IA, não trava): reconhece o formato e extrai título + autores + e‑mail de cada trabalho — 2.013 trabalhos, ~1.840 títulos limpos e ~1.700 e‑mails certos, com pareamento nome↔e‑mail. Suporta também autores com e‑mail «inline» (NOME, e‑mail). NÃO afeta os outros anais (devolve vazio quando o formato é outro). Login: campo Nome e Senha agora têm o MESMO tamanho (a Senha estava sem estilo). CSV sem a coluna «Fonte»."],
   ["13.61","2026-06-15","Conserta o TRAVAMENTO em anais GIGANTE: um PDF enorme (ex.: «III Congresso», 10 milhões de caracteres e 2.522 e‑mails) viraria ~1.450 chamadas à IA (uma por bloco) → horas e custo enorme, parecendo travado. Agora, acima de 80 blocos, o app NÃO usa a IA por bloco — coleta no determinístico (rápido e grátis) e a rede de segurança garante todos os e‑mails. Avisa por mensagem. Para esses gigantes, a IA por bloco só compensa com Haiku barato."],
