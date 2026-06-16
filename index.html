@@ -1710,6 +1710,9 @@ function _tituloRuim(s){ s=(s||"").trim(); if(!s) return false;
   if(/\b(agradec|financiament|fapemig|cnpq|capes|faperj|apq-)/i.test(s) && s.length<70) return true;
   if(/^[A-ZÀ-Ÿ]{3,}\s*[-–]\s*[A-Z0-9]/.test(s) && s.length<40) return true;      // código de fomento "FAPEMIG - APQ-…"
   if(/\//.test(s) && s.length<40) return true;                                   // sigla curta "(PROINIC/BIC- UNI.)"
+  if(/^(faculdades?|universidade|instituto de)\b/i.test(s)) return true;          // começa com INSTITUIÇÃO = afiliação
+  if(/universidade|faculdade|\bcampus\b|instituto/i.test(s) && /,\s*brasil\b|[-–]\s*[A-Z]{2}\b|boa vista|goi[âa]nia/i.test(s)) return true; // afiliação + localidade
+  if(/\bdoi\b|v\.\s*\d+,\s*n\.\s*\d+|global open|et al\./i.test(s)) return true;  // referência bibliográfica colada
   return false; }
 function _nomeRuim(s){ s=(s||"").trim(); if(!s) return false;
   if(_ROTULO_RE.test(s)) return true;
@@ -4479,9 +4482,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.84";
+const VERSION = "13.85";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.85","2026-06-16","Título errado agora VAI pra revisão: o detector de título-lixo passou a pegar (1) afiliação que virou título («CURSO DE MEDICINA DA UNIVERSIDADE… BOA VISTA - RR, BRASIL»), (2) lista de autores no lugar do título, (3) referência bibliográfica colada («… DOI: 10.1097… GLOBAL OPEN, V. 11, N. 4»), e (4) título que começa com instituição («Faculdades Integradas…»). Esses viram «sem título» e entram como ⚠ pra revisar — antes passavam como se estivessem certos. Testado no anais de Medicina: 5 títulos errados marcados, 94 bons mantidos."],
   ["13.84","2026-06-16","Recupera o nome ABREVIADO de verdade (anais de Medicina): depois de barrar os nomes inventados, o app vai no bloco «AUTORIA: SOBRENOME, X.Y.Z; …» e casa cada e‑mail SEM nome pelo SOBRENOME ou pelas INICIAIS contidas no e‑mail (ex.: anacarol.acss → «SANTOS, A.C.S»; ricardonunes → «NUNES, R.F.»; maria.castro2 → «CASTRO, M.L.D»). É a forma honesta do PDF — não inventa. Os e‑mails que realmente não dá pra saber de quem são (ex.: psycotrin@ufg.br) ficam vazios pra revisar. Resultado: bem menos linhas sem nome, e nenhuma inventada."],
   ["13.83","2026-06-16","Trava DURA contra nome chutado pela IA: agora o app VERIFICA cada nome contra o texto do PDF. Se o nome que a IA devolveu NÃO aparece no PDF (ela inventou ou expandiu iniciais, ou é um e‑mail tipo «psycotrin@ufg.br» que não dá pra saber de quem é), o app REJEITA — usa o nome como está no PDF (ex.: mantém «SANTOS, A.C.S» em vez de virar «Ana Carolina Santos») ou deixa VAZIO pra revisar. Não é mais a instrução na IA (que ela ignorava) — é uma checagem determinística que a IA não tem como furar. Vale pra qualquer PDF."],
   ["13.82","2026-06-16","Conserta o anais de Medicina (Encontro): (1) TÍTULO limpo — antes saía grudado com o cabeçalho de página/sumário («ORTOPEDIA PÁGINA 65 … ANAIS DO ENCONTRO … issn … MODALIDADE: … AUTORIA: …»); agora extrai só o título real («CARDIOTOXICIDADE DA QUIMIOTERAPIA…»). (2) NOME não é mais INVENTADO — a IA estava EXPANDINDO as iniciais («SANTOS, A.C.S» → «Ana Carolina Santos»); agora ela é instruída a devolver o nome EXATAMENTE como está no PDF (abreviado, se for o caso). (3) Os trabalhos com erro agora VÃO pra conferência mesmo tendo vindo da IA (antes escapavam). Obs.: nesse PDF os nomes vêm abreviados no original — então saem abreviados, mas certos."],
