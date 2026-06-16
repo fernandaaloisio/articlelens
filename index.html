@@ -2165,6 +2165,10 @@ const fmtMoney = v => fmtBRL(v)+" <span style='color:var(--muted);font-weight:40
 let aiUsage = (()=>{ try{ return JSON.parse(localStorage.getItem("articlelens_usage")) || {in:0,out:0,usd:0,calls:0}; }catch(e){ return {in:0,out:0,usd:0,calls:0}; } })();
 // Histórico de custo POR DIA (no navegador → não zera quando o Render reinicia). Dia → US$.
 let costHist = (()=>{ try{ return JSON.parse(localStorage.getItem("articlelens_costhist")) || {}; }catch(e){ return {}; } })();
+// migra chaves antigas sem zero à esquerda (2026-6-5 → 2026-06-05) e JUNTA duplicatas do mesmo dia
+(function(){ try{ const m={}; let mud=false;
+  for(const [k,v] of Object.entries(costHist)){ const nk=_normDia(k); if(nk!==k) mud=true; m[nk]=(m[nk]||0)+v; }
+  costHist=m; if(mud) localStorage.setItem("articlelens_costhist", JSON.stringify(m)); }catch(e){} })();
 function _diaHoje(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 function trackAIUsage(data){
   const u=data&&data.usage||{};
@@ -3548,9 +3552,12 @@ async function loadUsage(){
 }
 /* ===== GRÁFICO de gastos (histórico local por dia/mês/ano) ===== */
 let _chartPeriodo = "dia";
+function _normDia(k){ const p=String(k).split("-"); if(p.length!==3) return String(k);
+  return p[0].padStart(4,"0")+"-"+p[1].padStart(2,"0")+"-"+p[2].padStart(2,"0"); }   // junta "2026-6-5" e "2026-06-05"
 function _aggCost(){
   const dia={}, mes={}, ano={}; let total=0;
-  for(const [d,v] of Object.entries(costHist||{})){
+  for(const [d0,v] of Object.entries(costHist||{})){
+    const d=_normDia(d0);
     dia[d]=(dia[d]||0)+v; mes[d.slice(0,7)]=(mes[d.slice(0,7)]||0)+v; ano[d.slice(0,4)]=(ano[d.slice(0,4)]||0)+v; total+=v;
   }
   return {dia,mes,ano,total};
@@ -3561,10 +3568,11 @@ function renderCostChart(){
   const hoje=_diaHoje();
   const set=(id,v)=>{const e=document.getElementById(id); if(e)e.innerHTML=fmtBRL(v)+"<div style='font-size:10px;color:var(--muted);font-weight:400'>"+fmtUSD(v)+"</div>";};
   set("chToday",a.dia[hoje]||0); set("chMonth",a.mes[hoje.slice(0,7)]||0); set("chYear",a.ano[hoje.slice(0,4)]||0); set("chTotal",a.total);
+  const byKey=(x,y)=>x[0]<y[0]?-1:(x[0]>y[0]?1:0);
   let entries;
-  if(_chartPeriodo==="mes") entries=Object.entries(a.mes).sort();
-  else if(_chartPeriodo==="ano") entries=Object.entries(a.ano).sort();
-  else entries=Object.entries(a.dia).sort().slice(-30);     // últimos 30 dias
+  if(_chartPeriodo==="mes") entries=Object.entries(a.mes).sort(byKey);
+  else if(_chartPeriodo==="ano") entries=Object.entries(a.ano).sort(byKey);
+  else entries=Object.entries(a.dia).sort(byKey).slice(-30);     // últimos 30 dias
   if(!entries.length){ box.innerHTML="<div class='aihelp' style='margin:auto'>Sem gastos registrados ainda. Rode uma coleta com a IA ligada.</div>"; return; }
   const max=Math.max(...entries.map(e=>e[1]),0.0001);
   box.innerHTML=entries.map(([k,v])=>{
@@ -4402,9 +4410,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.80";
+const VERSION = "13.81";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.81","2026-06-16","Conserta as DATAS REPETIDAS no gráfico de gastos: versões antigas gravavam a data sem zero à esquerda (ex.: «2026-6-5») e o app mostrava como um dia diferente de «2026-06-05» — virava o mesmo dia duas vezes. Agora as datas são normalizadas e os dias iguais são JUNTADOS (na hora de mostrar e no histórico salvo). Ordenação do gráfico por data corrigida."],
   ["13.80","2026-06-16","Botão «🗑️ Zerar histórico» no painel de Custos. Os valores altos no gráfico (ex.: 06‑15) eram dos dias em que testamos com Opus E quando o preço do Opus estava gravado 3× maior do que é (bug corrigido na v13.70). O cálculo de AGORA está certo (Opus US$5/US$25, Haiku US$1/US$5 por milhão de tokens) — repare que hoje deu ~US$0. O botão apaga o histórico salvo no navegador pra recomeçar limpo, sem os valores inflados antigos."],
   ["13.79","2026-06-16","Ajuste na divisão de trabalho IA × determinístico (geral, p/ formatos novos): quando o determinístico NÃO sai limpo (ex.: anais com «nomes; … e‑mails;» em listas separadas, que confunde o pareamento nome↔e‑mail), agora a IA ASSUME e refaz a coleta — ela entende o formato. Antes a trava exigia a IA ter MAIS e‑mails que o determinístico, mas um cortador ruim inflava a contagem e prendia o resultado errado. Agora a IA assume se cobrir ~igual ou mais e‑mail e com títulos não piores. Continua valendo: se o determinístico já saiu limpo (III Congresso, UNITINS), a IA é dispensada (grátis)."],
   ["13.78","2026-06-16","Conserto GERAL de e‑mail no cabeçalho (ajuda TODO anais): quando o trabalho tem título+autores certos mas o e‑mail está no bloco «AUTORIA:»/afiliação (sem rótulo «E‑mail:» nem «Autor correspondente»), o app agora PEGA esse e‑mail do cabeçalho e atribui ao autor. No «Encontro Científico dos Acadêmicos de Medicina» (tudo em CAIXA ALTA, nomes abreviados tipo «SANTOS, A.C.S»): saltou de 11 → 108 e‑mails com título limpo. E de quebra o III Congresso subiu de 1.700 → 2.057 e‑mails. Sem regressão nos outros. Obs.: nesse anais médico os nomes vêm abreviados no próprio PDF (sobrenome + iniciais), então o «nome completo» fica como o PDF traz."],
