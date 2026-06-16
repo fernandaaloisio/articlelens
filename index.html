@@ -1548,8 +1548,12 @@ function parseModeloPalavrasChave(text){
    trabalhos). Cada trabalho: TÍTULO (maiúsc.) → AUTORES (maiúsc.; ";" ou e‑mail inline) → "Introdução: …" →
    "Palavras‑chave: …" → opcional "Autor correspondente: email". Determinístico/grátis; cobre PDFs gigantes
    sem IA. Devolve [] quando o formato NÃO é esse (não interfere nos outros anais). */
-function cortarPorIntroducao(text){
-  const reIntro = /Introdu[çc][aã]o\s*:/gi;
+function cortarPorIntroducao(text){ return cortarPorAncora(text, "Introdu[\\u00e7c][\\u00e3a]o\\s*:"); }
+/* Cortador GENÉRICO por ÂNCORA: a âncora é um rótulo curto que aparece 1× por trabalho, logo no começo do
+   resumo (ex.: "Introdução:", "Resumo:", "Apresentação:"). Título+autores ficam nas linhas ACIMA da âncora.
+   A IA pode DESCOBRIR a âncora num anais de formato novo (aiDescobrirAncora) e este motor aplica em tudo. */
+function cortarPorAncora(text, ancoraSrc){
+  const reIntro = new RegExp(ancoraSrc, "gi");
   const reAC = /Autor correspondente:\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/i;
   const EMAIL1 = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
   const EMAILG = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
@@ -1595,6 +1599,54 @@ function cortarPorIntroducao(text){
   }
   return works;
 }
+/* ===== DEFESA UNIVERSAL "não errar feio": nunca deixar um RÓTULO/instituição/fragmento virar título ou nome.
+   Vale pra QUALQUER formato e qualquer método (determinístico OU IA). Quando detecta lixo, ESVAZIA o campo
+   (vira ⚠ pra revisar) em vez de mostrar errado. ===== */
+const _ROTULO_RE = /^(agradecimento|financiament|inanciament|palavras?[-\s]?chave|keywords?|n[úu]mero de aprova|conflito|apoio financeiro|fonte de financ|introdu[çc]|objetivo\b|materiais? e m|metodologia|resultados?\b|discuss|conclus|considera[çc]|refer[êe]ncia|resumo\b|abstract\b|n[íi]vel superior|coordena[çc][ãa]o de aperfei|cep\b|ceua\b|autor correspondente)/i;
+const _INST_RE = /(universidade|universit[áa]ri|instituto|faculdade|unimontes|unitins|ufra|uemg|\bcapes\b|\bcnpq\b|fapemig|faperj|\bicv\b|\bpibic\b|minas gerais|estado de|ensino fundamental|ensino m[ée]dio)/i;
+function _tituloRuim(s){ s=(s||"").trim(); if(!s) return false;
+  if(_ROTULO_RE.test(s)) return true;
+  if(/^[\p{Ll}(\[]/u.test(s)) return true;                                       // começa minúsculo ou "(" = fragmento
+  if(/\b(agradec|financiament|fapemig|cnpq|capes|faperj|apq-)/i.test(s) && s.length<70) return true;
+  if(/^[A-ZÀ-Ÿ]{3,}\s*[-–]\s*[A-Z0-9]/.test(s) && s.length<40) return true;      // código de fomento "FAPEMIG - APQ-…"
+  if(/\//.test(s) && s.length<40) return true;                                   // sigla curta "(PROINIC/BIC- UNI.)"
+  return false; }
+function _nomeRuim(s){ s=(s||"").trim(); if(!s) return false;
+  if(_ROTULO_RE.test(s)) return true;
+  if(/[:\/]/.test(s)) return true;                                               // nome real não tem ":" nem "/"
+  if(_INST_RE.test(s)) return true;                                              // é instituição/lugar, não pessoa
+  return false; }
+function _limparRotulos(records){
+  let nt=0, nn=0;
+  for(const r of (records||[])){
+    if(r && _tituloRuim(r.title)){ r.title=""; nt++; }                           // título-lixo → vazio (vira "sem título" p/ revisar)
+    for(const a of (r&&r.authors||[])){ if(a.name && _nomeRuim(a.name)){ a.name=""; nn++; } }
+  }
+  if(nt||nn) console.log("limparRotulos: "+nt+" títulos e "+nn+" nomes esvaziados (eram rótulos/instituição).");
+  return {nt, nn};
+}
+/* Qualidade do resultado de um anais: fração de trabalhos com título DE VERDADE e com e-mail. Usado p/ DECIDIR
+   se aceitamos o que um método (determinístico ou o resgate por IA) produziu — se vier ruim, NÃO mostramos. */
+function _qualidadeAnais(works){
+  if(!works || !works.length) return {ok:false, score:0, comTitulo:0, comEmail:0, total:0};
+  let comTit=0, comEmail=0;
+  for(const w of works){ if(w.title && !_tituloRuim(w.title) && w.title.length>8) comTit++;
+    if((w.authors||[]).some(a=>a.email)) comEmail++; }
+  const score = comTit / works.length;
+  return {ok: works.length>=10 && score>=0.5 && comEmail>0, score, comTitulo:comTit, comEmail, total:works.length};
+}
+/* A IA descobre, numa amostra, a ÂNCORA que separa os trabalhos (1 chamada barata, escala p/ anais gigante). */
+async function aiDescobrirAncora(text){
+  const t=text||""; const ini=Math.floor(t.length*0.45); const amostra=t.slice(ini, ini+7000);
+  const sys="Você analisa um trecho de ANAIS acadêmico (vários trabalhos em sequência) e descobre o RÓTULO que "
+    + "se repete UMA vez no começo de CADA trabalho, para um programa cortar o documento. Responda só JSON.";
+  const user="Cada trabalho começa com TÍTULO e AUTORES e logo depois um rótulo de seção. Diga qual rótulo curto "
+    + "aparece exatamente 1× por trabalho e marca o INÍCIO do resumo (ex.: \"Introdução:\", \"Resumo:\", "
+    + "\"Apresentação:\", \"Objetivo:\"). Responda EXATAMENTE {\"ancora\":\"Texto:\"}.\n\nTRECHO:\n"+amostra;
+  const raw=await aiChat([{role:"system",content:sys},{role:"user",content:user}], AI.model||_repairModelNow());
+  try{ const j=JSON.parse((String(raw).match(/\{[\s\S]*?\}/)||["{}"])[0]); return (j.ancora||"").trim(); }catch(_){ return ""; }
+}
+function _ancoraParaRegex(anc){ return (anc||"").replace(/[.*+?^${}()|[\]\\]/g,"\\$&").replace(/\\\s+/g,"\\s*").replace(/:?\s*$/,"\\s*:?"); }
 function cortarPorSumario(text){
   const pages = text.split("\f");
   if(pages.length<8) return null;
@@ -2226,6 +2278,23 @@ async function aiColetarAnais(text, fileName){
   // de chamadas à IA (horas + custo altíssimo, principalmente com Opus). Acima do limite, NÃO usa a IA por
   // blocos — cai no determinístico (rápido/grátis) + a rede de segurança garante os e-mails. Avisa o usuário.
   if(chunks.length > MAX_BLOCOS_IA){
+    // RESGATE ESCALÁVEL (a lição do «III Congresso»): em vez de ler ~1.450 blocos (horas + custo enorme = travar),
+    // a IA faz UMA leitura e DESCOBRE a âncora que separa os trabalhos; o cortador genérico aplica em TODO o PDF
+    // (grátis, instantâneo). Só aceita se passar no controle de qualidade — senão cai no determinístico. Não trava.
+    try{
+      setStatus("🧠 Anais gigante — a IA está descobrindo o padrão do formato (1 leitura, rápido)…");
+      const anc = await aiDescobrirAncora(text);
+      if(anc){
+        const w = cortarPorAncora(text, _ancoraParaRegex(anc));
+        const q = _qualidadeAnais(w);
+        console.log("resgate por âncora:", JSON.stringify({anc, ...q}));
+        if(q.ok){
+          _aiAnaisInfo = { blocos:chunks.length, gigante:true, ancora:anc, trabalhos:w.length, comEmail:q.comEmail, viaAncora:true };
+          toast("📚 Anais gigante: a IA descobriu o padrão («"+anc+"») e o coletor aplicou em "+w.length+" trabalhos ("+q.comEmail+" com e‑mail) — sem travar.");
+          return w.map(x=>({ ...x, _aiColetado:true }));
+        }
+      }
+    }catch(e){ console.warn("resgate por âncora:", e&&e.message); }
     _aiAnaisInfo = { blocos:chunks.length, trabalhos:0, gigante:true, limite:MAX_BLOCOS_IA };
     toast("📚 Anais MUITO grande ("+chunks.length+" blocos / ~"+Math.round((text||"").length/1000)+"k caracteres). "
       +"A IA por bloco seria lenta e cara demais — usei a coleta determinística (a rede de segurança garante os e‑mails).","warn");
@@ -2991,6 +3060,7 @@ async function processBatch(){
     try{ const v2=validarTudo(); if(v2 && (v2.corr||v2.inv)) setStatus("✅ Validador (pós‑IA): "+v2.corr+" corrigidos · "+v2.inv+" inválidos."); }catch(e){ console.warn("validarTudo pós‑IA:",e); }
   }
   // MEMÓRIA: aprende os pares confiáveis desta coleta (IA = forte; demais só se batem por conteúdo).
+  try{ _limparRotulos(allResults); }catch(e){ console.warn("limparRotulos:",e); }    // DEFESA: rótulo/instituição NÃO vira título/nome (esvazia → revisar)
   try{ _parearNomesComEmails(allResults); }catch(e){ console.warn("parear:",e); }   // pareia nome↔e-mail solto ANTES de excluir/aprender
   try{ _aprenderMemoria(allResults); }catch(e){ console.warn("aprenderMemoria:",e); }
   // BLINDAGEM: cada passo final em try/catch — se um falhar, os DADOS continuam prontos
@@ -4117,9 +4187,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.67";
+const VERSION = "13.68";
 const VERSION_DATE = "2026-06-15";
 const CHANGELOG = [
+  ["13.68","2026-06-15","A IA agora AJUDA em anais GIGANTE sem travar nem errar feio (lição do «III Congresso»). Antes: a IA lia 1 bloco por chamada → num PDF de 2.000+ trabalhos seriam ~1.450 chamadas (horas/caro) → travava, e a trava de segurança desligava a IA e caía num determinístico que às vezes não conhecia o formato → saía lixo (Título com «Agradecimentos», Nome com «Palavras-chave»). Agora, 3 defesas: (1) RESGATE ESCALÁVEL — em anais gigante a IA faz UMA leitura e DESCOBRE o padrão (a «âncora» que separa os trabalhos); um cortador genérico aplica em TODO o PDF de graça, em segundos. (2) CONTROLE DE QUALIDADE — o resultado (da IA OU do determinístico) só é aceito se a maioria tiver título de verdade + e-mail; senão não é mostrado. (3) ANTI-LIXO universal — nenhum rótulo (Agradecimentos/Financiamento/Palavras-chave/CEP), instituição ou fragmento vira título/nome: o campo fica VAZIO e marcado pra revisar. Vale pra qualquer formato futuro."],
   ["13.67","2026-06-15","ANAIS GIGANTE de RESUMOS agora sai LIMPO (ex.: «III Congresso de Educação», +2.000 trabalhos): esse formato (TÍTULO em maiúsculas → autores → «Introdução:» → «Palavras‑chave:» → «Autor correspondente: e‑mail») não era reconhecido e o resultado vinha todo errado (a coluna Título pegava «Agradecimentos/Financiamento» e a coluna Nome pegava «Palavras‑chave:»). Novo cortador determinístico (grátis, sem IA, não trava): reconhece o formato e extrai título + autores + e‑mail de cada trabalho — 2.013 trabalhos, ~1.840 títulos limpos e ~1.700 e‑mails certos, com pareamento nome↔e‑mail. Suporta também autores com e‑mail «inline» (NOME, e‑mail). NÃO afeta os outros anais (devolve vazio quando o formato é outro). Login: campo Nome e Senha agora têm o MESMO tamanho (a Senha estava sem estilo). CSV sem a coluna «Fonte»."],
   ["13.61","2026-06-15","Conserta o TRAVAMENTO em anais GIGANTE: um PDF enorme (ex.: «III Congresso», 10 milhões de caracteres e 2.522 e‑mails) viraria ~1.450 chamadas à IA (uma por bloco) → horas e custo enorme, parecendo travado. Agora, acima de 80 blocos, o app NÃO usa a IA por bloco — coleta no determinístico (rápido e grátis) e a rede de segurança garante todos os e‑mails. Avisa por mensagem. Para esses gigantes, a IA por bloco só compensa com Haiku barato."],
   ["13.60","2026-06-07","Login da EQUIPE simplificado: o endereço do servidor (Render) agora vem JÁ PREENCHIDO e fica escondido em «⚙ servidor» — a equipe só digita a senha e entra. Antes o campo de endpoint vinha vazio (ou com openrouter) e travava o pessoal. Senha de equipe (USER_TOKEN) entra como não‑admin (sem abas de IA/Custos); senha de admin entra como admin."],
