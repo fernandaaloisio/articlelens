@@ -1727,6 +1727,24 @@ function _limparTituloAnais(t){
   if(m.length){ const last=m[m.length-1]; s=s.slice(last.index+last[0].length); }      // tira o cabeçalho/sumário do começo
   return s.replace(/\s+/g," ").trim();
 }
+/* O nome APARECE no PDF? (todos os tokens com ≥3 letras existem no texto). Nome de iniciais ("A.C.S") passa
+   (não dá p/ verificar). Pega a IA inventando/expandindo: "SANTOS, A.C.S" → "Ana Carolina Santos" (carolina não
+   está no texto) → rejeitado. E "psycotrin@ufg.br" sem dono → qualquer nome que a IA chutar é rejeitado. */
+function _nomeNoTexto(name, txt){
+  if(!name) return false;
+  const nrm=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+  const lt=nrm(txt);
+  const toks=nrm(name).replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(w=>w.length>=3);
+  if(!toks.length) return true;                 // só iniciais → não dá p/ checar, mantém
+  return toks.every(t=>lt.includes(t));
+}
+function _blanquearNomesInventados(records, txt){
+  let n=0;
+  for(const r of (records||[])){ const base=(r&&r._raw&&r._raw.length>50)?r._raw:txt;
+    for(const a of (r&&r.authors||[])){ if(a.name && !_nomeNoTexto(a.name, base)){ a.name=""; n++; } } }
+  if(n) console.log("blanquearNomesInventados: "+n+" nome(s) que NÃO aparecem no PDF → esvaziados (revisar).");
+  return n;
+}
 function _limparRotulos(records){
   let nt=0, nn=0, ntc=0;
   for(const r of (records||[])){
@@ -3184,13 +3202,18 @@ async function processBatch(){
           if(f){
            if(AI.conferirTudo || r._anais){
             // ANAIS (sempre) ou 🧪 "IA faz TUDO": a IA leu o TEXTO CRU e é AUTORIDADE TOTAL — refaz título e autores do zero.
-            if(f.title && f.title.length>8 && f.title!==r.title){ r.title=f.title; nTit++; }
+            if(f.title && f.title.length>8 && f.title!==r.title){ r.title=_limparTituloAnais(f.title); nTit++; }
+            const _origNome={}; (r.authors||[]).forEach(a=>{ if(a.email) _origNome[a.email.toLowerCase().trim()]=a.name||""; });
             if(Array.isArray(f.authors)){
               const novos = f.authors
                 .filter(a=>a && a.name && a.name.trim().split(/\s+/).length>=2 && !nomeQuebrado(a.name,a.email))
                 .map(a=>{ let em=(a.email||"").trim().toLowerCase();
                           if(em && (!/@/.test(em) || !(r._raw||"").toLowerCase().includes(em) || _emailInstitucional(em))) em="";
-                          return {name:a.name.trim(), email:em, _aiOk:true}; })
+                          let nome=a.name.trim();
+                          // NÃO INVENTAR: se o nome da IA não aparece no texto cru, é invenção/expansão →
+                          // usa o nome ORIGINAL do texto (se houver) ou deixa vazio (revisar).
+                          if(!_nomeNoTexto(nome, r._raw)){ const o=_origNome[em]; nome=(o && _nomeNoTexto(o, r._raw))?o:""; }
+                          return {name:nome, email:em, _aiOk:true}; })
                 .filter(a=>a.email);                       // exporta só quem tem e‑mail no texto
               if(novos.length){
                 // TRAVA: a IA NUNCA pode PERDER um e‑mail que o determinístico já tinha (ela só limpa nome/título).
@@ -3270,6 +3293,7 @@ async function processBatch(){
   }
   // MEMÓRIA: aprende os pares confiáveis desta coleta (IA = forte; demais só se batem por conteúdo).
   try{ _limparRotulos(allResults); }catch(e){ console.warn("limparRotulos:",e); }    // DEFESA: rótulo/instituição NÃO vira título/nome (esvazia → revisar)
+  try{ _blanquearNomesInventados(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("blanquearNomes:",e); }   // nome que NÃO está no PDF (IA chutou) → vazio
   try{ _recuperarNomes(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("recuperarNomes:",e); }   // puxa nome do RODAPÉ (número/nome) p/ e-mails sem nome
   try{ _parearNomesComEmails(allResults); }catch(e){ console.warn("parear:",e); }   // pareia nome↔e-mail solto ANTES de excluir/aprender
   try{ _aprenderMemoria(allResults); }catch(e){ console.warn("aprenderMemoria:",e); }
@@ -4430,9 +4454,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.82";
+const VERSION = "13.83";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.83","2026-06-16","Trava DURA contra nome chutado pela IA: agora o app VERIFICA cada nome contra o texto do PDF. Se o nome que a IA devolveu NÃO aparece no PDF (ela inventou ou expandiu iniciais, ou é um e‑mail tipo «psycotrin@ufg.br» que não dá pra saber de quem é), o app REJEITA — usa o nome como está no PDF (ex.: mantém «SANTOS, A.C.S» em vez de virar «Ana Carolina Santos») ou deixa VAZIO pra revisar. Não é mais a instrução na IA (que ela ignorava) — é uma checagem determinística que a IA não tem como furar. Vale pra qualquer PDF."],
   ["13.82","2026-06-16","Conserta o anais de Medicina (Encontro): (1) TÍTULO limpo — antes saía grudado com o cabeçalho de página/sumário («ORTOPEDIA PÁGINA 65 … ANAIS DO ENCONTRO … issn … MODALIDADE: … AUTORIA: …»); agora extrai só o título real («CARDIOTOXICIDADE DA QUIMIOTERAPIA…»). (2) NOME não é mais INVENTADO — a IA estava EXPANDINDO as iniciais («SANTOS, A.C.S» → «Ana Carolina Santos»); agora ela é instruída a devolver o nome EXATAMENTE como está no PDF (abreviado, se for o caso). (3) Os trabalhos com erro agora VÃO pra conferência mesmo tendo vindo da IA (antes escapavam). Obs.: nesse PDF os nomes vêm abreviados no original — então saem abreviados, mas certos."],
   ["13.81","2026-06-16","Conserta as DATAS REPETIDAS no gráfico de gastos: versões antigas gravavam a data sem zero à esquerda (ex.: «2026-6-5») e o app mostrava como um dia diferente de «2026-06-05» — virava o mesmo dia duas vezes. Agora as datas são normalizadas e os dias iguais são JUNTADOS (na hora de mostrar e no histórico salvo). Ordenação do gráfico por data corrigida."],
   ["13.80","2026-06-16","Botão «🗑️ Zerar histórico» no painel de Custos. Os valores altos no gráfico (ex.: 06‑15) eram dos dias em que testamos com Opus E quando o preço do Opus estava gravado 3× maior do que é (bug corrigido na v13.70). O cálculo de AGORA está certo (Opus US$5/US$25, Haiku US$1/US$5 por milhão de tokens) — repare que hoje deu ~US$0. O botão apaga o histórico salvo no navegador pra recomeçar limpo, sem os valores inflados antigos."],
