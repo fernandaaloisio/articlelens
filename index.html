@@ -1716,13 +1716,25 @@ function _nomeRuim(s){ s=(s||"").trim(); if(!s) return false;
   if(/[:\/]/.test(s)) return true;                                               // nome real não tem ":" nem "/"
   if(_INST_RE.test(s)) return true;                                              // é instituição/lugar, não pessoa
   return false; }
+/* LIMPA o título quando vem grudado com cabeçalho de página/sumário e rótulos (ex.: anais de Medicina:
+   "ORTOPEDIA PÁGINA 65 … ANAIS DO ENCONTRO … issn … ACADÊMICOS DE MEDICINA  TÍTULO REAL  MODALIDADE: …
+   ÁREA TEMÁTICA: …  AUTORIA: …"). Extrai SÓ o título real. Não mexe em título já limpo. */
+function _limparTituloAnais(t){
+  if(!t) return t; let s=t;
+  if(s.length<110 && !/MODALIDADE|issn|P[ÁA]GINA \d|AUTORIA/i.test(s)) return s;        // já limpo
+  s=s.replace(/\s*(MODALIDADE|[ÁA]REA\s+TEM[ÁA]TICA|AUTORIA|EIXO\s*\d|RESUMO\s+SIMPLES)\s*:[\s\S]*$/i,""); // tira o rabo de rótulos
+  const m=[...s.matchAll(/(issn\s*[\d-]+|p[áa]gina\s*\d+|acad[êe]micos? de medicina|anais do encontro[^:]*?medicina)/gi)];
+  if(m.length){ const last=m[m.length-1]; s=s.slice(last.index+last[0].length); }      // tira o cabeçalho/sumário do começo
+  return s.replace(/\s+/g," ").trim();
+}
 function _limparRotulos(records){
-  let nt=0, nn=0;
+  let nt=0, nn=0, ntc=0;
   for(const r of (records||[])){
+    if(r && r.title){ const lt=_limparTituloAnais(r.title); if(lt!==r.title){ r.title=lt; ntc++; } }   // título grudado c/ cabeçalho → só o título
     if(r && _tituloRuim(r.title)){ r.title=""; nt++; }                           // título-lixo → vazio (vira "sem título" p/ revisar)
     for(const a of (r&&r.authors||[])){ if(a.name && _nomeRuim(a.name)){ a.name=""; nn++; } }
   }
-  if(nt||nn) console.log("limparRotulos: "+nt+" títulos e "+nn+" nomes esvaziados (eram rótulos/instituição).");
+  if(nt||nn||ntc) console.log("limparRotulos: "+ntc+" títulos limpos do cabeçalho, "+nt+" esvaziados, "+nn+" nomes esvaziados.");
   return {nt, nn};
 }
 /* RECUPERA o NOME real de e-mails que ficaram SEM nome — lendo os RODAPÉS do anais de DUAS formas (nome real
@@ -2340,9 +2352,11 @@ async function aiIdentificarFormato(amostra){
 }
 async function aiFixHard(grupo){
   const sys = "Você confere extrações de artigos acadêmicos a partir do TEXTO CRU. Devolva, por item: "
-    + "(a) o TÍTULO correto; (b) a lista de AUTORES, cada um com NOME COMPLETO e próprio — sem titulação "
-    + "('Doutor', 'Mestre', 'Pós-graduação', 'Graduando'), sem cortar no meio (nomes às vezes quebram entre linhas, "
-    + "junte-os), e NUNCA use o e-mail como nome — e o e-mail de cada autor. "
+    + "(a) o TÍTULO correto — SÓ o título do trabalho, NUNCA cabeçalho de página, 'ANAIS DO…', 'issn', "
+    + "'MODALIDADE:', 'ÁREA TEMÁTICA:' ou 'AUTORIA:'; (b) a lista de AUTORES, cada um com o NOME COMO ESTÁ NO "
+    + "TEXTO — sem titulação ('Doutor','Mestre','Graduando'), sem cortar no meio (junte nome quebrado entre linhas), "
+    + "e NUNCA use o e-mail como nome — e o e-mail de cada autor. NÃO INVENTE NEM EXPANDA NOME: se o texto traz o "
+    + "nome ABREVIADO (ex.: 'SANTOS, A.C.S'), devolva EXATAMENTE assim, não deduza o primeiro nome a partir do e-mail. "
     + "REGRA DURA: só use e-mail que APARECE no texto; nunca invente. Responda APENAS JSON.";
   const itens = grupo.map((r,i)=>({ i, titulo_atual:r.title,
     autores:(r.authors||[]).map(a=>a.name), texto:(r._raw||"").slice(0,3000) }));
@@ -2390,7 +2404,10 @@ async function aiExtrairBloco(chunk, dbg){
     + "e-mail. CADA e-mail DEVE ter o NOME do seu dono: os nomes ficam na lista de autores no TOPO do trabalho e "
     + "os e-mails nas linhas de afiliação numeradas (1., 2., …) — case pela ORDEM/NÚMERO e pelas iniciais/sobrenome "
     + "do e-mail. Se mesmo assim não achar o nome de um e-mail, devolva o e-mail com name vazio (não o descarte). "
-    + "Se um trabalho aparecer cortado na borda do trecho, inclua o que der. APENAS JSON.";
+    + "NÃO INVENTE NOME: se no texto o nome vier ABREVIADO (ex.: 'SANTOS, A.C.S' ou 'CASTRO, M.L.D.'), devolva "
+    + "EXATAMENTE como está — NÃO expanda iniciais nem deduza o primeiro nome a partir do e-mail. O title é SÓ o "
+    + "título do trabalho — NUNCA inclua cabeçalho de página, 'ANAIS DO…', 'issn', 'MODALIDADE:', 'ÁREA TEMÁTICA:' "
+    + "ou 'AUTORIA:'. Se um trabalho aparecer cortado na borda do trecho, inclua o que der. APENAS JSON.";
   const user = 'Devolva {"works":[{"title":"...","authors":[{"name":"Nome Completo","email":"x@y"}]}]}.\n\nTEXTO:\n' + (chunk||"").slice(0,12000);
   const msgs=[{role:"system",content:sys},{role:"user",content:user}];
   // USA O MODELO CONFIGURADO (AI.model) direto — alguns proxies do Render só aceitam 1 modelo (ex.: só Opus);
@@ -2959,6 +2976,7 @@ async function collectFromPDF(file, mode){
     // com títulos certos), NÃO gasta IA nem arrisca PIORAR. E quando a IA roda, só assume se trouxer MAIS e‑mail E
     // com títulos NÃO piores que os do determinístico — senão mantém o determinístico (que já estava bom).
     const cntE = a => (a||[]).reduce((s,w)=>s+(w.authors||[]).filter(x=>x.email).length,0);
+    try{ (works||[]).forEach(w=>{ if(w&&w.title) w.title=_limparTituloAnais(w.title); }); }catch(_){}   // limpa título grudado c/ cabeçalho ANTES de medir qualidade
     const qDet = _qualidadeAnais(works);
     const detLimpo = works.length>=20 && qDet.score>=0.7;   // determinístico já confiável → dispensa IA
     if(AI.enabled && AI.orchestrate && !detLimpo){
@@ -3134,7 +3152,9 @@ async function processBatch(){
     // não gasta à toa nem arrisca piorar. Assim, num PDF novo cujo formato o determinístico não conhece, a maioria
     // vira "lacuna" → a IA entra de verdade; num PDF que já saiu limpo, a IA quase não é usada. "Conferir TODOS" força tudo.
     const _precisaIA = r => casoDificil(r) || !(r.title && r.title.trim()) || (r.authors||[]).some(a=>a.email && !(a.name && a.name.trim()));
-    const todosAlvos = allResults.filter(r => !r._aiColetado && (AI.conferirTudo || _precisaIA(r)));
+    // vai pra conferência o que PRECISA — mesmo que tenha vindo da IA por blocos (a IA por blocos às vezes erra
+    // título/nome e antes esses escapavam por já estarem marcados como "coletados pela IA").
+    const todosAlvos = allResults.filter(r => AI.conferirTudo || _precisaIA(r));
     let alvos = todosAlvos.slice(0, 800), amostraInfo=null;
     if(todosAlvos.length>800){ amostraInfo={ total: todosAlvos.length, conferidos: 800 }; }   // só p/ avisar o teto
     if(alvos.length){
@@ -4410,9 +4430,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.81";
+const VERSION = "13.82";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.82","2026-06-16","Conserta o anais de Medicina (Encontro): (1) TÍTULO limpo — antes saía grudado com o cabeçalho de página/sumário («ORTOPEDIA PÁGINA 65 … ANAIS DO ENCONTRO … issn … MODALIDADE: … AUTORIA: …»); agora extrai só o título real («CARDIOTOXICIDADE DA QUIMIOTERAPIA…»). (2) NOME não é mais INVENTADO — a IA estava EXPANDINDO as iniciais («SANTOS, A.C.S» → «Ana Carolina Santos»); agora ela é instruída a devolver o nome EXATAMENTE como está no PDF (abreviado, se for o caso). (3) Os trabalhos com erro agora VÃO pra conferência mesmo tendo vindo da IA (antes escapavam). Obs.: nesse PDF os nomes vêm abreviados no original — então saem abreviados, mas certos."],
   ["13.81","2026-06-16","Conserta as DATAS REPETIDAS no gráfico de gastos: versões antigas gravavam a data sem zero à esquerda (ex.: «2026-6-5») e o app mostrava como um dia diferente de «2026-06-05» — virava o mesmo dia duas vezes. Agora as datas são normalizadas e os dias iguais são JUNTADOS (na hora de mostrar e no histórico salvo). Ordenação do gráfico por data corrigida."],
   ["13.80","2026-06-16","Botão «🗑️ Zerar histórico» no painel de Custos. Os valores altos no gráfico (ex.: 06‑15) eram dos dias em que testamos com Opus E quando o preço do Opus estava gravado 3× maior do que é (bug corrigido na v13.70). O cálculo de AGORA está certo (Opus US$5/US$25, Haiku US$1/US$5 por milhão de tokens) — repare que hoje deu ~US$0. O botão apaga o histórico salvo no navegador pra recomeçar limpo, sem os valores inflados antigos."],
   ["13.79","2026-06-16","Ajuste na divisão de trabalho IA × determinístico (geral, p/ formatos novos): quando o determinístico NÃO sai limpo (ex.: anais com «nomes; … e‑mails;» em listas separadas, que confunde o pareamento nome↔e‑mail), agora a IA ASSUME e refaz a coleta — ela entende o formato. Antes a trava exigia a IA ter MAIS e‑mails que o determinístico, mas um cortador ruim inflava a contagem e prendia o resultado errado. Agora a IA assume se cobrir ~igual ou mais e‑mail e com títulos não piores. Continua valendo: se o determinístico já saiu limpo (III Congresso, UNITINS), a IA é dispensada (grátis)."],
