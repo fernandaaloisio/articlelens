@@ -344,6 +344,7 @@
       <button class="btn ghost chper active" data-per="dia">Por dia</button>
       <button class="btn ghost chper" data-per="mes">Por mês</button>
       <button class="btn ghost chper" data-per="ano">Por ano</button>
+      <button class="btn ghost" id="zerarHist" type="button" style="margin-left:auto" title="Apaga o histórico salvo no navegador (ex.: valores antigos do Opus com preço errado)">🗑️ Zerar histórico</button>
     </div>
     <div id="costChart" style="display:flex;align-items:flex-end;gap:8px;min-height:150px;padding:10px 4px;border:1px solid var(--border);border-radius:10px;background:var(--bg-soft);overflow-x:auto"></div>
 
@@ -3580,6 +3581,14 @@ document.querySelectorAll(".chper").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".chper").forEach(x=>x.classList.toggle("active",x===b));
   renderCostChart();
 });
+(function(){ const zb=document.getElementById("zerarHist"); if(!zb) return;
+  zb.onclick=()=>{ if(!confirm("Apagar o histórico de gastos salvo no navegador? (Os valores antigos do Opus estavam com o preço errado.)")) return;
+    costHist={}; aiUsage={in:0,out:0,usd:0,calls:0};
+    try{ localStorage.removeItem("articlelens_costhist"); localStorage.removeItem("articlelens_usage"); }catch(e){}
+    renderCostChart(); try{ renderRun(); }catch(_){}
+    toast("Histórico de gastos zerado. A partir de agora o custo é calculado com o preço certo.");
+  };
+})();
 // cotação US$→R$ editável
 (function(){ const inp=document.getElementById("usdBrl"); if(!inp) return;
   inp.value=USD_BRL;
@@ -4393,9 +4402,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.79";
+const VERSION = "13.80";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.80","2026-06-16","Botão «🗑️ Zerar histórico» no painel de Custos. Os valores altos no gráfico (ex.: 06‑15) eram dos dias em que testamos com Opus E quando o preço do Opus estava gravado 3× maior do que é (bug corrigido na v13.70). O cálculo de AGORA está certo (Opus US$5/US$25, Haiku US$1/US$5 por milhão de tokens) — repare que hoje deu ~US$0. O botão apaga o histórico salvo no navegador pra recomeçar limpo, sem os valores inflados antigos."],
   ["13.79","2026-06-16","Ajuste na divisão de trabalho IA × determinístico (geral, p/ formatos novos): quando o determinístico NÃO sai limpo (ex.: anais com «nomes; … e‑mails;» em listas separadas, que confunde o pareamento nome↔e‑mail), agora a IA ASSUME e refaz a coleta — ela entende o formato. Antes a trava exigia a IA ter MAIS e‑mails que o determinístico, mas um cortador ruim inflava a contagem e prendia o resultado errado. Agora a IA assume se cobrir ~igual ou mais e‑mail e com títulos não piores. Continua valendo: se o determinístico já saiu limpo (III Congresso, UNITINS), a IA é dispensada (grátis)."],
   ["13.78","2026-06-16","Conserto GERAL de e‑mail no cabeçalho (ajuda TODO anais): quando o trabalho tem título+autores certos mas o e‑mail está no bloco «AUTORIA:»/afiliação (sem rótulo «E‑mail:» nem «Autor correspondente»), o app agora PEGA esse e‑mail do cabeçalho e atribui ao autor. No «Encontro Científico dos Acadêmicos de Medicina» (tudo em CAIXA ALTA, nomes abreviados tipo «SANTOS, A.C.S»): saltou de 11 → 108 e‑mails com título limpo. E de quebra o III Congresso subiu de 1.700 → 2.057 e‑mails. Sem regressão nos outros. Obs.: nesse anais médico os nomes vêm abreviados no próprio PDF (sobrenome + iniciais), então o «nome completo» fica como o PDF traz."],
   ["13.77","2026-06-16","Novo formato de anais reconhecido (ex.: «Jornada Odontológica da Unimontes»): trabalhos SEM «RESUMO/Introdução/sumário», com título em Title Case e e‑mail «pelado» (sem rótulo «E‑mail:») — nenhum cortador pegava, então caía tudo na rede de segurança (e‑mails soltos sem título/nome). Novo cortador de ÚLTIMO RECURSO usa o e‑mail como âncora: o trabalho é o bloco acima dele (título + autores + afiliação), pareando o e‑mail ao autor pelo nome. No Jornada: 44 trabalhos, 44 e‑mails, ~45 nomes, ~30 títulos limpos — e os títulos duvidosos ficam pra IA completar. Bem travado: só entra quando nenhum outro cortador pega (não atrapalha III Congresso/UNITINS)."],
