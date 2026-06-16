@@ -3068,10 +3068,12 @@ async function processBatch(){
   if(AI.enabled && AI.orchestrate && allResults.length){
     const fmt = descreverFormato(allResults);
     if(fmt) setStatus("Formato detectado (sem IA): <b>"+escapeHtml(fmt)+"</b>");
-    // ANAIS: a IA SEMPRE coleta cada trabalho (regra do projeto). ARTIGO/revista: só se "conferir TODOS"
-    // estiver ligado, senão só os casos difíceis (⚠) — mais barato (o determinístico já vai bem em artigo).
-    // _aiColetado = já veio da IA por blocos (não re-cobrar IA). Os stubs faltantes (sem _aiColetado) ENTRAM p/ a IA completar.
-    const todosAlvos = allResults.filter(r => !r._aiColetado && (r._anais || AI.conferirTudo || casoDificil(r)));
+    // REGRA GERAL (vale p/ ESTE e p/ PDFs NOVOS): a IA preenche SÓ AS LACUNAS — trabalho SEM título, e‑mail
+    // SEM nome, ou caso difícil (⚠). O que o determinístico já trouxe LIMPO (título + nome) NÃO vai pra IA:
+    // não gasta à toa nem arrisca piorar. Assim, num PDF novo cujo formato o determinístico não conhece, a maioria
+    // vira "lacuna" → a IA entra de verdade; num PDF que já saiu limpo, a IA quase não é usada. "Conferir TODOS" força tudo.
+    const _precisaIA = r => casoDificil(r) || !(r.title && r.title.trim()) || (r.authors||[]).some(a=>a.email && !(a.name && a.name.trim()));
+    const todosAlvos = allResults.filter(r => !r._aiColetado && (AI.conferirTudo || _precisaIA(r)));
     let alvos = todosAlvos.slice(0, 800), amostraInfo=null;
     if(todosAlvos.length>800){ amostraInfo={ total: todosAlvos.length, conferidos: 800 }; }   // só p/ avisar o teto
     if(alvos.length){
@@ -4335,9 +4337,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.75";
+const VERSION = "13.76";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.76","2026-06-16","REGRA GERAL nova (vale p/ qualquer PDF, não só um): a IA preenche SÓ AS LACUNAS — trabalho sem título, e‑mail sem nome, ou caso difícil (⚠). Antes a regra «usar IA em TODO anais» mandava os 2.000+ trabalhos (até 800) pra IA mesmo quando o determinístico já tinha trazido tudo limpo — daí o custo R$9 e o resultado pior. Agora: o que já saiu limpo NÃO vai pra IA (rápido/grátis); num PDF NOVO de formato desconhecido, a maioria vira «lacuna» e a IA entra de verdade pra completar. Os e‑mails continuam 100% garantidos pela rede de segurança, com ou sem IA — a IA só melhora título/nome do que faltou."],
   ["13.75","2026-06-16","CONSERTO de regressão: a IA estava ASSUMINDO um anais gigante que o determinístico já fazia LIMPO e DE GRAÇA (ex.: III Congresso), piorando o resultado (títulos repetidos, afiliação virando título, trabalhos sem e‑mail) e cobrando à toa (R$9). Agora: se o determinístico já está limpo e numeroso (≥20 trabalhos e ≥70% com título de verdade), o app NÃO gasta IA. E quando a IA roda, ela só ASSUME se trouxer MAIS e‑mail E com títulos não piores que os do determinístico — senão mantém o determinístico. Resultado: III Congresso volta a sair limpo a custo ZERO; UNITINS sai pelo cortador de rodapé numerado, também grátis."],
   ["13.74","2026-06-16","CONFERÊNCIA pelo sumário mais completa: além de mostrar «sumário lista N · localizei L», agora LISTA os TÍTULOS exatos dos trabalhos do sumário que NÃO foram encontrados no corpo — na tela (📋) e no relatório de cobertura (CSV). Assim, em vez de só saber que «faltam 16», você vê QUAIS 16 e vai conferir direto no PDF."],
   ["13.73","2026-06-16","Três melhorias pra anais (pedido): (1) REPARA o e‑mail antes de coletar — o PDF mete espaço dentro do e‑mail («x@ gmail.com», «bb.com. br») e perdia o fim; agora junta certinho (sem colar frase). (2) PULA capa e SUMÁRIO gigante — num anais de milhares de páginas, o índice (Título …… 123) só atrapalhava a IA e a rede de segurança; agora o app trabalha direto no miolo (mais barato e menos lixo). (3) BIBLIOTECA DE RODAPÉS: novo cortador pro formato «rodapé numerado» (autor com nº no topo ↔ e‑mail no rodapé «1. … E‑mail: x», ex.: UNITINS) — liga autor↔e‑mail pelo número, com título e nome certos, SEM IA (grátis). No anais da UNITINS: 55 trabalhos, 136 e‑mails, 52 títulos, de graça."],
