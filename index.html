@@ -1745,6 +1745,30 @@ function _blanquearNomesInventados(records, txt){
   if(n) console.log("blanquearNomesInventados: "+n+" nome(s) que NÃO aparecem no PDF → esvaziados (revisar).");
   return n;
 }
+/* RECUPERA o nome ABREVIADO do bloco "AUTORIA: SOBRENOME, X.Y.Z; …" (anais de Medicina): p/ cada e-mail SEM
+   nome, casa pelo SOBRENOME ou pelas INICIAIS contidas no local-part do e-mail (ex.: anacarol.acss → SANTOS,
+   A.C.S; ricardonunes → NUNES, R.F.). É a forma HONESTA do PDF (não inventa). Não acha → fica vazio (revisar). */
+function _recuperarNomeAbrev(records, txt){
+  if(!txt) return 0;
+  const nrm=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+  const low=txt.toLowerCase();
+  const reSrc="([A-ZÀ-Ý][A-ZÀ-Ýa-zà-ÿ]+(?:\\s+(?:DE|DA|DO|DOS|DAS|E)\\s+[A-ZÀ-Ý][A-ZÀ-Ýa-zà-ÿ]+)*),\\s*((?:[A-ZÀ-Ý]\\.?){1,5})\\b";
+  let n=0;
+  for(const r of (records||[])) for(const a of (r.authors||[])){
+    if(a.email && !a.name){
+      const idx=low.indexOf(a.email.toLowerCase()); if(idx<0) continue;
+      const bloco=txt.slice(Math.max(0,idx-700), idx+60);
+      const loc=nrm(a.email.split("@")[0]).replace(/[._\-0-9]/g,"");
+      let m, best="", bestSc=0; const re=new RegExp(reSrc,"g");
+      while((m=re.exec(bloco))){ const sob=nrm(m[1]).replace(/\s+/g,""); const ini=nrm(m[2]).replace(/[.\s]/g,"");
+        let sc=0; if(sob.length>=4 && loc.includes(sob)) sc+=10; if(ini.length>=2 && loc.includes(ini)) sc+=ini.length;
+        if(sc>bestSc){ bestSc=sc; best=m[1].replace(/\s+/g," ")+", "+m[2].replace(/\s+/g,""); } }
+      if(bestSc>=2){ a.name=best; n++; }
+    }
+  }
+  if(n) console.log("recuperarNomeAbrev: "+n+" nome(s) abreviado(s) recuperado(s) do AUTORIA.");
+  return n;
+}
 function _limparRotulos(records){
   let nt=0, nn=0, ntc=0;
   for(const r of (records||[])){
@@ -3294,6 +3318,7 @@ async function processBatch(){
   // MEMÓRIA: aprende os pares confiáveis desta coleta (IA = forte; demais só se batem por conteúdo).
   try{ _limparRotulos(allResults); }catch(e){ console.warn("limparRotulos:",e); }    // DEFESA: rótulo/instituição NÃO vira título/nome (esvazia → revisar)
   try{ _blanquearNomesInventados(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("blanquearNomes:",e); }   // nome que NÃO está no PDF (IA chutou) → vazio
+  try{ _recuperarNomeAbrev(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("recuperarNomeAbrev:",e); }   // puxa nome ABREVIADO do "AUTORIA:" (honesto, não inventa)
   try{ _recuperarNomes(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("recuperarNomes:",e); }   // puxa nome do RODAPÉ (número/nome) p/ e-mails sem nome
   try{ _parearNomesComEmails(allResults); }catch(e){ console.warn("parear:",e); }   // pareia nome↔e-mail solto ANTES de excluir/aprender
   try{ _aprenderMemoria(allResults); }catch(e){ console.warn("aprenderMemoria:",e); }
@@ -4454,9 +4479,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.83";
+const VERSION = "13.84";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.84","2026-06-16","Recupera o nome ABREVIADO de verdade (anais de Medicina): depois de barrar os nomes inventados, o app vai no bloco «AUTORIA: SOBRENOME, X.Y.Z; …» e casa cada e‑mail SEM nome pelo SOBRENOME ou pelas INICIAIS contidas no e‑mail (ex.: anacarol.acss → «SANTOS, A.C.S»; ricardonunes → «NUNES, R.F.»; maria.castro2 → «CASTRO, M.L.D»). É a forma honesta do PDF — não inventa. Os e‑mails que realmente não dá pra saber de quem são (ex.: psycotrin@ufg.br) ficam vazios pra revisar. Resultado: bem menos linhas sem nome, e nenhuma inventada."],
   ["13.83","2026-06-16","Trava DURA contra nome chutado pela IA: agora o app VERIFICA cada nome contra o texto do PDF. Se o nome que a IA devolveu NÃO aparece no PDF (ela inventou ou expandiu iniciais, ou é um e‑mail tipo «psycotrin@ufg.br» que não dá pra saber de quem é), o app REJEITA — usa o nome como está no PDF (ex.: mantém «SANTOS, A.C.S» em vez de virar «Ana Carolina Santos») ou deixa VAZIO pra revisar. Não é mais a instrução na IA (que ela ignorava) — é uma checagem determinística que a IA não tem como furar. Vale pra qualquer PDF."],
   ["13.82","2026-06-16","Conserta o anais de Medicina (Encontro): (1) TÍTULO limpo — antes saía grudado com o cabeçalho de página/sumário («ORTOPEDIA PÁGINA 65 … ANAIS DO ENCONTRO … issn … MODALIDADE: … AUTORIA: …»); agora extrai só o título real («CARDIOTOXICIDADE DA QUIMIOTERAPIA…»). (2) NOME não é mais INVENTADO — a IA estava EXPANDINDO as iniciais («SANTOS, A.C.S» → «Ana Carolina Santos»); agora ela é instruída a devolver o nome EXATAMENTE como está no PDF (abreviado, se for o caso). (3) Os trabalhos com erro agora VÃO pra conferência mesmo tendo vindo da IA (antes escapavam). Obs.: nesse PDF os nomes vêm abreviados no original — então saem abreviados, mas certos."],
   ["13.81","2026-06-16","Conserta as DATAS REPETIDAS no gráfico de gastos: versões antigas gravavam a data sem zero à esquerda (ex.: «2026-6-5») e o app mostrava como um dia diferente de «2026-06-05» — virava o mesmo dia duas vezes. Agora as datas são normalizadas e os dias iguais são JUNTADOS (na hora de mostrar e no histórico salvo). Ordenação do gráfico por data corrigida."],
