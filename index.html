@@ -1605,6 +1605,16 @@ function cortarPorAncora(text, ancoraSrc){
       authors = nomes.map((n,idx)=>({name:n, email: idx===0?email:""}));   // 1º autor; o pareamento por nome corrige depois
       if(!nomes.length && email) authors=[{name:"",email}];
     }
+    // se NENHUM autor ficou com e‑mail, pega os e‑mails do CABEÇALHO (bloco "AUTORIA:"/afiliações) — cobre
+    // formatos onde o e‑mail não é inline nem "Autor correspondente" (ex.: anais com tudo em CAIXA ALTA).
+    if(!authors.some(a=>a.email)){
+      const hEmails=[...new Set((header.match(EMAILG)||[]).map(e=>e.toLowerCase().replace(/[.,;]+$/,""))
+        .filter(e=>!(typeof _emailInstitucional==="function" && _emailInstitucional(e))))];
+      if(hEmails.length){
+        if(authors.length) authors[0].email=hEmails[0]; else authors=[{name:"",email:hEmails[0]}];
+        for(let z=1;z<hEmails.length;z++) authors.push({name:"",email:hEmails[z]});
+      }
+    }
     // dedup de autores por nome (o PDF às vezes repete o 1º autor: "GABRIELLA…; GABRIELLA…")
     const seen=new Map(); const uniq=[];
     for(const a of authors){ const k=(a.name||"").toLowerCase().trim();
@@ -4380,9 +4390,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.77";
+const VERSION = "13.78";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.78","2026-06-16","Conserto GERAL de e‑mail no cabeçalho (ajuda TODO anais): quando o trabalho tem título+autores certos mas o e‑mail está no bloco «AUTORIA:»/afiliação (sem rótulo «E‑mail:» nem «Autor correspondente»), o app agora PEGA esse e‑mail do cabeçalho e atribui ao autor. No «Encontro Científico dos Acadêmicos de Medicina» (tudo em CAIXA ALTA, nomes abreviados tipo «SANTOS, A.C.S»): saltou de 11 → 108 e‑mails com título limpo. E de quebra o III Congresso subiu de 1.700 → 2.057 e‑mails. Sem regressão nos outros. Obs.: nesse anais médico os nomes vêm abreviados no próprio PDF (sobrenome + iniciais), então o «nome completo» fica como o PDF traz."],
   ["13.77","2026-06-16","Novo formato de anais reconhecido (ex.: «Jornada Odontológica da Unimontes»): trabalhos SEM «RESUMO/Introdução/sumário», com título em Title Case e e‑mail «pelado» (sem rótulo «E‑mail:») — nenhum cortador pegava, então caía tudo na rede de segurança (e‑mails soltos sem título/nome). Novo cortador de ÚLTIMO RECURSO usa o e‑mail como âncora: o trabalho é o bloco acima dele (título + autores + afiliação), pareando o e‑mail ao autor pelo nome. No Jornada: 44 trabalhos, 44 e‑mails, ~45 nomes, ~30 títulos limpos — e os títulos duvidosos ficam pra IA completar. Bem travado: só entra quando nenhum outro cortador pega (não atrapalha III Congresso/UNITINS)."],
   ["13.76","2026-06-16","REGRA GERAL nova (vale p/ qualquer PDF, não só um): a IA preenche SÓ AS LACUNAS — trabalho sem título, e‑mail sem nome, ou caso difícil (⚠). Antes a regra «usar IA em TODO anais» mandava os 2.000+ trabalhos (até 800) pra IA mesmo quando o determinístico já tinha trazido tudo limpo — daí o custo R$9 e o resultado pior. Agora: o que já saiu limpo NÃO vai pra IA (rápido/grátis); num PDF NOVO de formato desconhecido, a maioria vira «lacuna» e a IA entra de verdade pra completar. Os e‑mails continuam 100% garantidos pela rede de segurança, com ou sem IA — a IA só melhora título/nome do que faltou."],
   ["13.75","2026-06-16","CONSERTO de regressão: a IA estava ASSUMINDO um anais gigante que o determinístico já fazia LIMPO e DE GRAÇA (ex.: III Congresso), piorando o resultado (títulos repetidos, afiliação virando título, trabalhos sem e‑mail) e cobrando à toa (R$9). Agora: se o determinístico já está limpo e numeroso (≥20 trabalhos e ≥70% com título de verdade), o app NÃO gasta IA. E quando a IA roda, ela só ASSUME se trouxer MAIS e‑mail E com títulos não piores que os do determinístico — senão mantém o determinístico. Resultado: III Congresso volta a sair limpo a custo ZERO; UNITINS sai pelo cortador de rodapé numerado, também grátis."],
