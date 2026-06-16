@@ -1624,6 +1624,43 @@ function _limparRotulos(records){
   if(nt||nn) console.log("limparRotulos: "+nt+" títulos e "+nn+" nomes esvaziados (eram rótulos/instituição).");
   return {nt, nn};
 }
+/* RECUPERA o NOME real de e-mails que ficaram SEM nome — lendo os RODAPÉS do anais de DUAS formas (nome real
+   do texto, nunca inventado): (1) NUMERADA — autor "Nome<n>" no topo ligado ao rodapé "n. … E-mail: x" pelo
+   número (por trabalho, âncora "Introdução:"); (2) NOMEADA — "Nome, cargo … E-mail: x" (nome antes da 1ª
+   vírgula). Preenche SÓ nomes vazios/ruins (não mexe nos bons). */
+const _RECUP_ROLE = /^(aluno|aluna|acad[êe]mic|bacharel|licenciad|graduand|p[óo]s|professora?|docente|discente|orientador|coorden|mestr|doutor|especialista|t[ée]cnic|enfermeir|estudante|disc\b|prof\.)/i;
+function _recupNomeOk(n){ n=(n||"").trim(); const t=n.split(/\s+/).filter(x=>x.length>1);
+  return t.length>=2 && t.length<=6 && !_RECUP_ROLE.test(n) && t.filter(x=>/^[A-ZÀ-Ý]/.test(x)).length>=t.length-1; }
+function _normEmailKey(e){ return (e||"").toLowerCase().replace(/\s+/g,"").replace(/[.,;]+$/,"").trim(); }
+function _mapaEmailNome(text){
+  const mapa = {};
+  // (1) NUMERADA, por trabalho
+  const reIntro=/Introdu[çc][aã]o\s*:/gi; const intros=[]; let m;
+  while((m=reIntro.exec(text))) intros.push(m.index);
+  for(let i=0;i<intros.length;i++){
+    const ini=intros[i], fim=(i+1<intros.length)?intros[i+1]:text.length;
+    const header=text.slice(Math.max(0,ini-450),ini).replace(/\n/g," ");
+    const corpo=text.slice(ini,fim);
+    const aut={}; let a; const reA=/([A-ZÀ-Ý][A-Za-zÀ-ÿ.'\- ]{2,50}?)\s*(\d{1,2})\s*(?=[;,]|$)/g;
+    while((a=reA.exec(header))){ const nome=a[1].replace(/\s+/g," ").trim(); if(_recupNomeOk(nome)) aut[a[2]]=nome; }
+    let f; const reF=/(\d{1,2})\s*[\.\)]\s*[^@\n]*?[Ee]\s*-?\s*mail\s*:?\s*([A-Za-z0-9._%+\- ]+@[A-Za-z0-9.\- ]+?\.[A-Za-z]{2,})/g;
+    while((f=reF.exec(corpo))){ const e=_normEmailKey(f[2]); if(aut[f[1]] && e.includes("@") && !mapa[e]) mapa[e]=aut[f[1]]; }
+  }
+  // (2) NOMEADA, global
+  let g; const reN=/(?:\d+\s*[\.\)]|\n|;|^)\s*([A-ZÀ-Ý][A-Za-zÀ-ÿ.'\- ]{3,55}?)\s*,[\s\S]{0,170}?[Ee]\s*-?\s*mail\s*:?\s*([A-Za-z0-9._%+\- ]+@[A-Za-z0-9.\- ]+?\.[A-Za-z]{2,})/g;
+  while((g=reN.exec(text))){ const nome=g[1].replace(/\s+/g," ").trim(), e=_normEmailKey(g[2]); if(_recupNomeOk(nome) && e.includes("@") && !mapa[e]) mapa[e]=nome; }
+  return mapa;
+}
+function _recuperarNomes(records, text){
+  if(!text) return 0;
+  let mapa; try{ mapa=_mapaEmailNome(text); }catch(e){ console.warn("mapaEmailNome:",e); return 0; }
+  let n=0;
+  for(const r of (records||[])) for(const a of (r.authors||[])){
+    if(a.email && (!a.name || _nomeRuim(a.name))){ const nome=mapa[_normEmailKey(a.email)]; if(nome){ a.name=nome; n++; } }
+  }
+  if(n) console.log("recuperarNomes: "+n+" nome(s) recuperado(s) do rodapé.");
+  return n;
+}
 /* Qualidade do resultado de um anais: fração de trabalhos com título DE VERDADE e com e-mail. Usado p/ DECIDIR
    se aceitamos o que um método (determinístico ou o resgate por IA) produziu — se vier ruim, NÃO mostramos. */
 function _qualidadeAnais(works){
@@ -3084,6 +3121,7 @@ async function processBatch(){
   }
   // MEMÓRIA: aprende os pares confiáveis desta coleta (IA = forte; demais só se batem por conteúdo).
   try{ _limparRotulos(allResults); }catch(e){ console.warn("limparRotulos:",e); }    // DEFESA: rótulo/instituição NÃO vira título/nome (esvazia → revisar)
+  try{ _recuperarNomes(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("recuperarNomes:",e); }   // puxa nome do RODAPÉ (número/nome) p/ e-mails sem nome
   try{ _parearNomesComEmails(allResults); }catch(e){ console.warn("parear:",e); }   // pareia nome↔e-mail solto ANTES de excluir/aprender
   try{ _aprenderMemoria(allResults); }catch(e){ console.warn("aprenderMemoria:",e); }
   // BLINDAGEM: cada passo final em try/catch — se um falhar, os DADOS continuam prontos
@@ -4222,9 +4260,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.71";
+const VERSION = "13.72";
 const VERSION_DATE = "2026-06-15";
 const CHANGELOG = [
+  ["13.72","2026-06-15","RECUPERA o NOME de e‑mails que ficavam sem nome, lendo os RODAPÉS do anais de 2 jeitos (nome REAL do texto, nunca inventado): (1) numerado — liga o autor do topo «Nome¹» ao rodapé «1. … E‑mail: x» pelo número; (2) nomeado — «Nome, cargo … E‑mail: x». No anais da UNITINS recuperou 9 de 11 dos que estavam sem nome (Samuel de O Almeida, Agno L F da Silva, Brennda Sousa Mota, Marisa Brito…). Só preenche nome vazio/ruim — não mexe nos que já estavam certos. Os raros que sobram (página com layout diferente) ficam marcados pra revisar."],
   ["13.71","2026-06-15","Conserta linhas SEM NOME por e‑mail TRUNCADO pela IA: às vezes a IA cortava o começo do e‑mail (ex.: «edson@x» virava «son@x»). Como «son@x» é um pedaço de «edson@x», a trava anti‑invenção (que só checava se o texto «contém» o e‑mail) deixava passar — e a linha saía com o e‑mail errado e sem nome. Agora a trava exige que o e‑mail apareça com INÍCIO DE PALAVRA (não colado a outro e‑mail), então o truncado é rejeitado e fica só o e‑mail inteiro (que já vem com o nome certo em outra linha). No anais da UNITINS isso tira ~23 linhas‑lixo sem nome."],
   ["13.70","2026-06-15","Passa a usar o Haiku 4.5 (claude‑haiku‑4‑5) por padrão — MUITO mais barato que o Opus (US$ 1/US$ 5 por milhão de tokens, contra US$ 5/US$ 25 do Opus = 5× mais barato), com qualidade ótima pra ler texto e achar autor/e‑mail. Todo mundo é migrado pro Haiku 4.5 automaticamente uma vez (se você quiser voltar pro Opus de propósito na aba IA, sua escolha é respeitada). Também corrigi a tabela de preços do painel de Custos (o Opus 4.x estava sendo contado como US$ 15/US$ 75, que é o preço do Opus 3 antigo — agora mostra o valor certo)."],
   ["13.69","2026-06-15","Tempo na barra de progresso: agora mostra «⏱ X decorrido · ~Y restante» enquanto coleta (tanto na fila de PDFs quanto na leitura da IA por blocos), e o tempo TOTAL ao concluir («Linha concluída: … · ⏱ 2min 14s»). Assim dá pra saber quanto falta em vez de parecer travado."],
