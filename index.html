@@ -1877,7 +1877,9 @@ function cortarPorSumario(text){
     }
     if(usados.size) wk.all_emails=[...new Set([...(wk.all_emails||[]), ...usados])];
   }
-  works._sumario = {total:entries.length, localizados:found.length};
+  const _achou=new Set(found.map(f=>f.e));
+  works._sumario = {total:entries.length, localizados:found.length,
+                    naoLoc: entries.filter(e=>!_achou.has(e)).map(e=>e.title).slice(0,60)};   // títulos do sumário não achados no corpo
   return works;
 }
 function separarAnais(text){
@@ -2888,7 +2890,7 @@ async function collectFromPDF(file, mode){
       lastIndice = aplicarIndice(works, text);
     } else if(viaSum && viaSum.length && !(eP > eS*1.25 && eP > eS+5)){
       works = viaSum;
-      lastIndice = {total: viaSum._sumario.total, fixed: viaSum._sumario.localizados, viaSumario:true};
+      lastIndice = {total: viaSum._sumario.total, fixed: viaSum._sumario.localizados, viaSumario:true, naoLoc: viaSum._sumario.naoLoc};
     } else {
       works = viaSep || [];
       lastIndice = aplicarIndice(works, text);            // títulos oficiais do sumário (grátis), se houver
@@ -3757,6 +3759,11 @@ function renderCobertura(ex){
     const fora = idxN - localizei;
     html += "<br><b>Conferência (trabalhos):</b> sumário lista <b>"+idxN+"</b> · localizei "+localizei+" · com e‑mail "+allResults.length
          + (fora>2?" · <b style='color:var(--danger)'>"+fora+" não localizados no corpo (revisar)</b>":" · ok");
+    // LISTA os títulos do sumário que NÃO foram achados no corpo (você vê exatamente quais faltam)
+    if(lastIndice && lastIndice.naoLoc && lastIndice.naoLoc.length){
+      html += "<br><span style='color:var(--muted)'>📋 trabalhos do sumário NÃO localizados ("+lastIndice.naoLoc.length+"): "
+        + lastIndice.naoLoc.slice(0,30).map(t=>escapeHtml((t||"").slice(0,70))).join(" · ") + (lastIndice.naoLoc.length>30?" …":"") + "</span>";
+    }
   }
   // META de e-mail: @ no PDF (alvo) × @ capturados. Fecha a esteira — avisa se faltou muito.
   if(_emailAlvo && _emailAlvo.uni.size>0){
@@ -3979,6 +3986,10 @@ document.getElementById("verificarIA").onclick = verificarIncertosIA;
   L.push(["RELATÓRIO DE COBERTURA",""]);
   L.push(["Trabalhos coletados (com e-mail)", allResults.length]);
   if(idxN!=null) L.push(["Trabalhos listados no sumário", idxN]);
+  if(lastIndice && lastIndice.naoLoc && lastIndice.naoLoc.length){
+    L.push([]); L.push(["TRABALHOS DO SUMÁRIO NÃO LOCALIZADOS ("+lastIndice.naoLoc.length+")"]);
+    lastIndice.naoLoc.forEach(t=>L.push([t]));
+  }
   L.push(["E-mails coletados (TOTAL = linhas)", nmail]);
   L.push(["E-mails coletados (únicos)", captUni.size]);
   L.push(["E-mails no PDF (TOTAL com repetições)", _emailAlvo?_emailAlvo.tot:alvo]);
@@ -4320,9 +4331,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.73";
+const VERSION = "13.74";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.74","2026-06-16","CONFERÊNCIA pelo sumário mais completa: além de mostrar «sumário lista N · localizei L», agora LISTA os TÍTULOS exatos dos trabalhos do sumário que NÃO foram encontrados no corpo — na tela (📋) e no relatório de cobertura (CSV). Assim, em vez de só saber que «faltam 16», você vê QUAIS 16 e vai conferir direto no PDF."],
   ["13.73","2026-06-16","Três melhorias pra anais (pedido): (1) REPARA o e‑mail antes de coletar — o PDF mete espaço dentro do e‑mail («x@ gmail.com», «bb.com. br») e perdia o fim; agora junta certinho (sem colar frase). (2) PULA capa e SUMÁRIO gigante — num anais de milhares de páginas, o índice (Título …… 123) só atrapalhava a IA e a rede de segurança; agora o app trabalha direto no miolo (mais barato e menos lixo). (3) BIBLIOTECA DE RODAPÉS: novo cortador pro formato «rodapé numerado» (autor com nº no topo ↔ e‑mail no rodapé «1. … E‑mail: x», ex.: UNITINS) — liga autor↔e‑mail pelo número, com título e nome certos, SEM IA (grátis). No anais da UNITINS: 55 trabalhos, 136 e‑mails, 52 títulos, de graça."],
   ["13.72","2026-06-15","RECUPERA o NOME de e‑mails que ficavam sem nome, lendo os RODAPÉS do anais de 2 jeitos (nome REAL do texto, nunca inventado): (1) numerado — liga o autor do topo «Nome¹» ao rodapé «1. … E‑mail: x» pelo número; (2) nomeado — «Nome, cargo … E‑mail: x». No anais da UNITINS recuperou 9 de 11 dos que estavam sem nome (Samuel de O Almeida, Agno L F da Silva, Brennda Sousa Mota, Marisa Brito…). Só preenche nome vazio/ruim — não mexe nos que já estavam certos. Os raros que sobram (página com layout diferente) ficam marcados pra revisar."],
   ["13.71","2026-06-15","Conserta linhas SEM NOME por e‑mail TRUNCADO pela IA: às vezes a IA cortava o começo do e‑mail (ex.: «edson@x» virava «son@x»). Como «son@x» é um pedaço de «edson@x», a trava anti‑invenção (que só checava se o texto «contém» o e‑mail) deixava passar — e a linha saía com o e‑mail errado e sem nome. Agora a trava exige que o e‑mail apareça com INÍCIO DE PALAVRA (não colado a outro e‑mail), então o truncado é rejeitado e fica só o e‑mail inteiro (que já vem com o nome certo em outra linha). No anais da UNITINS isso tira ~23 linhas‑lixo sem nome."],
