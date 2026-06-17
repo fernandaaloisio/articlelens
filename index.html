@@ -308,10 +308,10 @@
   <!-- Aba Custos (admin) -->
   <section class="panel" id="panel-cost" data-admin="1">
     <h3 style="margin:0 0 4px">💰 Gastos com a IA (Claude)</h3>
-    <p class="aihelp" style="margin:0 0 16px">«Gasto até agora» é o <b>mesmo total do histórico</b> aqui de baixo (salvo no navegador, atualiza a cada coleta). O «Restante» usa o limite configurado no Render. Para apagar o valor, use <b>🗑️ Zerar histórico</b>.</p>
+    <p class="aihelp" style="margin:0 0 16px">Visão de <b>admin</b>: «Gasto total» soma <b>todos os usuários</b> (contado pelo servidor, em todas as máquinas). O «Restante» usa o limite configurado no Render. Mais abaixo tem o <b>gasto por usuário</b> e, por último, o histórico só <b>deste computador</b>.</p>
     <div class="row" style="gap:14px;flex-wrap:wrap">
       <div style="flex:1;min-width:140px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:16px">
-        <div style="font-size:12px;color:var(--muted)">Gasto até agora</div>
+        <div style="font-size:12px;color:var(--muted)">Gasto total · todos os usuários</div>
         <div id="costSpent" style="font-size:26px;font-weight:800;color:var(--accent)">—</div>
       </div>
       <div style="flex:1;min-width:140px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:16px">
@@ -330,8 +330,11 @@
       <button class="btn ghost" id="costReset">Zerar contador (Render)</button>
     </div>
 
+    <!-- Gasto POR USUÁRIO (banco central, todas as máquinas) -->
+    <div id="custoPorUsuario"></div>
+
     <!-- Histórico de gastos (salvo no navegador → não zera quando o Render reinicia) -->
-    <h4 style="margin:24px 0 8px">📈 Histórico de gastos <span class="aihelp" style="font-weight:400">— salvo no seu navegador (não zera)</span></h4>
+    <h4 style="margin:24px 0 8px">📈 Histórico só deste computador <span class="aihelp" style="font-weight:400">— só as coletas feitas aqui, salvo no navegador (não zera ao reiniciar o Render)</span></h4>
     <label class="fld" style="display:inline-flex;align-items:center;gap:8px;margin:0 0 6px">Cotação aprox. US$ → R$:
       <input type="number" id="usdBrl" step="0.01" style="width:90px;padding:6px 8px" title="Quanto vale 1 dólar em reais (aproximado)"></label>
     <div class="row" style="gap:12px;flex-wrap:wrap">
@@ -349,7 +352,7 @@
     <div id="costChart" style="display:flex;align-items:flex-end;gap:8px;min-height:150px;padding:10px 4px;border:1px solid var(--border);border-radius:10px;background:var(--bg-soft);overflow-x:auto"></div>
 
     <!-- Custo POR E-MAIL vs meta (por dia/mês/ano) -->
-    <h4 style="margin:24px 0 8px">📧 Custo por e‑mail <span class="aihelp" style="font-weight:400">— e‑mails × valor, comparado à meta de R$ 0,06</span></h4>
+    <h4 style="margin:24px 0 8px">📧 Custo por e‑mail (deste computador) <span class="aihelp" style="font-weight:400">— e‑mails × valor, comparado à meta de R$ 0,06</span></h4>
     <div id="perEmailBox" style="overflow-x:auto"></div>
 
     <!-- Última coleta: custo por trabalho -->
@@ -3368,7 +3371,8 @@ async function processBatch(){
   }
   try{ _bumpEmailHist((allResults||[]).reduce((s,w)=>s+(w.authors||[]).filter(a=>a.email).length,0)); }catch(e){}   // e-mails do dia (p/ custo por e-mail)
   try{ _registrarColeta(); }catch(e){ console.warn("registrarColeta:",e); }   // histórico central (não trava nada)
-  try{ renderCostChart(); }catch(e){}   // atualiza o painel de Custos na hora (histórico + custo por e-mail + cartão de cima)
+  try{ const cp=document.getElementById("panel-cost");   // atualiza o painel de Custos na hora
+    if(cp && cp.classList.contains("active")) loadUsage(); else renderCostChart(); }catch(e){}
 }
 
 /* =========================================================================
@@ -3609,36 +3613,67 @@ if(_histRefreshBtn) _histRefreshBtn.onclick = carregarHistorico;
 
 /* ===== Painel de custos (admin) ===== */
 async function loadUsage(){
-  const root = (AI.baseURL||"").replace(/\/+$/,"").replace(/\/v1$/,"");
+  const root = _proxyRoot();
   const det = document.getElementById("costDetail");
-  // FONTE ÚNICA: os cartões mostram o HISTÓRICO LOCAL (atualiza a cada coleta, zera com "Zerar histórico").
-  const local = _aggCost().total || 0;
-  document.getElementById("costSpent").innerHTML = fmtMoney(local);
+  const puBox = document.getElementById("custoPorUsuario");
   if(!root){
+    // sem servidor: só dá pra mostrar o histórico deste navegador
+    document.getElementById("costSpent").innerHTML = fmtMoney(_aggCost().total||0);
     document.getElementById("costLimit").textContent = "—";
     document.getElementById("costLeft").textContent  = "—";
-    det.innerHTML = "Mostrando o histórico salvo neste navegador. (Faça login admin para ver também o limite do Render.)";
+    det.innerHTML = "Sem conexão com o servidor — mostrando só o histórico deste computador. (Faça login admin para ver o total de todos os usuários.)";
+    if(puBox) puBox.innerHTML = "";
     renderRun(); renderCostChart(); return;
   }
-  det.textContent = "carregando limite do servidor…";
+  det.textContent = "carregando…";
+  // 1) GASTO TOTAL de todos os usuários + limite (contador do proxy Render)
   try{
     const r = await fetch(root+"/usage", { headers:{ "Authorization":"Bearer "+AI.apiKey } });
     if(!r.ok) throw new Error("HTTP "+r.status);
     const u = await r.json();
-    const limite = u.limit||0;
+    const limite = u.limit||0, gastoTodos = u.usd||0;
+    document.getElementById("costSpent").innerHTML = fmtMoney(gastoTodos);
     document.getElementById("costLimit").innerHTML = limite ? fmtMoney(limite) : "sem limite";
-    document.getElementById("costLeft").innerHTML  = limite ? fmtMoney(Math.max(0, limite-local)) : "—";
-    const pct = (limite>0) ? Math.min(100, local/limite*100) : 0;
+    document.getElementById("costLeft").innerHTML  = limite ? fmtMoney(Math.max(0, limite-gastoTodos)) : "—";
+    const pct = (limite>0) ? Math.min(100, gastoTodos/limite*100) : 0;
     const bar = document.getElementById("costMeter");
     bar.style.width = pct.toFixed(1)+"%";
     bar.style.background = pct>=90 ? "var(--danger)" : (pct>=70 ? "var(--warn)" : "");
-    det.innerHTML = "«Gasto até agora» = histórico local (estimativa) · «Restante» = limite − gasto local."
-                  + "<br><span style='color:var(--muted)'>Referência do servidor Render: "+fmtMoney(u.usd||0)
-                  + " em "+(u.calls||0)+" chamadas"+(u.since? " desde "+escapeHtml(String(u.since).slice(0,10)) : "")+".</span>";
+    det.innerHTML = "Total de <b>todos os usuários</b>, somado pelo servidor · "+(u.calls||0)+" chamadas"
+                  + (u.since? " desde "+escapeHtml(String(u.since).slice(0,10)) : "")+".";
   }catch(e){
     document.getElementById("costLimit").textContent = "—";
     document.getElementById("costLeft").textContent  = "—";
-    det.textContent = "Limite do servidor indisponível ("+e.message+"). Os cartões mostram o histórico salvo neste navegador.";
+    det.textContent = "Total do servidor indisponível ("+e.message+"). Veja o gasto por usuário abaixo (banco central).";
+  }
+  // 2) GASTO POR USUÁRIO (banco central — todas as máquinas)
+  if(puBox){
+    puBox.innerHTML = "<p class='aihelp' style='margin:0'>carregando gasto por usuário…</p>";
+    try{
+      const r2 = await fetch(root+"/historico", { headers:_authHeaders() });
+      const j = await r2.json().catch(()=>({}));
+      if(!r2.ok){ puBox.innerHTML = "<p class='aihelp' style='margin:0;color:var(--danger)'>"+escapeHtml((j.error&&j.error.message)||("Erro "+r2.status))+"</p>"; }
+      else if(j.disabled){ puBox.innerHTML = "<p class='aihelp' style='margin:0'>⚠️ Banco não está ligado — sem detalhe por usuário (configure DATABASE_URL no Render).</p>"; }
+      else {
+        const pp = (j.porPessoa||[]).slice().sort((a,b)=>(b.custo_usd||0)-(a.custo_usd||0));
+        const tot = j.totais||{};
+        let h = "<h4 style='margin:22px 0 8px'>👥 Gasto por usuário <span class='aihelp' style='font-weight:400'>— todas as máquinas (servidor)</span></h4>";
+        if(!pp.length){ h += "<p class='aihelp' style='margin:0'>Nenhuma coleta registrada no servidor ainda.</p>"; }
+        else {
+          h += "<table style='width:100%;border-collapse:collapse;font-size:14px'><thead><tr style='text-align:left;color:var(--muted)'>"
+            +"<th style='padding:6px 8px'>Pessoa</th><th style='padding:6px 8px'>Coletas</th><th style='padding:6px 8px'>E‑mails</th><th style='padding:6px 8px'>Custo</th></tr></thead><tbody>";
+          for(const p of pp){
+            h += "<tr style='border-top:1px solid var(--border)'><td style='padding:8px;font-weight:600'>"+escapeHtml(p.pessoa||"(sem nome)")+"</td>"
+              +"<td style='padding:8px'>"+(p.coletas||0)+"</td><td style='padding:8px'>"+(p.emails||0)+"</td>"
+              +"<td style='padding:8px;font-weight:700'>"+fmtMoney(p.custo_usd||0)+"</td></tr>";
+          }
+          h += "<tr style='border-top:2px solid var(--border)'><td style='padding:8px;font-weight:800'>Total</td>"
+            +"<td style='padding:8px;font-weight:800'>"+(tot.coletas||0)+"</td><td style='padding:8px;font-weight:800'>"+(tot.emails||0)+"</td>"
+            +"<td style='padding:8px;font-weight:800;color:var(--accent)'>"+fmtMoney(tot.custo_usd||0)+"</td></tr></tbody></table>";
+        }
+        puBox.innerHTML = h;
+      }
+    }catch(e){ puBox.innerHTML = "<p class='aihelp' style='margin:0;color:var(--danger)'>Falha ao carregar gasto por usuário: "+escapeHtml(e.message)+"</p>"; }
   }
   renderRun(); renderCostChart();
 }
@@ -3666,7 +3701,6 @@ function renderCostChart(){
   const box=document.getElementById("costChart"); if(!box) return;
   const a=_aggCost(); const fmt=v=>"US$ "+(v||0).toFixed(v<1?4:2);
   const hoje=_diaHoje();
-  const sp=document.getElementById("costSpent"); if(sp) sp.innerHTML=fmtMoney(a.total||0);   // cartão de cima = mesmo total do histórico
   const set=(id,v)=>{const e=document.getElementById(id); if(e)e.innerHTML=fmtBRL(v)+"<div style='font-size:10px;color:var(--muted);font-weight:400'>"+fmtUSD(v)+"</div>";};
   set("chToday",a.dia[hoje]||0); set("chMonth",a.mes[hoje.slice(0,7)]||0); set("chYear",a.ano[hoje.slice(0,4)]||0); set("chTotal",a.total);
   const byKey=(x,y)=>x[0]<y[0]?-1:(x[0]>y[0]?1:0);
@@ -4545,9 +4579,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.90";
+const VERSION = "13.91";
 const VERSION_DATE = "2026-06-17";
 const CHANGELOG = [
+  ["13.91","2026-06-17","CUSTOS de ADMIN — agora você vê TUDO: (1) o cartão de cima «Gasto total · todos os usuários» voltou a somar o gasto de TODOS (contado pelo servidor, em todas as máquinas) — na v13.89 ele tinha passado a mostrar só o seu navegador, escondendo os outros; (2) nova tabela «👥 Gasto por usuário» dentro da aba Custos, com Coletas / E‑mails / Custo de cada pessoa e o Total (vinda do banco central, igual à aba Histórico); (3) o «📈 Histórico» e o «📧 Custo por e‑mail» ficaram marcados como «só deste computador», pra não confundir com o total de todos. Resumo: o número grande é de todos os usuários; logo abaixo, quem gastou quanto; por último, o detalhe por dia da sua máquina."],
   ["13.90","2026-06-17","O dia de HOJE agora aparece no gráfico mesmo quando a coleta foi GRÁTIS (determinístico, sem IA): mostra a barra com R$ 0,00 em vez de sumir. Antes, se você coletasse hoje mas a IA não precisasse rodar, o dia não aparecia e dava impressão de que «faltou o custo do dia» — na verdade custou zero, que é o esperado. (O custo só vira barra de verdade nos dias em que a IA rodou pra preencher lacuna.)"],
   ["13.89","2026-06-17","Painel de CUSTOS arrumado: antes o «Gasto até agora» vinha do servidor Render e o «Histórico» vinha do navegador — dois números de fontes diferentes que nunca batiam e davam impressão de «não atualiza». Agora é FONTE ÚNICA: o «Gasto até agora» mostra o MESMO total do histórico (salvo no navegador), atualiza SOZINHO assim que cada coleta termina, e zera junto com o botão «🗑️ Zerar histórico». O «Restante» = limite do Render − esse gasto. O número real do servidor continua aparecendo, mas só como REFERÊNCIA na linha de baixo. Resultado: um total só, coerente, que acompanha o histórico."],
   ["13.88","2026-06-16","Nome no formato «SOBRENOME, Nome» agora é reconhecido: antes o app só recuperava iniciais («SANTOS, A.C.S»); agora também pega o PRIMEIRO NOME por extenso (ex.: «JÚNIOR, Geovani» → geovani.junior@uemasul.edu.br). Continua honesto — só preenche quando o sobrenome OU o primeiro nome aparece dentro do próprio e‑mail; se não dá pra saber de quem é, fica vazio pra revisar. Testado no anais que veio na pasta: 185 nomes recuperados e todos casam com o e‑mail; o anais da UNITINS e o de Medicina não regrediram."],
