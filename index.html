@@ -776,6 +776,9 @@ async function extractTextFromPDF(file){
   }
   let clean = consertarAcentos(out).normalize("NFC")   // junta acentos soltos (LaTeX) + compõe ç/ã
                    .replace(/[ \t]+/g," ").replace(/\n{3,}/g,"\n\n").trim();
+  clean = clean.replace(/([A-Za-zÀ-ÿ])-\n[ \t]*([a-zà-ÿA-ZÀ-Ý])/g, "$1$2");   // junta palavra QUEBRADA POR HÍFEN na quebra de linha (DOENÇA DE AL-\nZHEIMER → ALZHEIMER)
+  clean = clean.replace(/([A-Za-zÀ-ÿ0-9._%+\-]+)@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})/g,   // tira ACENTO do e‑mail (márcio.fm@ → marcio.fm@) p/ não perder o começo
+    (m,l,d)=> l.normalize("NFD").replace(/[̀-ͯ]/g,"")+"@"+d);
   clean = _repararEmailEspacos(clean);                  // tira espaço de dentro do e‑mail (x@ gmail / bb.com. br)
   clean = _juntarEmailQuebrado(clean);                  // cola e‑mail partido na quebra de linha (…@ + domínio)
   clean = _completarTLD(clean);                         // completa TLD truncado no PDF (@unitins → @unitins.br)
@@ -4482,9 +4485,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.85";
+const VERSION = "13.86";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.86","2026-06-16","Duas melhorias pedidas: (1) E‑MAIL COM ACENTO — antes «márcio.fm@unitins.br» saía cortado como «rcio.fm@unitins.br» (perdia o «má»); agora o app tira o acento do e‑mail e pega ele inteiro (márcio→marcio). (2) TÍTULO QUEBRADO POR HÍFEN — «…DOENÇA DE AL‑[quebra]ZHEIMER» saía como «(sem título)»; agora o app junta a palavra partida no fim da linha («ALZHEIMER») e o título sai certo. (Só junta hífen de QUEBRA DE LINHA — «pós‑graduação» no meio da linha continua com o hífen.)"],
   ["13.85","2026-06-16","Título errado agora VAI pra revisão: o detector de título-lixo passou a pegar (1) afiliação que virou título («CURSO DE MEDICINA DA UNIVERSIDADE… BOA VISTA - RR, BRASIL»), (2) lista de autores no lugar do título, (3) referência bibliográfica colada («… DOI: 10.1097… GLOBAL OPEN, V. 11, N. 4»), e (4) título que começa com instituição («Faculdades Integradas…»). Esses viram «sem título» e entram como ⚠ pra revisar — antes passavam como se estivessem certos. Testado no anais de Medicina: 5 títulos errados marcados, 94 bons mantidos."],
   ["13.84","2026-06-16","Recupera o nome ABREVIADO de verdade (anais de Medicina): depois de barrar os nomes inventados, o app vai no bloco «AUTORIA: SOBRENOME, X.Y.Z; …» e casa cada e‑mail SEM nome pelo SOBRENOME ou pelas INICIAIS contidas no e‑mail (ex.: anacarol.acss → «SANTOS, A.C.S»; ricardonunes → «NUNES, R.F.»; maria.castro2 → «CASTRO, M.L.D»). É a forma honesta do PDF — não inventa. Os e‑mails que realmente não dá pra saber de quem são (ex.: psycotrin@ufg.br) ficam vazios pra revisar. Resultado: bem menos linhas sem nome, e nenhuma inventada."],
   ["13.83","2026-06-16","Trava DURA contra nome chutado pela IA: agora o app VERIFICA cada nome contra o texto do PDF. Se o nome que a IA devolveu NÃO aparece no PDF (ela inventou ou expandiu iniciais, ou é um e‑mail tipo «psycotrin@ufg.br» que não dá pra saber de quem é), o app REJEITA — usa o nome como está no PDF (ex.: mantém «SANTOS, A.C.S» em vez de virar «Ana Carolina Santos») ou deixa VAZIO pra revisar. Não é mais a instrução na IA (que ela ignorava) — é uma checagem determinística que a IA não tem como furar. Vale pra qualquer PDF."],
