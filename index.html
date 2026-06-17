@@ -1762,7 +1762,8 @@ function _recuperarNomeAbrev(records, txt){
   if(!txt) return 0;
   const nrm=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
   const low=txt.toLowerCase();
-  const reSrc="([A-ZÀ-Ý][A-ZÀ-Ýa-zà-ÿ]+(?:\\s+(?:DE|DA|DO|DOS|DAS|E)\\s+[A-ZÀ-Ý][A-ZÀ-Ýa-zà-ÿ]+)*),\\s*((?:[A-ZÀ-Ý]\\.?){1,5})\\b";
+  // "SOBRENOME, X.Y.Z" (iniciais)  OU  "SOBRENOME, Geovani" (primeiro nome completo)
+  const reSrc="([A-ZÀ-Ý][A-ZÀ-Ýa-zà-ÿ]+(?:\\s+(?:DE|DA|DO|DOS|DAS|E)\\s+[A-ZÀ-Ý][A-ZÀ-Ýa-zà-ÿ]+)*),\\s*([A-ZÀ-Ý][A-Za-zÀ-ÿ.]*(?:\\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ.]*){0,3})";
   let n=0;
   for(const r of (records||[])) for(const a of (r.authors||[])){
     if(a.email && !a.name){
@@ -1770,9 +1771,10 @@ function _recuperarNomeAbrev(records, txt){
       const bloco=txt.slice(Math.max(0,idx-700), idx+60);
       const loc=nrm(a.email.split("@")[0]).replace(/[._\-0-9]/g,"");
       let m, best="", bestSc=0; const re=new RegExp(reSrc,"g");
-      while((m=re.exec(bloco))){ const sob=nrm(m[1]).replace(/\s+/g,""); const ini=nrm(m[2]).replace(/[.\s]/g,"");
-        let sc=0; if(sob.length>=4 && loc.includes(sob)) sc+=10; if(ini.length>=2 && loc.includes(ini)) sc+=ini.length;
-        if(sc>bestSc){ bestSc=sc; best=m[1].replace(/\s+/g," ")+", "+m[2].replace(/\s+/g,""); } }
+      while((m=re.exec(bloco))){ const sob=nrm(m[1]).replace(/\s+/g,""); const np=nrm(m[2]).replace(/[.\s]/g,"");
+        let sc=0; if(sob.length>=4 && loc.includes(sob)) sc+=10;        // sobrenome no e-mail (junior@…)
+        if(np.length>=2 && loc.includes(np)) sc+=np.length;            // 1º nome OU iniciais no e-mail (geovani@…, acss@…)
+        if(sc>bestSc){ bestSc=sc; best=m[1].replace(/\s+/g," ").trim()+", "+m[2].replace(/\s+/g," ").trim(); } }
       if(bestSc>=2){ a.name=best; n++; }
     }
   }
@@ -4531,9 +4533,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.87";
+const VERSION = "13.88";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.88","2026-06-16","Nome no formato «SOBRENOME, Nome» agora é reconhecido: antes o app só recuperava iniciais («SANTOS, A.C.S»); agora também pega o PRIMEIRO NOME por extenso (ex.: «JÚNIOR, Geovani» → geovani.junior@uemasul.edu.br). Continua honesto — só preenche quando o sobrenome OU o primeiro nome aparece dentro do próprio e‑mail; se não dá pra saber de quem é, fica vazio pra revisar. Testado no anais que veio na pasta: 185 nomes recuperados e todos casam com o e‑mail; o anais da UNITINS e o de Medicina não regrediram."],
   ["13.87","2026-06-16","Novo bloco «📧 Custo por e‑mail» no painel de Custos: tabela com Hoje / Este mês / Este ano / Total, mostrando quantos e‑mails você coletou, quanto gastou (R$) e o CUSTO POR E‑MAIL no período, comparado à meta de R$ 0,06 (✅ dentro / ⚠️ acima). O app passou a contar os e‑mails coletados por dia. Coletas grátis (determinístico, sem IA) baixam a média — é o esperado. Dica: clique em «🗑️ Zerar histórico» uma vez pra começar limpo (os dias antigos têm custo de teste do Opus mas ainda não tinham a contagem de e‑mails)."],
   ["13.86","2026-06-16","Duas melhorias pedidas: (1) E‑MAIL COM ACENTO — antes «márcio.fm@unitins.br» saía cortado como «rcio.fm@unitins.br» (perdia o «má»); agora o app tira o acento do e‑mail e pega ele inteiro (márcio→marcio). (2) TÍTULO QUEBRADO POR HÍFEN — «…DOENÇA DE AL‑[quebra]ZHEIMER» saía como «(sem título)»; agora o app junta a palavra partida no fim da linha («ALZHEIMER») e o título sai certo. (Só junta hífen de QUEBRA DE LINHA — «pós‑graduação» no meio da linha continua com o hífen.)"],
   ["13.85","2026-06-16","Título errado agora VAI pra revisão: o detector de título-lixo passou a pegar (1) afiliação que virou título («CURSO DE MEDICINA DA UNIVERSIDADE… BOA VISTA - RR, BRASIL»), (2) lista de autores no lugar do título, (3) referência bibliográfica colada («… DOI: 10.1097… GLOBAL OPEN, V. 11, N. 4»), e (4) título que começa com instituição («Faculdades Integradas…»). Esses viram «sem título» e entram como ⚠ pra revisar — antes passavam como se estivessem certos. Testado no anais de Medicina: 5 títulos errados marcados, 94 bons mantidos."],
