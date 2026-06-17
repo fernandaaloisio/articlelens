@@ -348,6 +348,10 @@
     </div>
     <div id="costChart" style="display:flex;align-items:flex-end;gap:8px;min-height:150px;padding:10px 4px;border:1px solid var(--border);border-radius:10px;background:var(--bg-soft);overflow-x:auto"></div>
 
+    <!-- Custo POR E-MAIL vs meta (por dia/mês/ano) -->
+    <h4 style="margin:24px 0 8px">📧 Custo por e‑mail <span class="aihelp" style="font-weight:400">— e‑mails × valor, comparado à meta de R$ 0,06</span></h4>
+    <div id="perEmailBox" style="overflow-x:auto"></div>
+
     <!-- Última coleta: custo por trabalho -->
     <h4 style="margin:22px 0 6px">📦 Última coleta</h4>
     <div class="row" style="gap:14px;flex-wrap:wrap">
@@ -2225,6 +2229,10 @@ const fmtMoney = v => fmtBRL(v)+" <span style='color:var(--muted);font-weight:40
 let aiUsage = (()=>{ try{ return JSON.parse(localStorage.getItem("articlelens_usage")) || {in:0,out:0,usd:0,calls:0}; }catch(e){ return {in:0,out:0,usd:0,calls:0}; } })();
 // Histórico de custo POR DIA (no navegador → não zera quando o Render reinicia). Dia → US$.
 let costHist = (()=>{ try{ return JSON.parse(localStorage.getItem("articlelens_costhist")) || {}; }catch(e){ return {}; } })();
+// Histórico de E-MAILS coletados POR DIA (p/ calcular custo por e-mail vs meta, por dia/mês/ano)
+let emailHist = (()=>{ try{ return JSON.parse(localStorage.getItem("articlelens_emailhist")) || {}; }catch(e){ return {}; } })();
+function _bumpEmailHist(n){ if(!(n>0)) return; const d=_diaHoje(); emailHist[d]=(emailHist[d]||0)+n;
+  try{ localStorage.setItem("articlelens_emailhist", JSON.stringify(emailHist)); }catch(e){} }
 // migra chaves antigas sem zero à esquerda (2026-6-5 → 2026-06-05) e JUNTA duplicatas do mesmo dia
 (function(){ try{ const m={}; let mud=false;
   for(const [k,v] of Object.entries(costHist)){ const nk=_normDia(k); if(nk!==k) mud=true; m[nk]=(m[nk]||0)+v; }
@@ -3356,6 +3364,7 @@ async function processBatch(){
   } else {
     toast("Pronto: "+trab+" trabalhos. Clique em Excel/CSV para baixar.");
   }
+  try{ _bumpEmailHist((allResults||[]).reduce((s,w)=>s+(w.authors||[]).filter(a=>a.email).length,0)); }catch(e){}   // e-mails do dia (p/ custo por e-mail)
   try{ _registrarColeta(); }catch(e){ console.warn("registrarColeta:",e); }   // histórico central (não trava nada)
 }
 
@@ -3637,6 +3646,14 @@ function _aggCost(){
   }
   return {dia,mes,ano,total};
 }
+function _aggEmail(){
+  const dia={}, mes={}, ano={}; let total=0;
+  for(const [d0,v] of Object.entries(emailHist||{})){
+    const d=_normDia(d0);
+    dia[d]=(dia[d]||0)+v; mes[d.slice(0,7)]=(mes[d.slice(0,7)]||0)+v; ano[d.slice(0,4)]=(ano[d.slice(0,4)]||0)+v; total+=v;
+  }
+  return {dia,mes,ano,total};
+}
 function renderCostChart(){
   const box=document.getElementById("costChart"); if(!box) return;
   const a=_aggCost(); const fmt=v=>"US$ "+(v||0).toFixed(v<1?4:2);
@@ -3658,6 +3675,35 @@ function renderCostChart(){
       +"<div style='width:22px;height:"+h+"px;background:var(--accent);border-radius:4px 4px 0 0'></div>"
       +"<div style='font-size:10px;color:var(--muted);white-space:nowrap'>"+escapeHtml(lbl)+"</div></div>";
   }).join("");
+  try{ renderPerEmail(); }catch(e){ console.warn("perEmail:",e); }
+}
+/* Tabela "custo por e-mail" por período (Hoje / Este mês / Este ano / Total), comparado à META R$ 0,06.
+   custo/e‑mail = (custo do período em R$) ÷ (e‑mails coletados no período). Coletas grátis (determinístico,
+   sem IA) BAIXAM a média — é o esperado. ✅ se ≤ meta, ⚠️ se acima. */
+function renderPerEmail(){
+  const box=document.getElementById("perEmailBox"); if(!box) return;
+  const META=0.06, c=_aggCost(), e=_aggEmail(), hoje=_diaHoje();
+  const linhas=[ ["Hoje",c.dia[hoje]||0,e.dia[hoje]||0],
+                 ["Este mês",c.mes[hoje.slice(0,7)]||0,e.mes[hoje.slice(0,7)]||0],
+                 ["Este ano",c.ano[hoje.slice(0,4)]||0,e.ano[hoje.slice(0,4)]||0],
+                 ["Total geral",c.total||0,e.total||0] ];
+  let html="<table style='width:100%;border-collapse:collapse;font-size:14px'><thead><tr style='text-align:left;color:var(--muted)'>"
+    +"<th style='padding:6px 8px'>Período</th><th style='padding:6px 8px'>E‑mails</th><th style='padding:6px 8px'>Custo (R$)</th>"
+    +"<th style='padding:6px 8px'>R$/e‑mail</th><th style='padding:6px 8px'>Meta R$ 0,06</th></tr></thead><tbody>";
+  for(const [rot,usd,em] of linhas){
+    const custoBRL=(usd||0)*USD_BRL; const per= em? custoBRL/em : 0;
+    const dentro= em ? per<=META : true;
+    const cor= em ? (dentro?"var(--ok,#28a745)":"var(--danger)") : "var(--muted)";
+    const selo= em ? (dentro?"✅ dentro":"⚠️ acima") : "—";
+    html+="<tr style='border-top:1px solid var(--border)'>"
+      +"<td style='padding:8px;font-weight:600'>"+rot+"</td>"
+      +"<td style='padding:8px'>"+(em||0)+"</td>"
+      +"<td style='padding:8px'>R$ "+custoBRL.toFixed(2).replace(".",",")+"</td>"
+      +"<td style='padding:8px;font-weight:700;color:"+cor+"'>"+(em?("R$ "+per.toFixed(4).replace(".",",")):"—")+"</td>"
+      +"<td style='padding:8px;color:"+cor+"'>"+selo+"</td></tr>";
+  }
+  html+="</tbody></table>";
+  box.innerHTML=html;
 }
 document.querySelectorAll(".chper").forEach(b=>b.onclick=()=>{
   _chartPeriodo=b.dataset.per;
@@ -3666,8 +3712,8 @@ document.querySelectorAll(".chper").forEach(b=>b.onclick=()=>{
 });
 (function(){ const zb=document.getElementById("zerarHist"); if(!zb) return;
   zb.onclick=()=>{ if(!confirm("Apagar o histórico de gastos salvo no navegador? (Os valores antigos do Opus estavam com o preço errado.)")) return;
-    costHist={}; aiUsage={in:0,out:0,usd:0,calls:0};
-    try{ localStorage.removeItem("articlelens_costhist"); localStorage.removeItem("articlelens_usage"); }catch(e){}
+    costHist={}; aiUsage={in:0,out:0,usd:0,calls:0}; emailHist={};
+    try{ localStorage.removeItem("articlelens_costhist"); localStorage.removeItem("articlelens_usage"); localStorage.removeItem("articlelens_emailhist"); }catch(e){}
     renderCostChart(); try{ renderRun(); }catch(_){}
     toast("Histórico de gastos zerado. A partir de agora o custo é calculado com o preço certo.");
   };
@@ -4485,9 +4531,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.86";
+const VERSION = "13.87";
 const VERSION_DATE = "2026-06-16";
 const CHANGELOG = [
+  ["13.87","2026-06-16","Novo bloco «📧 Custo por e‑mail» no painel de Custos: tabela com Hoje / Este mês / Este ano / Total, mostrando quantos e‑mails você coletou, quanto gastou (R$) e o CUSTO POR E‑MAIL no período, comparado à meta de R$ 0,06 (✅ dentro / ⚠️ acima). O app passou a contar os e‑mails coletados por dia. Coletas grátis (determinístico, sem IA) baixam a média — é o esperado. Dica: clique em «🗑️ Zerar histórico» uma vez pra começar limpo (os dias antigos têm custo de teste do Opus mas ainda não tinham a contagem de e‑mails)."],
   ["13.86","2026-06-16","Duas melhorias pedidas: (1) E‑MAIL COM ACENTO — antes «márcio.fm@unitins.br» saía cortado como «rcio.fm@unitins.br» (perdia o «má»); agora o app tira o acento do e‑mail e pega ele inteiro (márcio→marcio). (2) TÍTULO QUEBRADO POR HÍFEN — «…DOENÇA DE AL‑[quebra]ZHEIMER» saía como «(sem título)»; agora o app junta a palavra partida no fim da linha («ALZHEIMER») e o título sai certo. (Só junta hífen de QUEBRA DE LINHA — «pós‑graduação» no meio da linha continua com o hífen.)"],
   ["13.85","2026-06-16","Título errado agora VAI pra revisão: o detector de título-lixo passou a pegar (1) afiliação que virou título («CURSO DE MEDICINA DA UNIVERSIDADE… BOA VISTA - RR, BRASIL»), (2) lista de autores no lugar do título, (3) referência bibliográfica colada («… DOI: 10.1097… GLOBAL OPEN, V. 11, N. 4»), e (4) título que começa com instituição («Faculdades Integradas…»). Esses viram «sem título» e entram como ⚠ pra revisar — antes passavam como se estivessem certos. Testado no anais de Medicina: 5 títulos errados marcados, 94 bons mantidos."],
   ["13.84","2026-06-16","Recupera o nome ABREVIADO de verdade (anais de Medicina): depois de barrar os nomes inventados, o app vai no bloco «AUTORIA: SOBRENOME, X.Y.Z; …» e casa cada e‑mail SEM nome pelo SOBRENOME ou pelas INICIAIS contidas no e‑mail (ex.: anacarol.acss → «SANTOS, A.C.S»; ricardonunes → «NUNES, R.F.»; maria.castro2 → «CASTRO, M.L.D»). É a forma honesta do PDF — não inventa. Os e‑mails que realmente não dá pra saber de quem são (ex.: psycotrin@ufg.br) ficam vazios pra revisar. Resultado: bem menos linhas sem nome, e nenhuma inventada."],
