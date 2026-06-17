@@ -308,7 +308,7 @@
   <!-- Aba Custos (admin) -->
   <section class="panel" id="panel-cost" data-admin="1">
     <h3 style="margin:0 0 4px">💰 Gastos com a IA (Claude)</h3>
-    <p class="aihelp" style="margin:0 0 16px">Soma estimada do que foi gasto pelo proxy. Limite configurado no Render.</p>
+    <p class="aihelp" style="margin:0 0 16px">«Gasto até agora» é o <b>mesmo total do histórico</b> aqui de baixo (salvo no navegador, atualiza a cada coleta). O «Restante» usa o limite configurado no Render. Para apagar o valor, use <b>🗑️ Zerar histórico</b>.</p>
     <div class="row" style="gap:14px;flex-wrap:wrap">
       <div style="flex:1;min-width:140px;background:var(--bg-soft);border:1px solid var(--border);border-radius:12px;padding:16px">
         <div style="font-size:12px;color:var(--muted)">Gasto até agora</div>
@@ -3368,6 +3368,7 @@ async function processBatch(){
   }
   try{ _bumpEmailHist((allResults||[]).reduce((s,w)=>s+(w.authors||[]).filter(a=>a.email).length,0)); }catch(e){}   // e-mails do dia (p/ custo por e-mail)
   try{ _registrarColeta(); }catch(e){ console.warn("registrarColeta:",e); }   // histórico central (não trava nada)
+  try{ renderCostChart(); }catch(e){}   // atualiza o painel de Custos na hora (histórico + custo por e-mail + cartão de cima)
 }
 
 /* =========================================================================
@@ -3610,29 +3611,34 @@ if(_histRefreshBtn) _histRefreshBtn.onclick = carregarHistorico;
 async function loadUsage(){
   const root = (AI.baseURL||"").replace(/\/+$/,"").replace(/\/v1$/,"");
   const det = document.getElementById("costDetail");
-  if(!root){ det.textContent = "Conecte a IA primeiro (login admin)."; return; }
-  det.textContent = "carregando…";
+  // FONTE ÚNICA: os cartões mostram o HISTÓRICO LOCAL (atualiza a cada coleta, zera com "Zerar histórico").
+  const local = _aggCost().total || 0;
+  document.getElementById("costSpent").innerHTML = fmtMoney(local);
+  if(!root){
+    document.getElementById("costLimit").textContent = "—";
+    document.getElementById("costLeft").textContent  = "—";
+    det.innerHTML = "Mostrando o histórico salvo neste navegador. (Faça login admin para ver também o limite do Render.)";
+    renderRun(); renderCostChart(); return;
+  }
+  det.textContent = "carregando limite do servidor…";
   try{
     const r = await fetch(root+"/usage", { headers:{ "Authorization":"Bearer "+AI.apiKey } });
     if(!r.ok) throw new Error("HTTP "+r.status);
     const u = await r.json();
-    document.getElementById("costSpent").innerHTML = fmtMoney(u.usd);
-    document.getElementById("costLimit").innerHTML = u.limit ? fmtMoney(u.limit) : "sem limite";
-    document.getElementById("costLeft").innerHTML  = (u.remaining==null) ? "—" : fmtMoney(u.remaining);
-    const pct = (u.limit>0) ? Math.min(100, u.usd/u.limit*100) : 0;
+    const limite = u.limit||0;
+    document.getElementById("costLimit").innerHTML = limite ? fmtMoney(limite) : "sem limite";
+    document.getElementById("costLeft").innerHTML  = limite ? fmtMoney(Math.max(0, limite-local)) : "—";
+    const pct = (limite>0) ? Math.min(100, local/limite*100) : 0;
     const bar = document.getElementById("costMeter");
     bar.style.width = pct.toFixed(1)+"%";
     bar.style.background = pct>=90 ? "var(--danger)" : (pct>=70 ? "var(--warn)" : "");
-    det.innerHTML = (u.calls||0)+" chamadas · "+(u.in||0).toLocaleString()+" tokens entrada · "
-                  +(u.out||0).toLocaleString()+" tokens saída"
-                  + (u.since? " · desde "+escapeHtml(String(u.since).slice(0,10)) : "");
+    det.innerHTML = "«Gasto até agora» = histórico local (estimativa) · «Restante» = limite − gasto local."
+                  + "<br><span style='color:var(--muted)'>Referência do servidor Render: "+fmtMoney(u.usd||0)
+                  + " em "+(u.calls||0)+" chamadas"+(u.since? " desde "+escapeHtml(String(u.since).slice(0,10)) : "")+".</span>";
   }catch(e){
-    // servidor indisponível → mostra o acumulado LOCAL salvo (persiste ao fechar a web)
-    document.getElementById("costSpent").innerHTML = fmtMoney(aiUsage.usd||0);
     document.getElementById("costLimit").textContent = "—";
     document.getElementById("costLeft").textContent  = "—";
-    det.textContent = "Total do servidor indisponível ("+e.message+"). Mostrando acumulado LOCAL salvo neste navegador: "
-      +(aiUsage.calls||0)+" chamadas · "+(aiUsage.in||0).toLocaleString()+" tokens entrada · "+(aiUsage.out||0).toLocaleString()+" saída.";
+    det.textContent = "Limite do servidor indisponível ("+e.message+"). Os cartões mostram o histórico salvo neste navegador.";
   }
   renderRun(); renderCostChart();
 }
@@ -3660,6 +3666,7 @@ function renderCostChart(){
   const box=document.getElementById("costChart"); if(!box) return;
   const a=_aggCost(); const fmt=v=>"US$ "+(v||0).toFixed(v<1?4:2);
   const hoje=_diaHoje();
+  const sp=document.getElementById("costSpent"); if(sp) sp.innerHTML=fmtMoney(a.total||0);   // cartão de cima = mesmo total do histórico
   const set=(id,v)=>{const e=document.getElementById(id); if(e)e.innerHTML=fmtBRL(v)+"<div style='font-size:10px;color:var(--muted);font-weight:400'>"+fmtUSD(v)+"</div>";};
   set("chToday",a.dia[hoje]||0); set("chMonth",a.mes[hoje.slice(0,7)]||0); set("chYear",a.ano[hoje.slice(0,4)]||0); set("chTotal",a.total);
   const byKey=(x,y)=>x[0]<y[0]?-1:(x[0]>y[0]?1:0);
@@ -4533,9 +4540,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.88";
-const VERSION_DATE = "2026-06-16";
+const VERSION = "13.89";
+const VERSION_DATE = "2026-06-17";
 const CHANGELOG = [
+  ["13.89","2026-06-17","Painel de CUSTOS arrumado: antes o «Gasto até agora» vinha do servidor Render e o «Histórico» vinha do navegador — dois números de fontes diferentes que nunca batiam e davam impressão de «não atualiza». Agora é FONTE ÚNICA: o «Gasto até agora» mostra o MESMO total do histórico (salvo no navegador), atualiza SOZINHO assim que cada coleta termina, e zera junto com o botão «🗑️ Zerar histórico». O «Restante» = limite do Render − esse gasto. O número real do servidor continua aparecendo, mas só como REFERÊNCIA na linha de baixo. Resultado: um total só, coerente, que acompanha o histórico."],
   ["13.88","2026-06-16","Nome no formato «SOBRENOME, Nome» agora é reconhecido: antes o app só recuperava iniciais («SANTOS, A.C.S»); agora também pega o PRIMEIRO NOME por extenso (ex.: «JÚNIOR, Geovani» → geovani.junior@uemasul.edu.br). Continua honesto — só preenche quando o sobrenome OU o primeiro nome aparece dentro do próprio e‑mail; se não dá pra saber de quem é, fica vazio pra revisar. Testado no anais que veio na pasta: 185 nomes recuperados e todos casam com o e‑mail; o anais da UNITINS e o de Medicina não regrediram."],
   ["13.87","2026-06-16","Novo bloco «📧 Custo por e‑mail» no painel de Custos: tabela com Hoje / Este mês / Este ano / Total, mostrando quantos e‑mails você coletou, quanto gastou (R$) e o CUSTO POR E‑MAIL no período, comparado à meta de R$ 0,06 (✅ dentro / ⚠️ acima). O app passou a contar os e‑mails coletados por dia. Coletas grátis (determinístico, sem IA) baixam a média — é o esperado. Dica: clique em «🗑️ Zerar histórico» uma vez pra começar limpo (os dias antigos têm custo de teste do Opus mas ainda não tinham a contagem de e‑mails)."],
   ["13.86","2026-06-16","Duas melhorias pedidas: (1) E‑MAIL COM ACENTO — antes «márcio.fm@unitins.br» saía cortado como «rcio.fm@unitins.br» (perdia o «má»); agora o app tira o acento do e‑mail e pega ele inteiro (márcio→marcio). (2) TÍTULO QUEBRADO POR HÍFEN — «…DOENÇA DE AL‑[quebra]ZHEIMER» saía como «(sem título)»; agora o app junta a palavra partida no fim da linha («ALZHEIMER») e o título sai certo. (Só junta hífen de QUEBRA DE LINHA — «pós‑graduação» no meio da linha continua com o hífen.)"],
