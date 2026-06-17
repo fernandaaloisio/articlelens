@@ -3670,11 +3670,16 @@ function renderCostChart(){
   const set=(id,v)=>{const e=document.getElementById(id); if(e)e.innerHTML=fmtBRL(v)+"<div style='font-size:10px;color:var(--muted);font-weight:400'>"+fmtUSD(v)+"</div>";};
   set("chToday",a.dia[hoje]||0); set("chMonth",a.mes[hoje.slice(0,7)]||0); set("chYear",a.ano[hoje.slice(0,4)]||0); set("chTotal",a.total);
   const byKey=(x,y)=>x[0]<y[0]?-1:(x[0]>y[0]?1:0);
+  const eDia=_aggEmail().dia;     // e-mails coletados por dia (mesmo sem custo)
   let entries;
   if(_chartPeriodo==="mes") entries=Object.entries(a.mes).sort(byKey);
   else if(_chartPeriodo==="ano") entries=Object.entries(a.ano).sort(byKey);
-  else entries=Object.entries(a.dia).sort(byKey).slice(-30);     // últimos 30 dias
-  if(!entries.length){ box.innerHTML="<div class='aihelp' style='margin:auto'>Sem gastos registrados ainda. Rode uma coleta com a IA ligada.</div>"; return; }
+  else {
+    const diaMap=Object.assign({}, a.dia);
+    if(diaMap[hoje]==null && eDia[hoje]>0) diaMap[hoje]=0;   // houve coleta hoje, mas grátis (determinístico) → mostra o dia com R$ 0,00
+    entries=Object.entries(diaMap).sort(byKey).slice(-30);   // últimos 30 dias
+  }
+  if(!entries.length){ box.innerHTML="<div class='aihelp' style='margin:auto'>Sem coletas registradas ainda. Rode uma coleta — se a IA precisar entrar, o custo aparece aqui; coletas grátis (determinístico) aparecem com R$ 0,00.</div>"; return; }
   const max=Math.max(...entries.map(e=>e[1]),0.0001);
   box.innerHTML=entries.map(([k,v])=>{
     const h=Math.max(4,Math.round(v/max*120));
@@ -4540,9 +4545,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.89";
+const VERSION = "13.90";
 const VERSION_DATE = "2026-06-17";
 const CHANGELOG = [
+  ["13.90","2026-06-17","O dia de HOJE agora aparece no gráfico mesmo quando a coleta foi GRÁTIS (determinístico, sem IA): mostra a barra com R$ 0,00 em vez de sumir. Antes, se você coletasse hoje mas a IA não precisasse rodar, o dia não aparecia e dava impressão de que «faltou o custo do dia» — na verdade custou zero, que é o esperado. (O custo só vira barra de verdade nos dias em que a IA rodou pra preencher lacuna.)"],
   ["13.89","2026-06-17","Painel de CUSTOS arrumado: antes o «Gasto até agora» vinha do servidor Render e o «Histórico» vinha do navegador — dois números de fontes diferentes que nunca batiam e davam impressão de «não atualiza». Agora é FONTE ÚNICA: o «Gasto até agora» mostra o MESMO total do histórico (salvo no navegador), atualiza SOZINHO assim que cada coleta termina, e zera junto com o botão «🗑️ Zerar histórico». O «Restante» = limite do Render − esse gasto. O número real do servidor continua aparecendo, mas só como REFERÊNCIA na linha de baixo. Resultado: um total só, coerente, que acompanha o histórico."],
   ["13.88","2026-06-16","Nome no formato «SOBRENOME, Nome» agora é reconhecido: antes o app só recuperava iniciais («SANTOS, A.C.S»); agora também pega o PRIMEIRO NOME por extenso (ex.: «JÚNIOR, Geovani» → geovani.junior@uemasul.edu.br). Continua honesto — só preenche quando o sobrenome OU o primeiro nome aparece dentro do próprio e‑mail; se não dá pra saber de quem é, fica vazio pra revisar. Testado no anais que veio na pasta: 185 nomes recuperados e todos casam com o e‑mail; o anais da UNITINS e o de Medicina não regrediram."],
   ["13.87","2026-06-16","Novo bloco «📧 Custo por e‑mail» no painel de Custos: tabela com Hoje / Este mês / Este ano / Total, mostrando quantos e‑mails você coletou, quanto gastou (R$) e o CUSTO POR E‑MAIL no período, comparado à meta de R$ 0,06 (✅ dentro / ⚠️ acima). O app passou a contar os e‑mails coletados por dia. Coletas grátis (determinístico, sem IA) baixam a média — é o esperado. Dica: clique em «🗑️ Zerar histórico» uma vez pra começar limpo (os dias antigos têm custo de teste do Opus mas ainda não tinham a contagem de e‑mails)."],
