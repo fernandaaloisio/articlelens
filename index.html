@@ -1572,6 +1572,157 @@ function parseModeloPalavrasChave(text){
   }
   return works;
 }
+/* Anais de RESUMOS no formato "AUTORIA:" (ex.: Encontro Científico dos Acadêmicos de Medicina / ECAM):
+   cada trabalho é TÍTULO (CAPS) → "MODALIDADE: … ÁREA TEMÁTICA: …" → "AUTORIA: SOBRENOME, INICIAIS¹; …" →
+   afiliação "¹ …" → linha "EMAIL1 | EMAIL2" → "INTRODUÇÃO: …". Liga e‑mail↔autor pelo SOBRENOME no e‑mail e,
+   o que sobrar, por POSIÇÃO (1º e‑mail = autor que apresenta = 1º da lista; último e‑mail = orientador = último
+   da lista). Nomes saem ABREVIADOS como no PDF — honesto, não inventa. Devolve [] se não for esse formato. */
+function parseModeloAutoriaEmail(text){
+  if((text.match(/^\s*AUTORIA:/gim)||[]).length < 15) return [];   // só esse formato
+  const nrm=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+  const EMAILG=/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
+  const ehCAPS=l=>{const L=(l.match(/\p{L}/gu)||[]);return L.length>=4 && (l.match(/\p{Lu}/gu)||[]).length/L.length>0.7;};
+  const parseAutor=s=>{
+    s=s.replace(/[\d¹²³⁰⁴⁵⁶⁷⁸⁹*]+/g,"").replace(/\s+/g," ").trim().replace(/[,;.\s]+$/,"");
+    if(!s) return null;
+    const m=s.match(/^(.+?),?\s+((?:[A-ZÀ-Ý]\.?\s*){1,6})$/);   // SOBRENOME (+vírgula opcional) + INICIAIS
+    if(m){ const sob=nrm(m[1]).replace(/[,\s]+/g,""), ini=nrm(m[2]).replace(/[.\s]/g,"");
+      return { sob, ini, full:m[1].replace(/,+$/,"").trim()+", "+m[2].replace(/\s+/g,"").trim() }; }
+    return { sob:nrm(s).replace(/[,\s]+/g,""), ini:"", full:s };
+  };
+  const linhas=text.split(/\n/); const works=[];
+  for(let i=0;i<linhas.length;i++){
+    if(!/^\s*AUTORIA:/i.test(linhas[i])) continue;
+    const autores=linhas[i].replace(/^\s*AUTORIA:\s*/i,"").split(/;/).map(parseAutor).filter(a=>a && a.sob.length>=2);
+    // TÍTULO: sobe pulando branco/MODALIDADE/ÁREA/AUTORIA/afiliação; depois junta as linhas CAPS do título
+    let k=i-1;
+    while(k>=0){ const l=linhas[k].trim();
+      if(!l || /^(modalidade|[áa]rea tem|autoria)/i.test(l) || /^[¹²³]/.test(l) || /faculdade|universidade|instituto|docente/i.test(l)){ k--; continue; }
+      break; }
+    const titL=[];
+    while(k>=0){ const l=linhas[k].trim();
+      if(!l) break;
+      if(/^ISSN/i.test(l)||/^ANAIS /i.test(l)||/encontro cient/i.test(l)||/^\d+$/.test(l)) break;
+      if(!ehCAPS(l)) break;
+      titL.unshift(l); k--; if(titL.length>6) break; }
+    const titulo=titL.join(" ").replace(/\s+/g," ").trim();
+    // EMAILS: 1ª linha com @ logo abaixo da AUTORIA
+    let emails=[];
+    for(let z=i+1;z<Math.min(linhas.length,i+6);z++){ const ms=linhas[z].match(EMAILG); if(ms){ emails=ms.map(e=>e.toLowerCase()); break; } if(/^INTRODU/i.test(linhas[z])) break; }
+    if(!emails.length){ continue; }
+    // PAREAMENTO: 1) sobrenome no e‑mail (forte, ≥4); 2) posição (1º e‑mail→1º autor, último→último autor)
+    const A=autores, usados=new Array(A.length).fill(false);
+    const pares=emails.map(e=>{ const loc=nrm(e.split("@")[0]).replace(/[._\-0-9]/g,"");
+      let best=-1,bs=0; for(let n=0;n<A.length;n++){ if(usados[n])continue; if(A[n].sob.length>=4 && loc.includes(A[n].sob) && A[n].sob.length>bs){bs=A[n].sob.length;best=n;} }
+      if(best>=0) usados[best]=true; return {email:e,autorIdx:best}; });
+    if(pares.length){
+      if(pares[0].autorIdx<0){ const idx=usados.findIndex(u=>!u); if(idx>=0){pares[0].autorIdx=idx;usados[idx]=true;} }
+      const lp=pares.length-1;
+      if(lp>0 && pares[lp].autorIdx<0){ for(let n=A.length-1;n>=0;n--){ if(!usados[n]){pares[lp].autorIdx=n;usados[n]=true;break;} } }
+    }
+    const authors=pares.map(p=>({name:p.autorIdx>=0?A[p.autorIdx].full:"", email:p.email}));
+    if(titulo || authors.length) works.push({ title:titulo, authors, _raw: linhas.slice(Math.max(0,i-6), i+3).join("\n") });
+  }
+  // só é ESTE formato se a linha "EMAIL|EMAIL" abaixo da AUTORIA existir na MAIORIA dos trabalhos.
+  // (anais com "AUTORIA:" mas e‑mail em RODAPÉ numerado — ex.: Medicina/UNITINS — caem pouco aqui → devolve [])
+  const nAutoria=(text.match(/^\s*AUTORIA:/gim)||[]).length;
+  const comEmail=works.filter(w=>(w.authors||[]).some(a=>a.email)).length;
+  if(comEmail < nAutoria*0.5) return [];
+  return works;
+}
+/* Anais de FEIRA ESCOLAR (ex.: Caderno de Resumos da FECIB / IF Sudeste MG): cada trabalho é
+   INSTITUIÇÃO (CAPS, "ESCOLA/COLÉGIO/CENTRO…") → TÍTULO (CAPS) → AUTORES (nomes completos, vírgula,
+   com * orientador / ** coorientador) → E‑MAIL → "Palavras‑chave: …". 1 e‑mail por trabalho. Liga o e‑mail
+   por NOME e, se não casar, no ORIENTADOR (último autor). Devolve [] se não for esse formato (evita ECAM/
+   medicina que também têm "Palavras‑chave" — esses têm "AUTORIA:"/"MODALIDADE:" e caem fora). */
+function parseModeloResumoEscolar(text){
+  const nPC=(text.match(/^\s*Palavras[\-\s]?chave/gim)||[]).length;
+  if(nPC < 12) return [];
+  if((text.match(/^\s*AUTORIA:/gim)||[]).length >= 5) return [];      // ECAM/medicina → não é aqui
+  if((text.match(/MODALIDADE:/gi)||[]).length >= 5) return [];
+  const EMAILG=/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
+  const ehCAPS=l=>{const L=(l.match(/\p{L}/gu)||[]);return L.length>=4 && (l.match(/\p{Lu}/gu)||[]).length/L.length>0.7;};
+  const INST=/^(escola|col[ée]gio|centro\b|instituto|e\.?\s?e\.?\b|c\.?\s?e\.?\b|funda[çc][ãa]o|universidade|faculdade|unidade|servi[çc]o nacional|senai|sesi)/i;
+  const ESCOLA=/^(escola|col[ée]gio|e\.?\s?e\.?\b|c\.?\s?e\.?\b|centro educ|institui[çc][ãa]o educac|instituto federal)/i;   // FEIRA escolar = educação básica (não universidade)
+  const HEADER=/IF Sudeste MG|Caderno de Resumos|Campus Barbacena|^\d+$|^[IVXL]+$|ISSN|observa[çc][õo]es/i;
+  const NAOPESSOA=/^(alunos?|turma|equipe|discentes?|estudantes?|grupo|professores?|orientador)\b/i;
+  const limpaNome=s=>s.replace(/\*+/g,"").replace(/^alunos?\s+d[ao]s?\s+(turma|\dº|[º°]).*?,\s*/i,"").replace(/\s+/g," ").replace(/^[,;\s]+|[,;\s]+$/g,"").trim();
+  const nomeOk=n=>n && n.split(/\s+/).filter(x=>x.length>1).length>=2 && /^[A-ZÀ-Ý]/.test(n) && !INST.test(n) && !NAOPESSOA.test(n);
+  const nrm=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+  const linhas=text.split(/\n/); const works=[]; let comInst=0, comEscola=0;
+  for(let i=0;i<linhas.length;i++){
+    if(!/^\s*Palavras[\-\s]?chave/i.test(linhas[i])) continue;
+    let emails=[], emailLn=-1;
+    for(let z=i-1;z>=Math.max(0,i-4);z--){ const ms=linhas[z].match(EMAILG); if(ms){ emails=ms.map(e=>e.toLowerCase()); emailLn=z; break; } }
+    let autoresLn="", k;
+    if(emailLn>=0){ const semMail=linhas[emailLn].replace(EMAILG,"").trim(); if(/[a-zà-ÿ]/.test(semMail) && /,| e /.test(semMail)){ autoresLn=semMail; k=emailLn-1; } else { autoresLn=linhas[emailLn-1]||""; k=emailLn-2; } }
+    else { k=i-1; while(k>=0 && !linhas[k].trim()) k--; autoresLn=linhas[k]||""; k--; }
+    const autores=autoresLn.split(/,| e (?=[A-ZÀ-Ý])/).map(limpaNome).filter(nomeOk);
+    while(k>=0 && !linhas[k].trim()) k--;
+    let titL=[], achouInst=false;
+    while(k>=0){ const l=linhas[k].trim();
+      if(!l){ if(titL.length)break; k--; continue; }
+      if(HEADER.test(l)){ k--; if(titL.length)break; else continue; }
+      if(INST.test(l)){ achouInst=true; if(ESCOLA.test(l)) comEscola++; break; }
+      if(ehCAPS(l)){ titL.unshift(l); k--; continue; }
+      if(titL.length) break; k--; }
+    if(achouInst) comInst++;
+    const titulo=titL.join(" ").replace(/\s+/g," ").trim();
+    const authors=autores.map(n=>({name:n,email:""}));
+    for(const e of emails){ const loc=nrm(e.split("@")[0]).replace(/[._\-0-9]/g,"");
+      let idx=authors.findIndex(a=>a.name && !a.email && nrm(a.name).split(/\s+/).filter(x=>x.length>=4).some(t=>loc.includes(t)));
+      if(idx<0){ for(let j=authors.length-1;j>=0;j--){ if(authors[j].name && !authors[j].email){ idx=j; break; } } }
+      if(idx>=0 && idx<authors.length) authors[idx].email=e; else authors.push({name:"",email:e}); }
+    if(titulo || authors.length) works.push({ title:titulo, authors, _raw: linhas.slice(Math.max(0,i-6), i+1).join("\n") });
+  }
+  const ce=works.filter(w=>(w.authors||[]).some(a=>a.email)).length;
+  const comTit=works.filter(w=>w.title && w.title.length>5).length;
+  // é o formato FECIB só se: maioria com TÍTULO bom, instituição = ESCOLA (não universidade) e e‑mail na maioria
+  if(works.length<12 || comTit < works.length*0.7 || comEscola < works.length*0.3 || ce < works.length*0.5) return [];
+  return works;
+}
+/* Anais de PAINÉIS CIENTÍFICOS (ex.: Revista/Jornada de Odontologia UFPB, código "PC 001"): cada trabalho é
+   "PC NNN" → TÍTULO (caixa MISTA, por isso os cortadores que exigem CAPS não pegam) → AUTORES (";"-separados,
+   * orientador) → AFILIAÇÃO + E‑MAIL (mesma linha) → "Introdução: …". Âncora no E‑MAIL: autores logo acima,
+   título acima deles. Liga o e‑mail por NOME e, se não casar, no 1º autor (quem apresenta). [] se não for. */
+function parseModeloPainelPC(text){
+  if((text.match(/^PC ?\d+\b/gim)||[]).length < 25) return [];     // só esse formato (código de painel)
+  const EMAILG=/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
+  const nrm=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+  const AFIL=/universidade|faculdade|instituto|centro\b|campus|uninassau|uniesp|unip[êe]|college|hospital|cl[íi]nica|\bfip\b|ppgo|curso de|departamento/i;
+  const LABEL=/^(introdu|objetivo|metodolog|resultado|conclus|relato|palavras|[áa]rea tem|refer|discuss|materiais|^pc ?\d)/i;
+  const ehNomeLista=l=>/;/.test(l) && (l.match(/[A-ZÀ-Ý][a-zà-ÿ]+/g)||[]).length>=2 && !LABEL.test(l) && !/@/.test(l);
+  const limpaNome=s=>s.replace(/\*+/g,"").replace(/\s+/g," ").replace(/^[,;.\s]+|[,;.\s]+$/g,"").trim();
+  const nomeOk=n=>n && n.split(/\s+/).filter(x=>x.length>1).length>=2 && /^[A-ZÀ-Ý]/.test(n) && !AFIL.test(n);
+  const linhas=text.split(/\n/); const works=[]; const vistos=new Set();
+  for(let i=0;i<linhas.length;i++){
+    const ms=linhas[i].match(EMAILG); if(!ms) continue;
+    let aLn=-1; for(let z=i-1;z>=Math.max(0,i-5);z--){ if(ehNomeLista(linhas[z])){ aLn=z; break; } if(/^PC ?\d+/i.test(linhas[z]))break; }
+    let autores=[];
+    if(aLn>=0) autores=linhas[aLn].split(/;/).map(limpaNome).filter(nomeOk);
+    else { const semMail=linhas[i].replace(EMAILG,"").replace(AFIL,"").trim();
+      if(ehNomeLista(semMail+";")){ autores=semMail.split(/;/).map(limpaNome).filter(nomeOk); aLn=i; } }
+    if(!autores.length) continue;
+    let k=aLn-1, titL=[];
+    while(k>=0){ const l=linhas[k].trim();
+      if(!l){ if(titL.length)break; k--; continue; }
+      if(/^PC ?\d+/i.test(l)){ break; }
+      if(LABEL.test(l)||/@/.test(l)||ehNomeLista(l)||AFIL.test(l)){ if(titL.length)break; k--; continue; }
+      titL.unshift(l); k--; if(titL.length>=3)break; }
+    const titulo=titL.join(" ").replace(/\s+/g," ").replace(/\s*\.\s*$/,"").trim();
+    const emails=ms.map(e=>e.toLowerCase());
+    const authors=autores.map(n=>({name:n,email:""}));
+    for(const e of emails){ const loc=nrm(e.split("@")[0]).replace(/[._\-0-9]/g,"");
+      let idx=authors.findIndex(a=>!a.email && nrm(a.name).split(/\s+/).filter(x=>x.length>=4).some(t=>loc.includes(t)));
+      if(idx<0) idx=authors.findIndex(a=>!a.email);
+      if(idx>=0) authors[idx].email=e; else authors.push({name:"",email:e}); }
+    const key=emails[0]; if(vistos.has(key)) continue; vistos.add(key);
+    works.push({ title:titulo, authors, _raw: linhas.slice(Math.max(0,(aLn<0?i:aLn)-3), i+1).join("\n") });
+  }
+  const comTit=works.filter(w=>w.title && w.title.length>8).length;
+  if(works.length<20 || comTit < works.length*0.6) return [];
+  return works;
+}
 /* Anais de RESUMOS com seção "Introdução:" por trabalho (ex.: III Congresso de Educação/UNIMONTES, milhares de
    trabalhos). Cada trabalho: TÍTULO (maiúsc.) → AUTORES (maiúsc.; ";" ou e‑mail inline) → "Introdução: …" →
    "Palavras‑chave: …" → opcional "Autor correspondente: email". Determinístico/grátis; cobre PDFs gigantes
@@ -2992,14 +3143,32 @@ async function collectFromPDF(file, mode){
     const viaPal = parseModeloPalavrasChave(text);  // MODELO "anais com e‑mail no FIM" (sem RESUMO) ([] se não casar)
     const viaIntro = cortarPorIntroducao(text);     // MODELO "resumos com Introdução:/Autor correspondente" ([] se não casar)
     const viaRod = cortarPorRodapeNum(text);        // MODELO "rodapé numerado" (autor nº ↔ e‑mail nº), ex.: UNITINS ([] se não casar)
+    const viaAut = parseModeloAutoriaEmail(text);   // MODELO "AUTORIA: SOBRENOME, INICIAIS + EMAIL|EMAIL" (ECAM/Medicina) ([] se não casar)
+    const viaEsc = parseModeloResumoEscolar(text);  // MODELO "feira escolar: INSTITUIÇÃO→TÍTULO→autores→email→Palavras‑chave" (FECIB) ([] se não casar)
+    const viaPC = parseModeloPainelPC(text);        // MODELO "PAINEL PC NNN: título caixa-mista→autores;→afiliação+email" (Odonto UFPB) ([] se não casar)
     const miolo = _pularCapaSumario(text);          // sem capa/sumário gigante → IA e rede de segurança sem ruído
     const comEmail = a => a ? a.filter(w=>(w.authors||[]).some(x=>x.email)).length : -1;
     const viaEmail = cortarPorEmailSolto(text);     // ÚLTIMO RECURSO: anais sem rótulos, e‑mail pelado (ex.: Jornada Odontológica) ([] se não render)
-    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eEmail = comEmail(viaEmail);
+    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eAut = comEmail(viaAut), eEsc = comEmail(viaEsc), ePC = comEmail(viaPC), eEmail = comEmail(viaEmail);
     // Prefere o SUMÁRIO (títulos oficiais, limpos). Só troca pro método antigo quando ele pega
     // MUITO mais e-mail (≥25% e +5) — aí o ganho compensa títulos um pouco menos limpos.
     let works;
-    if(eRod>0 && eRod>=eS && eRod>=eP && eRod>=eM && eRod>=ePal && eRod>=eI){
+    if(eAut>0 && eAut>=eS && eAut>=eP && eAut>=eM && eAut>=ePal && eAut>=eI && eAut>=eRod){
+      // anais "AUTORIA: SOBRENOME, INICIAIS" com e‑mail EMAIL|EMAIL (ECAM/Medicina): título limpo + nome certo, grátis
+      works = viaAut;
+      modelosUsados["Anais · AUTORIA (SOBRENOME, INICIAIS)"] = (modelosUsados["Anais · AUTORIA (SOBRENOME, INICIAIS)"]||0) + 1;
+      lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
+    } else if(eEsc>0 && eEsc>=eS && eEsc>=eP && eEsc>=eM && eEsc>=ePal && eEsc>=eI && eEsc>=eRod){
+      // anais de FEIRA ESCOLAR (FECIB): INSTITUIÇÃO→TÍTULO→autores→email→Palavras‑chave — 1 e‑mail por trabalho, sem duplicar
+      works = viaEsc;
+      modelosUsados["Anais · feira escolar (Palavras‑chave)"] = (modelosUsados["Anais · feira escolar (Palavras‑chave)"]||0) + 1;
+      lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
+    } else if(ePC>0 && ePC>=eS && ePC>=eP && ePC>=eM && ePC>=ePal && ePC>=eI && ePC>=eRod){
+      // anais de PAINÉIS "PC NNN" (Odonto UFPB): título caixa‑mista + autores ";" + e‑mail — título e nome certos, grátis
+      works = viaPC;
+      modelosUsados["Anais · painel PC (título caixa‑mista)"] = (modelosUsados["Anais · painel PC (título caixa‑mista)"]||0) + 1;
+      lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
+    } else if(eRod>0 && eRod>=eS && eRod>=eP && eRod>=eM && eRod>=ePal && eRod>=eI){
       // anais de RODAPÉ NUMERADO (autor nº ↔ e‑mail nº, ex.: UNITINS) — determinístico, grátis, nome certo
       works = viaRod;
       modelosUsados["Anais · rodapé numerado"] = (modelosUsados["Anais · rodapé numerado"]||0) + 1;
@@ -4600,9 +4769,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.93";
+const VERSION = "13.94";
 const VERSION_DATE = "2026-06-17";
 const CHANGELOG = [
+  ["13.94","2026-06-17","Três formatos novos de anais reconhecidos (os PDFs que vieram na pasta «IA 17.06»): (1) ECAM / Encontro de Medicina — «AUTORIA: SOBRENOME, INICIAIS» com dois e‑mails na linha «email1 | email2»: antes o 2º e‑mail (do orientador) saía SEM nome e os títulos vinham das referências do trabalho anterior; agora são 100 trabalhos, títulos limpos e 200/200 e‑mails com nome (1º e‑mail = quem apresenta, 2º = orientador/último autor). (2) FECIB / feira escolar — «INSTITUIÇÃO → TÍTULO → autores → e‑mail → Palavras‑chave»: antes um trabalho REPETIA várias vezes e o sumário virava 5 «trabalhos» lixo; agora é 1 trabalho por e‑mail, sem repetir, com título e autores certos. (3) Painéis «PC NNN» (Odonto UFPB) — título em CAIXA MISTA que os cortadores antigos (que exigiam MAIÚSCULAS) não pegavam: agora reconhece o título e os nomes (118 trabalhos). Cada formato só dispara no PDF dele — os anais que já funcionavam (UNITINS, III Congresso, etc.) não mudaram."],
   ["13.93","2026-06-17","Agora TUDO na aba Custos é GERAL (todos os usuários), não só do seu computador: o «📈 Histórico» (por dia/mês/ano) e o «📧 Custo por e‑mail» passaram a somar as coletas de TODAS as máquinas, lidas do banco central do servidor (cada coleta tem data, custo e e‑mails). O «Total geral» usa os totais completos do banco. Some o rótulo «deste computador». Só se o servidor/banco estiver fora do ar é que o gráfico cai pro histórico local (deste computador) como reserva — e aí o botão de zerar reaparece."],
   ["13.92","2026-06-17","Conserto do erro «(v || 0).toFixed is not a function» na tabela «Gasto por usuário»: o custo vem do banco como TEXTO e os formatadores de dinheiro tentavam arredondar a string direto. Agora eles convertem pra número antes. A tabela de gasto por usuário carrega normalmente."],
   ["13.91","2026-06-17","CUSTOS de ADMIN — agora você vê TUDO: (1) o cartão de cima «Gasto total · todos os usuários» voltou a somar o gasto de TODOS (contado pelo servidor, em todas as máquinas) — na v13.89 ele tinha passado a mostrar só o seu navegador, escondendo os outros; (2) nova tabela «👥 Gasto por usuário» dentro da aba Custos, com Coletas / E‑mails / Custo de cada pessoa e o Total (vinda do banco central, igual à aba Histórico); (3) o «📈 Histórico» e o «📧 Custo por e‑mail» ficaram marcados como «só deste computador», pra não confundir com o total de todos. Resumo: o número grande é de todos os usuários; logo abaixo, quem gastou quanto; por último, o detalhe por dia da sua máquina."],
