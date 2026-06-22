@@ -873,9 +873,13 @@ function titleFromText(text){
   const idx = pool.findIndex(s => s.length>=20 && /[A-Za-zÀ-ÿ]/.test(s));
   if(idx<0) return null;
   const outraLingua = /\b(the|of|and|for|with|from|applied|stage|wheat|tillering|selectivity|effect|evaluation|study|del|la|el|en|durante|etapa|ahijamiento|aplicado durante)\b/i;
+  // LINHA DE AUTORES (não é continuação do título): "Nome Sobrenome1; Nome2…" ou "Nome Sobrenome¹;"
+  const ehAutores = s => (/;/.test(s) && /[A-ZÀ-Ý][a-zà-ÿ]+\s+[A-ZÀ-Ý]/.test(s))
+                      || /^[A-ZÀ-Ý][a-zà-ÿ]+(?:\s+(?:[A-ZÀ-Ý][a-zà-ÿ.]+|d[aeo]s?|e|von|van))+\s*[\d¹²³⁴⁵⁶⁷⁸⁹]\s*[;,]?/.test(s);
   const parts=[pool[idx]];
   for(let i=idx+1;i<pool.length;i++){ const s=pool[i];
     if(!/[A-Za-zÀ-ÿ]/.test(s) || /@/.test(s) || stop.test(s)) break;
+    if(ehAutores(s)) break;                       // chegou na lista de autores → para (não cola no título)
     if(outraLingua.test(s)) break;               // começou a tradução (EN/ES) → para
     if(/[.;]\s*$/.test(parts[parts.length-1])) break;  // título raramente termina com . ou ;
     parts.push(s);
@@ -4784,9 +4788,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.95";
-const VERSION_DATE = "2026-06-17";
+const VERSION = "13.96";
+const VERSION_DATE = "2026-06-22";
 const CHANGELOG = [
+  ["13.96","2026-06-22","Título não cola mais a LISTA DE AUTORES no fim: nesses artigos de evento o título quebra em 2 linhas e a linha dos autores («Lucas Oliveira de Jesus1; Miguel Arantes…») vinha grudada no título, porque o app só parava de juntar ao achar @/abstract. Agora ele PARA quando a próxima linha é lista de autores (nomes com «;» ou nome+número). Testado nas 4 pastas (197 PDFs): de 134 títulos sujos para 3 (esses 3 têm título e autor na MESMA linha física, que o leitor de PDF juntou). E‑mail e nome continuam 100%; artigos SBIE/ARACE não mudaram."],
   ["13.95","2026-06-17","Artigos de evento com E‑MAIL DE MATRÍCULA (UNIG/Even): muitos PDFs usam «E‑mail do autor principal: 230022340@aluno.unig.edu.br» (ou 0520047@professor.unig.edu.br) — como o e‑mail é um NÚMERO, não dava pra casar com o nome e ele saía SEM dono. Agora o e‑mail de matrícula (local‑part quase só dígitos) é ligado ao autor principal (1º autor da lista), que é o nome certo do PDF — não inventa nada, só corrige a atribuição. Testado nas 4 pastas (197 PDFs): de ~60 e‑mails sem nome para 1; os 2 que ficam sem e‑mail é porque o PDF realmente não traz nenhum @ (vão pra revisão). E‑mail com nome (joao.silva@) continua pelo pareamento normal; artigos SBIE/ARACE não mudaram."],
   ["13.94","2026-06-17","Três formatos novos de anais reconhecidos (os PDFs que vieram na pasta «IA 17.06»): (1) ECAM / Encontro de Medicina — «AUTORIA: SOBRENOME, INICIAIS» com dois e‑mails na linha «email1 | email2»: antes o 2º e‑mail (do orientador) saía SEM nome e os títulos vinham das referências do trabalho anterior; agora são 100 trabalhos, títulos limpos e 200/200 e‑mails com nome (1º e‑mail = quem apresenta, 2º = orientador/último autor). (2) FECIB / feira escolar — «INSTITUIÇÃO → TÍTULO → autores → e‑mail → Palavras‑chave»: antes um trabalho REPETIA várias vezes e o sumário virava 5 «trabalhos» lixo; agora é 1 trabalho por e‑mail, sem repetir, com título e autores certos. (3) Painéis «PC NNN» (Odonto UFPB) — título em CAIXA MISTA que os cortadores antigos (que exigiam MAIÚSCULAS) não pegavam: agora reconhece o título e os nomes (118 trabalhos). Cada formato só dispara no PDF dele — os anais que já funcionavam (UNITINS, III Congresso, etc.) não mudaram."],
   ["13.93","2026-06-17","Agora TUDO na aba Custos é GERAL (todos os usuários), não só do seu computador: o «📈 Histórico» (por dia/mês/ano) e o «📧 Custo por e‑mail» passaram a somar as coletas de TODAS as máquinas, lidas do banco central do servidor (cada coleta tem data, custo e e‑mails). O «Total geral» usa os totais completos do banco. Some o rótulo «deste computador». Só se o servidor/banco estiver fora do ar é que o gráfico cai pro histórico local (deste computador) como reserva — e aí o botão de zerar reaparece."],
