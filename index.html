@@ -2350,6 +2350,21 @@ function pairAuthorsEmails(names, emails){
   return authors;
 }
 
+/* ARTIGO ÚNICO: e‑mail "solto" (não casou por nome — ex.: matrícula numérica 230022340@aluno.unig.edu.br,
+   0520047@professor.unig.edu.br) vai para os AUTORES sem e‑mail, NA ORDEM. O documento desses eventos rotula
+   "E‑mail do autor principal:" e o principal é o 1º autor — então a ordem acerta. Honesto: o NOME é o que está
+   no PDF (não inventa); só corrige a ATRIBUIÇÃO de um e‑mail que é impossível casar pelo texto. */
+function _emailParaAutorPrincipal(authors){
+  // SÓ e‑mail de MATRÍCULA NUMÉRICA (local‑part quase sem letras — ex.: 230022340@, 0520047@): esses são
+  // IMPOSSÍVEIS de casar por nome. E‑mail com nome (joao.silva@) continua pelo pareamento normal (não mexe).
+  const ehMatricula = e => (String(e).split("@")[0]||"").replace(/[^a-z]/gi,"").length <= 2;
+  const semEmail = (authors||[]).filter(a=>a.name && !a.email);
+  const soltos   = (authors||[]).filter(a=>a.email && ehMatricula(a.email) && (!a.name || a.name===_inferName(a.email)));
+  if(!semEmail.length || !soltos.length) return authors;
+  let si=0;
+  for(const s of soltos){ if(si<semEmail.length){ semEmail[si].email=s.email; s._movido=true; si++; } else break; }
+  return authors.filter(a=>!a._movido);
+}
 /* Compatível: heurístico síncrono (usado quando a IA está desligada) */
 function extractAuthors(text, html){
   return pairAuthorsEmails(extractAuthorNames(text, html), extractEmails(text));
@@ -2810,8 +2825,8 @@ async function buildAuthors(text, html, title){
     const inline = parseInlineEmailAuthors(text);
     const _scoreA = a => (a.filter(x=>x.email).length*10) + a.filter(x=>x.name&&x.email).length;
     const sB=_scoreA(blocks), sI=_scoreA(inline);
-    if(sB>0 && sB>=sI){ _ultimoModeloArtigo="Artigo · bloco Nome/Instituição/E‑mail"; return blocks; }
-    if(sI>0){ _ultimoModeloArtigo="Artigo · Nome (e‑mail)"; return inline; }
+    if(sB>0 && sB>=sI){ _ultimoModeloArtigo="Artigo · bloco Nome/Instituição/E‑mail"; return _emailParaAutorPrincipal(blocks); }
+    if(sI>0){ _ultimoModeloArtigo="Artigo · Nome (e‑mail)"; return _emailParaAutorPrincipal(inline); }
   }
   // 2) Caminho geral: nomes (meta/regex) + e-mails + pareamento inteligente.
   //    (e-mails em CHAVE {a,b}@dom estilo SBC já são expandidos por extractEmails → modelo SBIE)
@@ -2827,7 +2842,7 @@ async function buildAuthors(text, html, title){
     }catch(e){ console.warn("IA indisponível, mantendo heurística:", e.message);
                toast("IA falhou ("+e.message+"). Usei a heurística.", "warn"); }
   }
-  return authors;
+  return _emailParaAutorPrincipal(authors);
 }
 /* Detecta ANAIS (1 PDF = MUITOS trabalhos) — muitos delimitadores de trabalho.
    NÃO basta citar "Anais/Simpósio" (papers de congresso repetem no cabeçalho). */
@@ -4769,9 +4784,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.94";
+const VERSION = "13.95";
 const VERSION_DATE = "2026-06-17";
 const CHANGELOG = [
+  ["13.95","2026-06-17","Artigos de evento com E‑MAIL DE MATRÍCULA (UNIG/Even): muitos PDFs usam «E‑mail do autor principal: 230022340@aluno.unig.edu.br» (ou 0520047@professor.unig.edu.br) — como o e‑mail é um NÚMERO, não dava pra casar com o nome e ele saía SEM dono. Agora o e‑mail de matrícula (local‑part quase só dígitos) é ligado ao autor principal (1º autor da lista), que é o nome certo do PDF — não inventa nada, só corrige a atribuição. Testado nas 4 pastas (197 PDFs): de ~60 e‑mails sem nome para 1; os 2 que ficam sem e‑mail é porque o PDF realmente não traz nenhum @ (vão pra revisão). E‑mail com nome (joao.silva@) continua pelo pareamento normal; artigos SBIE/ARACE não mudaram."],
   ["13.94","2026-06-17","Três formatos novos de anais reconhecidos (os PDFs que vieram na pasta «IA 17.06»): (1) ECAM / Encontro de Medicina — «AUTORIA: SOBRENOME, INICIAIS» com dois e‑mails na linha «email1 | email2»: antes o 2º e‑mail (do orientador) saía SEM nome e os títulos vinham das referências do trabalho anterior; agora são 100 trabalhos, títulos limpos e 200/200 e‑mails com nome (1º e‑mail = quem apresenta, 2º = orientador/último autor). (2) FECIB / feira escolar — «INSTITUIÇÃO → TÍTULO → autores → e‑mail → Palavras‑chave»: antes um trabalho REPETIA várias vezes e o sumário virava 5 «trabalhos» lixo; agora é 1 trabalho por e‑mail, sem repetir, com título e autores certos. (3) Painéis «PC NNN» (Odonto UFPB) — título em CAIXA MISTA que os cortadores antigos (que exigiam MAIÚSCULAS) não pegavam: agora reconhece o título e os nomes (118 trabalhos). Cada formato só dispara no PDF dele — os anais que já funcionavam (UNITINS, III Congresso, etc.) não mudaram."],
   ["13.93","2026-06-17","Agora TUDO na aba Custos é GERAL (todos os usuários), não só do seu computador: o «📈 Histórico» (por dia/mês/ano) e o «📧 Custo por e‑mail» passaram a somar as coletas de TODAS as máquinas, lidas do banco central do servidor (cada coleta tem data, custo e e‑mails). O «Total geral» usa os totais completos do banco. Some o rótulo «deste computador». Só se o servidor/banco estiver fora do ar é que o gráfico cai pro histórico local (deste computador) como reserva — e aí o botão de zerar reaparece."],
   ["13.92","2026-06-17","Conserto do erro «(v || 0).toFixed is not a function» na tabela «Gasto por usuário»: o custo vem do banco como TEXTO e os formatadores de dinheiro tentavam arredondar a string direto. Agora eles convertem pra número antes. A tabela de gasto por usuário carrega normalmente."],
