@@ -3409,8 +3409,14 @@ async function processBatch(){
     // vai pra conferência o que PRECISA — mesmo que tenha vindo da IA por blocos (a IA por blocos às vezes erra
     // título/nome e antes esses escapavam por já estarem marcados como "coletados pela IA").
     const todosAlvos = allResults.filter(r => AI.conferirTudo || _precisaIA(r));
-    let alvos = todosAlvos.slice(0, 800), amostraInfo=null;
-    if(todosAlvos.length>800){ amostraInfo={ total: todosAlvos.length, conferidos: 800 }; }   // só p/ avisar o teto
+    // PRIORIDADE: trabalhos SEM TÍTULO entram TODOS (são o que mais importa e o mais barato de completar — 1 título
+    // por trabalho); os e‑mails SEM NOME (coautores) entram depois, até o teto. Assim, num anais gigante, a IA
+    // sempre fecha os títulos das lacunas, sem estourar custo com os milhares de coautores sem nome.
+    const _semTit = todosAlvos.filter(r => !(r.title && r.title.trim()));
+    const _resto  = todosAlvos.filter(r =>  (r.title && r.title.trim()));
+    const TETO = Math.max(800, _semTit.length);                 // garante TODOS os sem‑título + nomes até 800
+    let alvos = _semTit.concat(_resto).slice(0, TETO), amostraInfo=null;
+    if(todosAlvos.length>alvos.length){ amostraInfo={ total: todosAlvos.length, conferidos: alvos.length }; }   // só p/ avisar o teto
     if(alvos.length){
       setStatus("🧠 IA conferindo "+alvos.length+(amostraInfo?(" de "+amostraInfo.total+" casos (amostra por formato)"):" casos")+" — título/nome/dono do e‑mail…");
       let nTit=0, nEmail=0, nNomes=0, nFail=0, lastErr="";
@@ -4793,9 +4799,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.99";
+const VERSION = "14.0";
 const VERSION_DATE = "2026-06-22";
 const CHANGELOG = [
+  ["14.0","2026-06-22","IA preenche as LACUNAS priorizando quem está SEM TÍTULO. No anais gigante (III Congresso) sobram ~220 trabalhos cujo título o cortador grátis não separa (vem colado nos autores). Agora a IA (Haiku, barata) entra SÓ nessas lacunas — primeiro TODOS os sem‑título, depois os e‑mails sem nome até o teto — sem reprocessar os 1800+ que já saíram certos. No III Congresso são ~350 lacunas (≈45 chamadas) = custo baixo, longe dos R$9 do problema antigo (que era a IA reescrevendo TUDO). IMPORTANTE: pra isso rodar, deixe «🧠 IA orquestra a esteira» MARCADO e a IA conectada (Render). Sem isso, os sem‑título seguem só pra revisão."],
   ["13.99","2026-06-22","III Congresso (anais gigante) — mais títulos bons parando de virar «(sem título)»: o detector de título‑ruim esvaziava títulos que COMEÇAM com uma palavra que também é rótulo de seção («RESULTADOS PARCIAIS DA…», «FINANCIAMENTO E SISTEMAS…», «INTRODUÇÃO À ROBÓTICA…», «METODOLOGIAS ATIVAS…»), com «(IN)/(RE)» («(IN) CREDIBILIDADE DAS FORÇAS POLICIAIS…») ou com «Programa de/Curso de» (projetos titulados «Programa de Leitura…»). Agora: rótulo só conta se vier com «:» logo depois; «(MAIÚSCULA» é título; e a regra de afiliação exige o padrão real («Universidade Federal de…», «Faculdade de…»), sem pegar «Universidades promotoras…». Testado no III Congresso: de 16 títulos bons esvaziados para 0; afiliação de verdade continua indo pra revisão. OBS: ainda há ~220 trabalhos nesse anais onde o cortador GRÁTIS não separa o título (vem colado nos autores) — esses seguem pra revisão; dá pra resolver com a IA preenchendo só essas lacunas (barato) se você quiser."],
   ["13.98","2026-06-22","Conserto de TÍTULOS BONS que estavam virando «(sem título)»: duas regras de «título‑ruim» pegavam demais. (1) A regra de afiliação esvaziava qualquer título que MENCIONASSE universidade/campus + cidade/estado — então «AVALIAÇÃO DO COMPORTAMENTO DE SAÚDE DOS ESTUDANTES DE MEDICINA DA UNIG – CAMPUS V, ITAPERUNA-RJ» (título legítimo!) ia pra revisão como sem título. Agora só barra quando o título COMEÇA com a instituição («CURSO DE MEDICINA DA UNIVERSIDADE…», «FACULDADE…») — aí sim é afiliação no lugar do título. (2) A regra de código de fomento («FAPEMIG-APQ») pegava «BONE-02: …» (código do estudo no começo do título); agora só pega códigos curtos (<25 caracteres). Testado nas 4 pastas: de 4 títulos bons esvaziados para 0; afiliação de verdade continua indo pra revisão."],
   ["13.97","2026-06-22","Título com AUTORES colados agora VAI pra revisão (⚠) em vez de passar batido. O detector de título suspeito só pegava quando o título COMEÇAVA com «Nome Sobrenome;» — mas nesses artigos o título começa certo (em MAIÚSCULAS) e a lista de autores fica no FIM («…DOMINAÇÃO POLÍTICA Victória Prevato Ximenes Abdala 1; Thalita…»), então passava como se estivesse certo. Agora o app marca pra revisão qualquer título com «Nome Sobrenome+número;» no meio/fim, ou com 2+ «;» de nomes. Junto com o conserto da v13.96 (que já evita a maioria), é a rede de segurança: se um formato novo colar autor no título, você VÊ o ⚠ em vez de o erro passar. Testado: não marca título limpo (ECAM 0 de 100); marca os 6 de 197 que estão de fato ruins."],
