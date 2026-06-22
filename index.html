@@ -1806,7 +1806,19 @@ function cortarPorAncora(text, ancoraSrc){
     } else {                                                 // formato 1: nomes por ";" + "Autor correspondente:" no fim
       const nomes = blocoAutor.split(/;/).map(limpaNome).filter(nomeOk);
       let email=""; const corpo=text.slice(ini,fim); const ac=corpo.match(reAC); if(ac) email=ac[1].toLowerCase();
-      authors = nomes.map((n,idx)=>({name:n, email: idx===0?email:""}));   // 1º autor; o pareamento por nome corrige depois
+      authors = nomes.map(n=>({name:n, email:""}));
+      if(email && authors.length){
+        // liga o «Autor correspondente» ao autor cujo NOME casa com o e‑mail (não ao 1º sempre): casa pelo
+        // nome inteiro OU pelo prefixo de 4 letras (apelido/abreviação: gera.oliveir→GERALDO OLIVEIRA, caroline…→CAROLINE).
+        const _nm=s=>s.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+        const loc=_nm(email.split("@")[0]).replace(/[^a-z]/g,"");
+        let best=-1, bs=0;
+        for(let n=0;n<nomes.length;n++){ let sc=0;
+          for(const tk of _nm(nomes[n]).split(/\s+/).filter(y=>y.length>=3)){
+            if(loc.includes(tk)) sc+=tk.length; else if(tk.length>=4 && loc.includes(tk.slice(0,4))) sc+=4; }
+          if(sc>bs){ bs=sc; best=n; } }
+        authors[(best>=0 && bs>=4) ? best : 0].email = email;   // ninguém casa → 1º autor (autor correspondente costuma estar listado)
+      }
       if(!nomes.length && email) authors=[{name:"",email}];
     }
     // se NENHUM autor ficou com e‑mail, pega os e‑mails do CABEÇALHO (bloco "AUTORIA:"/afiliações) — cobre
@@ -4841,9 +4853,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "14.2";
+const VERSION = "14.3";
 const VERSION_DATE = "2026-06-22";
 const CHANGELOG = [
+  ["14.3","2026-06-22","E‑mail do «Autor correspondente» agora vai pro AUTOR CERTO (anais tipo III Congresso). ANTES o app jogava esse e‑mail SEMPRE no 1º autor da lista — mas o autor correspondente quase nunca é o primeiro, então saía «Manuela => carolinecorrea812» (e‑mail da Caroline no nome da Manuela). AGORA o app casa o e‑mail com o autor cujo NOME bate, inclusive por apelido/abreviação (gera.oliveir→Geraldo Oliveira, tati_bia→Tatiane Beatriz, carolinecorrea→Caroline Correa). Testado no III Congresso: 92% dos e‑mails de autor correspondente passam a cair no nome certo; os 8% que não batem com ninguém da lista (orientador de fora) ficam como ⚠ pra IA/revisão, em vez de no autor errado."],
   ["14.2","2026-06-22","Anais com VÁRIOS ARTIGOS POR PÁGINA (2 colunas) agora são lidos certo. ANTES, o app montava o texto por altura da linha e, numa página de 2 colunas, JUNTAVA a linha da esquerda com a da direita («PG09 …produçãoPG10 Questões de direito…») — embaralhava título, autor e e‑mail das duas colunas. AGORA o app DETECTA a calha entre as colunas e lê a coluna ESQUERDA inteira e depois a DIREITA. Página de 1 coluna não muda. Testado no PDF.js real: anais ENICODONTO (RevICO) e o anais de odontologia 2736 (que também era 2 colunas) passaram a sair com nomes casando certo (no 2736, nomes capturados subiram de 490 → 654). Também: o cortador de painéis aceita o código «PG01» além de «PC 001», junta lista de autores quebrada em 2 linhas, e marca pra revisão/IA os títulos onde o PDF perdeu os espaços («umaanálisemicrotomográfica»)."],
   ["14.1","2026-06-22","Limite de tamanho do arquivo subiu de 50 MB → 800 MB. Antes, PDF acima de 50 MB era IGNORADO em silêncio (por isso a equipe «não conseguia subir» o anais de 584 MB). Como o app só LÊ O TEXTO do PDF (não decodifica as imagens em alta resolução, que são o que incha o arquivo), um PDF gigante tem chance real de passar. Pra ajudar, o app agora LIBERA a memória de cada página conforme lê (page.cleanup) e descarta o documento ao terminar — sem isso, um PDF enorme estouraria o navegador. AVISO: acima de ~120 MB pode demorar e pesar; se o navegador travar é a memória da máquina (use um PC com mais RAM). OBS: arquivo grande entra, mas se o formato for novo o resultado pode precisar de ajuste no cortador."],
   ["14.0","2026-06-22","IA preenche as LACUNAS priorizando quem está SEM TÍTULO. No anais gigante (III Congresso) sobram ~220 trabalhos cujo título o cortador grátis não separa (vem colado nos autores). Agora a IA (Haiku, barata) entra SÓ nessas lacunas — primeiro TODOS os sem‑título, depois os e‑mails sem nome até o teto — sem reprocessar os 1800+ que já saíram certos. No III Congresso são ~350 lacunas (≈45 chamadas) = custo baixo, longe dos R$9 do problema antigo (que era a IA reescrevendo TUDO). IMPORTANTE: pra isso rodar, deixe «🧠 IA orquestra a esteira» MARCADO e a IA conectada (Render). Sem isso, os sem‑título seguem só pra revisão."],
