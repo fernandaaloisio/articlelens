@@ -737,6 +737,48 @@ async function _lerOutline(pdf){
   walk(ol);
   return tit;
 }
+// Monta as LINHAS de um conjunto de itens (agrupa por coordenada Y; junta os pedaços por X com controle de espaço).
+function _linhasPorY(items){
+  const rows = [];
+  for(const it of items){
+    if(!it.str) continue;
+    const y = it.transform[5], x = it.transform[4];
+    const tol = Math.max(2, (it.height || 10) * 0.5);
+    let row = rows.find(r => Math.abs(r.y - y) <= tol);
+    if(!row){ row = { y, items: [] }; rows.push(row); }
+    row.items.push({ x, w: it.width || 0, h: it.height || 10, s: it.str });
+  }
+  rows.sort((a,b) => b.y - a.y);
+  return rows.map(r => {
+    r.items.sort((a,b) => a.x - b.x);
+    let line = "", prevEnd = null;
+    for(const it of r.items){
+      if(prevEnd !== null){
+        const gap = it.x - prevEnd;
+        const jaTemEspaco = /\s$/.test(line) || /^\s/.test(it.s);
+        if(!jaTemEspaco && gap > Math.max(1, (it.h || 10) * 0.28)) line += " ";
+      }
+      line += it.s;
+      prevEnd = it.x + it.w;
+    }
+    return line.replace(/\s+/g, " ").trim();
+  });
+}
+/* DETECTA layout de 2 COLUNAS (ex.: anais com vários painéis por página). Procura uma "calha" vertical (X) onde
+   quase NENHUM texto atravessa, com bastante texto dos dois lados. Devolve o X do corte, ou null (1 coluna).
+   Sem isso, o app juntava a linha da esquerda com a da direita ("PG09 …produçãoPG10 Questões…") e embaralhava. */
+function _detectaColuna(items, pageWidth){
+  const its = (items||[]).filter(it=>it.str && it.str.trim());
+  if(its.length < 40 || !(pageWidth>0)) return null;
+  const P = its.map(it=>({x:it.transform[4], r:it.transform[4]+(it.width||0)}));
+  let best=null;
+  for(let frac=0.38; frac<=0.62; frac+=0.02){
+    const cut=pageWidth*frac; let straddle=0,left=0,right=0;
+    for(const p of P){ if(p.x < cut-3 && p.r > cut+3) straddle++; else if(p.r<=cut) left++; else right++; }
+    if(left>=its.length*0.2 && right>=its.length*0.2 && (!best || straddle<best.straddle)) best={cut,straddle};
+  }
+  return (best && best.straddle <= its.length*0.03) ? best.cut : null;   // poucos atravessam → é 2 colunas de verdade
+}
 async function extractTextFromPDF(file){
   const buf = await file.arrayBuffer();
   let pdf;
@@ -750,36 +792,19 @@ async function extractTextFromPDF(file){
   for(let p=1; p<=pdf.numPages; p++){
     const page = await pdf.getPage(p);
     const content = await page.getTextContent();
-    // Reconstrói linhas por POSIÇÃO (ordem de leitura real, não a ordem do fluxo):
-    // agrupa itens por coordenada Y; ordena linhas de cima→baixo e itens da esquerda→direita.
-    // Isso evita o rodapé "REVISTA…" vir antes do título e colunas se misturarem.
-    const rows = [];
-    for(const it of content.items){
-      if(!it.str) continue;
-      const y = it.transform[5], x = it.transform[4];
-      const tol = Math.max(2, (it.height || 10) * 0.5);
-      let row = rows.find(r => Math.abs(r.y - y) <= tol);
-      if(!row){ row = { y, items: [] }; rows.push(row); }
-      row.items.push({ x, w: it.width || 0, h: it.height || 10, s: it.str });
+    // Reconstrói linhas por POSIÇÃO (ordem de leitura real, não a ordem do fluxo): agrupa por Y, ordena de cima→baixo
+    // e da esquerda→direita. Mas ANTES detecta se a página tem 2 COLUNAS (vários painéis por página): se tiver, lê a
+    // coluna ESQUERDA inteira e depois a DIREITA — senão juntaria a linha de uma com a da outra e embaralharia tudo.
+    let pageWidth = 595; try{ pageWidth = page.getViewport({scale:1}).width; }catch(_){}
+    const cut = _detectaColuna(content.items, pageWidth);
+    let lines;
+    if(cut){
+      const L=[], R=[];
+      for(const it of content.items){ const c = it.transform[4] + ((it.width||0)/2); (c < cut ? L : R).push(it); }   // por CENTRO do item
+      lines = _linhasPorY(L).concat(_linhasPorY(R));
+    } else {
+      lines = _linhasPorY(content.items);
     }
-    rows.sort((a,b) => b.y - a.y);                       // topo → base
-    // Junta os pedaços da linha COM controle de espaço: o PDF.js quebra palavras
-    // em vários itens (kerning). Só insere espaço quando há LACUNA real entre eles,
-    // senão concatena (evita "Hen rique"→ correto "Henrique", "201 8"→"2018").
-    const lines = rows.map(r => {
-      r.items.sort((a,b) => a.x - b.x);
-      let line = "", prevEnd = null;
-      for(const it of r.items){
-        if(prevEnd !== null){
-          const gap = it.x - prevEnd;
-          const jaTemEspaco = /\s$/.test(line) || /^\s/.test(it.s);
-          if(!jaTemEspaco && gap > Math.max(1, (it.h || 10) * 0.28)) line += " ";
-        }
-        line += it.s;
-        prevEnd = it.x + it.w;
-      }
-      return line.replace(/\s+/g, " ").trim();
-    });
     out += lines.join("\n") + "\n\f\n";     // \f = marca de fim de página (p/ o separador de anais)
     try{ page.cleanup(); }catch(_){}        // LIBERA a memória da página (crucial p/ PDF GIGANTE não estourar o navegador)
   }
@@ -1693,29 +1718,39 @@ function parseModeloResumoEscolar(text){
    * orientador) → AFILIAÇÃO + E‑MAIL (mesma linha) → "Introdução: …". Âncora no E‑MAIL: autores logo acima,
    título acima deles. Liga o e‑mail por NOME e, se não casar, no 1º autor (quem apresenta). [] se não for. */
 function parseModeloPainelPC(text){
-  if((text.match(/^PC ?\d+\b/gim)||[]).length < 25) return [];     // só esse formato (código de painel)
+  if((text.match(/^P[CG] ?\d+\b/gim)||[]).length < 12) return [];   // só esse formato (código de painel: "PC 001" ou "PG01")
   const EMAILG=/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
   const nrm=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
   const AFIL=/universidade|faculdade|instituto|centro\b|campus|uninassau|uniesp|unip[êe]|college|hospital|cl[íi]nica|\bfip\b|ppgo|curso de|departamento/i;
-  const LABEL=/^(introdu|objetivo|metodolog|resultado|conclus|relato|palavras|[áa]rea tem|refer|discuss|materiais|^pc ?\d)/i;
+  const LABEL=/^(introdu|objetivo|metodolog|resultado|conclus|relato|palavras|[áa]rea tem|refer|discuss|materiais|modalidade|apresenta[çc][ãa]o de pain|pain[ée]is cient|^p[cg] ?\d)/i;
   const ehNomeLista=l=>/;/.test(l) && (l.match(/[A-ZÀ-Ý][a-zà-ÿ]+/g)||[]).length>=2 && !LABEL.test(l) && !/@/.test(l);
   const limpaNome=s=>s.replace(/\*+/g,"").replace(/\s+/g," ").replace(/^[,;.\s]+|[,;.\s]+$/g,"").trim();
   const nomeOk=n=>n && n.split(/\s+/).filter(x=>x.length>1).length>=2 && /^[A-ZÀ-Ý]/.test(n) && !AFIL.test(n);
   const linhas=text.split(/\n/); const works=[]; const vistos=new Set();
   for(let i=0;i<linhas.length;i++){
     const ms=linhas[i].match(EMAILG); if(!ms) continue;
-    let aLn=-1; for(let z=i-1;z>=Math.max(0,i-5);z--){ if(ehNomeLista(linhas[z])){ aLn=z; break; } if(/^PC ?\d+/i.test(linhas[z]))break; }
+    let aLn=-1; for(let z=i-1;z>=Math.max(0,i-5);z--){ if(ehNomeLista(linhas[z])){ aLn=z; break; } if(/^P[CG] ?\d+/i.test(linhas[z]))break; }
     let autores=[];
-    if(aLn>=0) autores=linhas[aLn].split(/;/).map(limpaNome).filter(nomeOk);
-    else { const semMail=linhas[i].replace(EMAILG,"").replace(AFIL,"").trim();
+    if(aLn>=0){
+      // a lista de autores pode quebrar em 2+ linhas (muitos autores em 2 colunas) → junta as linhas de cima
+      // que ainda são nomes (com ";"), reconectando nome partido na quebra ("…Aléxia Taís Morais" + "Paiva;…").
+      let aTop=aLn;
+      while(aTop-1>=0){ const prev=linhas[aTop-1].trim();
+        if(/;/.test(prev) && /[A-ZÀ-Ý][a-zà-ÿ]/.test(prev) && !LABEL.test(prev) && !/@/.test(prev) && !AFIL.test(prev) && !/^P[CG] ?\d/i.test(prev)) aTop--; else break; }
+      autores=linhas.slice(aTop,aLn+1).join(" ").split(/;/).map(limpaNome).filter(nomeOk);
+      aLn=aTop;
+    } else { const semMail=linhas[i].replace(EMAILG,"").replace(AFIL,"").trim();
       if(ehNomeLista(semMail+";")){ autores=semMail.split(/;/).map(limpaNome).filter(nomeOk); aLn=i; } }
     if(!autores.length) continue;
     let k=aLn-1, titL=[];
     while(k>=0){ const l=linhas[k].trim();
       if(!l){ if(titL.length)break; k--; continue; }
-      if(/^PC ?\d+/i.test(l)){ break; }
+      const mPG=l.match(/^P[CG] ?\d+\b\s*(.*)$/i);                          // código de painel pode vir COLADO no título (2 colunas)
+      if(mPG){ const resto=mPG[1].trim();
+        if(resto && !LABEL.test(resto) && !/@/.test(resto)){ titL.unshift(resto); k--; if(titL.length>=4)break; continue; }  // "PG01 título…" → tira o código e segue subindo
+        break; }                                                            // linha é SÓ o código → começo do trabalho, para
       if(LABEL.test(l)||/@/.test(l)||ehNomeLista(l)||AFIL.test(l)){ if(titL.length)break; k--; continue; }
-      titL.unshift(l); k--; if(titL.length>=3)break; }
+      titL.unshift(l); k--; if(titL.length>=4)break; }
     const titulo=titL.join(" ").replace(/\s+/g," ").replace(/\s*\.\s*$/,"").trim();
     const emails=ms.map(e=>e.toLowerCase());
     const authors=autores.map(n=>({name:n,email:""}));
@@ -2493,6 +2528,7 @@ function tituloSuspeito(t){
     || /^[^A-Za-zÀ-ÿ0-9]/.test(t)                                 // começa com pontuação
     || /^[a-zà-ÿ]/.test(t)                                        // começa minúsculo (acento inicial perdido)
     || /\.{4,}/.test(t)                                           // pontilhado de sumário
+    || /[A-Za-zÀ-ÿ]{22,}/.test(t)                                 // palavra colada gigante (PDF.js perdeu os espaços: "umaanálisemicrotomográfica") → IA/revisão re-separa
     || /^[A-ZÀ-Ý][a-zà-ÿ]+(\s+[A-ZÀ-Ýa-zà-ÿ.]+){1,4}\s*;/.test(t) // começa "Nome Sobrenome;" = lista de autores
     || /[A-ZÀ-Ý][a-zà-ÿ]+\s+(?:d[aeo]s?\s+|e\s+|von\s+|van\s+)?[A-ZÀ-Ý][a-zà-ÿ]+\s*[\d¹²³⁴⁵⁶⁷⁸⁹]\s*[;,]/.test(t) // "…TÍTULO Nome Sobrenome1;" = AUTORES colados no fim do título
     || (t.split(";").length>=3 && /[A-ZÀ-Ý][a-zà-ÿ]+\s+[A-ZÀ-Ý][a-zà-ÿ]+/.test(t)) // 2+ «;» com nomes = lista de autores grudada
@@ -4805,9 +4841,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "14.1";
+const VERSION = "14.2";
 const VERSION_DATE = "2026-06-22";
 const CHANGELOG = [
+  ["14.2","2026-06-22","Anais com VÁRIOS ARTIGOS POR PÁGINA (2 colunas) agora são lidos certo. ANTES, o app montava o texto por altura da linha e, numa página de 2 colunas, JUNTAVA a linha da esquerda com a da direita («PG09 …produçãoPG10 Questões de direito…») — embaralhava título, autor e e‑mail das duas colunas. AGORA o app DETECTA a calha entre as colunas e lê a coluna ESQUERDA inteira e depois a DIREITA. Página de 1 coluna não muda. Testado no PDF.js real: anais ENICODONTO (RevICO) e o anais de odontologia 2736 (que também era 2 colunas) passaram a sair com nomes casando certo (no 2736, nomes capturados subiram de 490 → 654). Também: o cortador de painéis aceita o código «PG01» além de «PC 001», junta lista de autores quebrada em 2 linhas, e marca pra revisão/IA os títulos onde o PDF perdeu os espaços («umaanálisemicrotomográfica»)."],
   ["14.1","2026-06-22","Limite de tamanho do arquivo subiu de 50 MB → 800 MB. Antes, PDF acima de 50 MB era IGNORADO em silêncio (por isso a equipe «não conseguia subir» o anais de 584 MB). Como o app só LÊ O TEXTO do PDF (não decodifica as imagens em alta resolução, que são o que incha o arquivo), um PDF gigante tem chance real de passar. Pra ajudar, o app agora LIBERA a memória de cada página conforme lê (page.cleanup) e descarta o documento ao terminar — sem isso, um PDF enorme estouraria o navegador. AVISO: acima de ~120 MB pode demorar e pesar; se o navegador travar é a memória da máquina (use um PC com mais RAM). OBS: arquivo grande entra, mas se o formato for novo o resultado pode precisar de ajuste no cortador."],
   ["14.0","2026-06-22","IA preenche as LACUNAS priorizando quem está SEM TÍTULO. No anais gigante (III Congresso) sobram ~220 trabalhos cujo título o cortador grátis não separa (vem colado nos autores). Agora a IA (Haiku, barata) entra SÓ nessas lacunas — primeiro TODOS os sem‑título, depois os e‑mails sem nome até o teto — sem reprocessar os 1800+ que já saíram certos. No III Congresso são ~350 lacunas (≈45 chamadas) = custo baixo, longe dos R$9 do problema antigo (que era a IA reescrevendo TUDO). IMPORTANTE: pra isso rodar, deixe «🧠 IA orquestra a esteira» MARCADO e a IA conectada (Render). Sem isso, os sem‑título seguem só pra revisão."],
   ["13.99","2026-06-22","III Congresso (anais gigante) — mais títulos bons parando de virar «(sem título)»: o detector de título‑ruim esvaziava títulos que COMEÇAM com uma palavra que também é rótulo de seção («RESULTADOS PARCIAIS DA…», «FINANCIAMENTO E SISTEMAS…», «INTRODUÇÃO À ROBÓTICA…», «METODOLOGIAS ATIVAS…»), com «(IN)/(RE)» («(IN) CREDIBILIDADE DAS FORÇAS POLICIAIS…») ou com «Programa de/Curso de» (projetos titulados «Programa de Leitura…»). Agora: rótulo só conta se vier com «:» logo depois; «(MAIÚSCULA» é título; e a regra de afiliação exige o padrão real («Universidade Federal de…», «Faculdade de…»), sem pegar «Universidades promotoras…». Testado no III Congresso: de 16 títulos bons esvaziados para 0; afiliação de verdade continua indo pra revisão. OBS: ainda há ~220 trabalhos nesse anais onde o cortador GRÁTIS não separa o título (vem colado nos autores) — esses seguem pra revisão; dá pra resolver com a IA preenchendo só essas lacunas (barato) se você quiser."],
