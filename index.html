@@ -1873,10 +1873,10 @@ function _tituloRuim(s){ s=(s||"").trim(); if(!s) return false;
   if(_ROTULO_RE.test(s)) return true;
   if(/^[\p{Ll}(\[]/u.test(s)) return true;                                       // começa minúsculo ou "(" = fragmento
   if(/\b(agradec|financiament|fapemig|cnpq|capes|faperj|apq-)/i.test(s) && s.length<70) return true;
-  if(/^[A-ZÀ-Ÿ]{3,}\s*[-–]\s*[A-Z0-9]/.test(s) && s.length<40) return true;      // código de fomento "FAPEMIG - APQ-…"
+  if(/^[A-ZÀ-Ÿ]{3,}\s*[-–]\s*[A-Z0-9]/.test(s) && s.length<25) return true;      // código de fomento "FAPEMIG - APQ-…" (curto; NÃO pega "BONE-02: título…")
   if(/\//.test(s) && s.length<40) return true;                                   // sigla curta "(PROINIC/BIC- UNI.)"
-  if(/^(faculdades?|universidade|instituto de)\b/i.test(s)) return true;          // começa com INSTITUIÇÃO = afiliação
-  if(/universidade|faculdade|\bcampus\b|instituto/i.test(s) && /,\s*brasil\b|[-–]\s*[A-Z]{2}\b|boa vista|goi[âa]nia/i.test(s)) return true; // afiliação + localidade
+  if(/^(faculdades?|universidades?|instituto de|institui[çc][ãa]o de|curso de|programa de|n[úu]cleo de|centro universit[áa]ri)/i.test(s)) return true; // COMEÇA com instituição = afiliação no lugar do título (ex.: "CURSO DE MEDICINA DA UNIVERSIDADE… BOA VISTA - RR")
+  // (REMOVIDA a regra "menciona universidade/campus + localidade" — esvaziava TÍTULOS BONS que só CITAM o campus/cidade, ex.: "…UNIG – CAMPUS V, ITAPERUNA-RJ")
   if(/\bdoi\b|v\.\s*\d+,\s*n\.\s*\d+|global open|et al\./i.test(s)) return true;  // referência bibliográfica colada
   return false; }
 function _nomeRuim(s){ s=(s||"").trim(); if(!s) return false;
@@ -4790,9 +4790,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "13.97";
+const VERSION = "13.98";
 const VERSION_DATE = "2026-06-22";
 const CHANGELOG = [
+  ["13.98","2026-06-22","Conserto de TÍTULOS BONS que estavam virando «(sem título)»: duas regras de «título‑ruim» pegavam demais. (1) A regra de afiliação esvaziava qualquer título que MENCIONASSE universidade/campus + cidade/estado — então «AVALIAÇÃO DO COMPORTAMENTO DE SAÚDE DOS ESTUDANTES DE MEDICINA DA UNIG – CAMPUS V, ITAPERUNA-RJ» (título legítimo!) ia pra revisão como sem título. Agora só barra quando o título COMEÇA com a instituição («CURSO DE MEDICINA DA UNIVERSIDADE…», «FACULDADE…») — aí sim é afiliação no lugar do título. (2) A regra de código de fomento («FAPEMIG-APQ») pegava «BONE-02: …» (código do estudo no começo do título); agora só pega códigos curtos (<25 caracteres). Testado nas 4 pastas: de 4 títulos bons esvaziados para 0; afiliação de verdade continua indo pra revisão."],
   ["13.97","2026-06-22","Título com AUTORES colados agora VAI pra revisão (⚠) em vez de passar batido. O detector de título suspeito só pegava quando o título COMEÇAVA com «Nome Sobrenome;» — mas nesses artigos o título começa certo (em MAIÚSCULAS) e a lista de autores fica no FIM («…DOMINAÇÃO POLÍTICA Victória Prevato Ximenes Abdala 1; Thalita…»), então passava como se estivesse certo. Agora o app marca pra revisão qualquer título com «Nome Sobrenome+número;» no meio/fim, ou com 2+ «;» de nomes. Junto com o conserto da v13.96 (que já evita a maioria), é a rede de segurança: se um formato novo colar autor no título, você VÊ o ⚠ em vez de o erro passar. Testado: não marca título limpo (ECAM 0 de 100); marca os 6 de 197 que estão de fato ruins."],
   ["13.96","2026-06-22","Título não cola mais a LISTA DE AUTORES no fim: nesses artigos de evento o título quebra em 2 linhas e a linha dos autores («Lucas Oliveira de Jesus1; Miguel Arantes…») vinha grudada no título, porque o app só parava de juntar ao achar @/abstract. Agora ele PARA quando a próxima linha é lista de autores (nomes com «;» ou nome+número). Testado nas 4 pastas (197 PDFs): de 134 títulos sujos para 3 (esses 3 têm título e autor na MESMA linha física, que o leitor de PDF juntou). E‑mail e nome continuam 100%; artigos SBIE/ARACE não mudaram."],
   ["13.95","2026-06-17","Artigos de evento com E‑MAIL DE MATRÍCULA (UNIG/Even): muitos PDFs usam «E‑mail do autor principal: 230022340@aluno.unig.edu.br» (ou 0520047@professor.unig.edu.br) — como o e‑mail é um NÚMERO, não dava pra casar com o nome e ele saía SEM dono. Agora o e‑mail de matrícula (local‑part quase só dígitos) é ligado ao autor principal (1º autor da lista), que é o nome certo do PDF — não inventa nada, só corrige a atribuição. Testado nas 4 pastas (197 PDFs): de ~60 e‑mails sem nome para 1; os 2 que ficam sem e‑mail é porque o PDF realmente não traz nenhum @ (vão pra revisão). E‑mail com nome (joao.silva@) continua pelo pareamento normal; artigos SBIE/ARACE não mudaram."],
