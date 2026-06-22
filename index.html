@@ -234,7 +234,7 @@
     <div class="drop" id="drop">
       <div class="big">📄</div>
       <p><b>Arraste arquivos PDF / HTML aqui</b> ou clique para selecionar</p>
-      <p>Aceita .pdf, .html, .htm — até 200 arquivos por lote (máx. 50 MB cada)</p>
+      <p>Aceita .pdf, .html, .htm — até 200 arquivos por lote (máx. 800 MB cada; acima de ~120 MB pode demorar)</p>
     </div>
     <input type="file" id="fileInput" class="sr-only" multiple accept=".pdf,.html,.htm">
 
@@ -528,7 +528,8 @@ if (window.pdfjsLib) {
 
 /* ---- Constantes do lote ---- */
 const MAX_FILES = 200;   // elevado de 50 → suporta edições inteiras (ex.: ARACÊ tem 138 artigos)
-const MAX_SIZE_MB = 50;
+const MAX_SIZE_MB = 800;   // elevado de 50: como o app só LÊ O TEXTO (não decodifica as imagens), PDF gigante "alta qualidade" tem chance de passar
+const AVISO_SIZE_MB = 120;  // acima disso: avisa que pode demorar/pesar (depende da RAM da máquina)
 const MAX_TOTAL_MB = 2000;
 const ALLOWED = ['pdf','html','htm'];
 const PAGE_SIZE = 25;
@@ -780,7 +781,9 @@ async function extractTextFromPDF(file){
       return line.replace(/\s+/g, " ").trim();
     });
     out += lines.join("\n") + "\n\f\n";     // \f = marca de fim de página (p/ o separador de anais)
+    try{ page.cleanup(); }catch(_){}        // LIBERA a memória da página (crucial p/ PDF GIGANTE não estourar o navegador)
   }
+  try{ pdf.cleanup(); pdf.destroy(); }catch(_){}   // libera o documento (e o buffer) após extrair o texto
   let clean = consertarAcentos(out).normalize("NFC")   // junta acentos soltos (LaTeX) + compõe ç/ã
                    .replace(/[ \t]+/g," ").replace(/\n{3,}/g,"\n\n").trim();
   clean = clean.replace(/([A-Za-zÀ-ÿ])-\n[ \t]*([a-zà-ÿA-ZÀ-Ý])/g, "$1$2");   // junta palavra QUEBRADA POR HÍFEN na quebra de linha (DOENÇA DE AL-\nZHEIMER → ALZHEIMER)
@@ -2958,6 +2961,7 @@ function addFilesToQueue(newFiles){
   let ignoredExt=0, ignoredDup=0, ignoredBig=0;
   const available = () => MAX_FILES - fileQueue.length;
 
+  let grandes=0;
   for(const f of arr){
     if(!ALLOWED.includes(fileExt(f.name))){ ignoredExt++; continue; }
     if(f.size > MAX_SIZE_MB*1048576){ ignoredBig++; continue; }
@@ -2966,8 +2970,10 @@ function addFilesToQueue(newFiles){
       toast("Limite de "+MAX_FILES+" arquivos atingido. Restantes ignorados.", "warn");
       break;
     }
+    if(f.size > AVISO_SIZE_MB*1048576) grandes++;
     fileQueue.push({file:f, status:"aguardando", error:null, result:null});
   }
+  if(grandes) toast("⏳ "+grandes+" arquivo(s) GRANDE(s) (> "+AVISO_SIZE_MB+" MB). O app lê só o texto, mas pode demorar e pesar — se o navegador travar, é a memória da máquina; nesse caso use uma máquina com mais RAM ou me peça a versão em texto.", "warn");
   if(ignoredExt)  toast(ignoredExt+" arquivo(s) com formato não suportado ignorado(s).", "warn");
   if(ignoredBig)  toast(ignoredBig+" arquivo(s) acima de "+MAX_SIZE_MB+" MB ignorado(s).", "warn");
   if(ignoredDup)  toast(ignoredDup+" arquivo(s) duplicado(s) ignorado(s).", "warn");
@@ -4799,9 +4805,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "14.0";
+const VERSION = "14.1";
 const VERSION_DATE = "2026-06-22";
 const CHANGELOG = [
+  ["14.1","2026-06-22","Limite de tamanho do arquivo subiu de 50 MB → 800 MB. Antes, PDF acima de 50 MB era IGNORADO em silêncio (por isso a equipe «não conseguia subir» o anais de 584 MB). Como o app só LÊ O TEXTO do PDF (não decodifica as imagens em alta resolução, que são o que incha o arquivo), um PDF gigante tem chance real de passar. Pra ajudar, o app agora LIBERA a memória de cada página conforme lê (page.cleanup) e descarta o documento ao terminar — sem isso, um PDF enorme estouraria o navegador. AVISO: acima de ~120 MB pode demorar e pesar; se o navegador travar é a memória da máquina (use um PC com mais RAM). OBS: arquivo grande entra, mas se o formato for novo o resultado pode precisar de ajuste no cortador."],
   ["14.0","2026-06-22","IA preenche as LACUNAS priorizando quem está SEM TÍTULO. No anais gigante (III Congresso) sobram ~220 trabalhos cujo título o cortador grátis não separa (vem colado nos autores). Agora a IA (Haiku, barata) entra SÓ nessas lacunas — primeiro TODOS os sem‑título, depois os e‑mails sem nome até o teto — sem reprocessar os 1800+ que já saíram certos. No III Congresso são ~350 lacunas (≈45 chamadas) = custo baixo, longe dos R$9 do problema antigo (que era a IA reescrevendo TUDO). IMPORTANTE: pra isso rodar, deixe «🧠 IA orquestra a esteira» MARCADO e a IA conectada (Render). Sem isso, os sem‑título seguem só pra revisão."],
   ["13.99","2026-06-22","III Congresso (anais gigante) — mais títulos bons parando de virar «(sem título)»: o detector de título‑ruim esvaziava títulos que COMEÇAM com uma palavra que também é rótulo de seção («RESULTADOS PARCIAIS DA…», «FINANCIAMENTO E SISTEMAS…», «INTRODUÇÃO À ROBÓTICA…», «METODOLOGIAS ATIVAS…»), com «(IN)/(RE)» («(IN) CREDIBILIDADE DAS FORÇAS POLICIAIS…») ou com «Programa de/Curso de» (projetos titulados «Programa de Leitura…»). Agora: rótulo só conta se vier com «:» logo depois; «(MAIÚSCULA» é título; e a regra de afiliação exige o padrão real («Universidade Federal de…», «Faculdade de…»), sem pegar «Universidades promotoras…». Testado no III Congresso: de 16 títulos bons esvaziados para 0; afiliação de verdade continua indo pra revisão. OBS: ainda há ~220 trabalhos nesse anais onde o cortador GRÁTIS não separa o título (vem colado nos autores) — esses seguem pra revisão; dá pra resolver com a IA preenchendo só essas lacunas (barato) se você quiser."],
   ["13.98","2026-06-22","Conserto de TÍTULOS BONS que estavam virando «(sem título)»: duas regras de «título‑ruim» pegavam demais. (1) A regra de afiliação esvaziava qualquer título que MENCIONASSE universidade/campus + cidade/estado — então «AVALIAÇÃO DO COMPORTAMENTO DE SAÚDE DOS ESTUDANTES DE MEDICINA DA UNIG – CAMPUS V, ITAPERUNA-RJ» (título legítimo!) ia pra revisão como sem título. Agora só barra quando o título COMEÇA com a instituição («CURSO DE MEDICINA DA UNIVERSIDADE…», «FACULDADE…») — aí sim é afiliação no lugar do título. (2) A regra de código de fomento («FAPEMIG-APQ») pegava «BONE-02: …» (código do estudo no começo do título); agora só pega códigos curtos (<25 caracteres). Testado nas 4 pastas: de 4 títulos bons esvaziados para 0; afiliação de verdade continua indo pra revisão."],
