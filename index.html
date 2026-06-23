@@ -2,6 +2,9 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Seven Coleta de @ — Extrator de Publicações Acadêmicas</title>
 
@@ -1937,7 +1940,7 @@ function _nomeRuim(s){ s=(s||"").trim(); if(!s) return false;
   if(/[:\/]/.test(s)) return true;                                               // nome real não tem ":" nem "/"
   if(_INST_RE.test(s)) return true;                                              // é instituição/lugar, não pessoa
   if(/^(o|a|os|as|um|uma|no|na|nos|nas|em|para|sobre|entre|como|qual)\s/i.test(s)) return true;   // começa com artigo/preposição = TÍTULO/frase, não nome ("O DIA A DIA…")
-  if(/\b(graduand[oa]|p[óo]s[\- ]?graduand|docente|discente|orientador|coorientador|residente|mestrand[oa]|doutorand[oa]|bolsista|t[ée]cnic[oa]|enfermeir[oa]|departamento|escola paulista|setor\b|secretaria)\b/i.test(s)) return true;   // CARGO/afiliação no lugar do nome ("MENDES, Graduanda", "Departamento de Educação")
+  if(/\b(graduand[oa]|p[óo]s[\- ]?graduand|docente|discente|orientador|coorientador|residente|mestrand[oa]|doutorand[oa]|bolsista|t[ée]cnic[oa]|enfermeir[oa]|departamento|escola paulista|\bcampus\b|unifesp|\bict\b|n[úu]cleo|setor\b|secretaria)\b/i.test(s)) return true;   // CARGO/afiliação no lugar do nome ("MENDES, Graduanda", "Departamento de Educação", "ICT Unifesp", "Campus Baixada")
   // PALAVRA de TÍTULO no meio do "nome" (substantivo/verbo que pessoa nenhuma tem no nome) = é título, não autor
   if(/\b(sa[úu]de|tratamento|crian[çc]as?|an[áa]lise|caracteriza|efeito|qualidade|educa[çc][ãa]o|ensino|estudos?|avalia[çc][ãa]o|impacto|import[âa]ncia|desenvolvimento|\bliga\b|projetos?|atividades?|perfil|adapta[çc]|doen[çc]a|pacientes?|terapia|interven[çc]|preven[çc]|assist[êe]ncia|forma[çc][ãa]o|gest[ãa]o|sistemas?|rela[çc][ãa]o|influ[êe]ncia|aplica[çc]|utiliza[çc]|implementa|constru[çc]|produ[çc][ãa]o|revis[ãa]o|pesquisa|par[âa]metros?|uso de|comportamento|predomin|crescimento|desempenho|performance)\b/i.test(s)) return true;
   if(/\s(em|para|com|sobre|no|na|nos|nas|ao|aos|durante|atrav[ée]s|pela|pelo)\s/i.test(s)) return true;   // preposição no MEIO ("DE CRIANÇAS EM TRATAMENTO") = frase/título
@@ -1963,6 +1966,24 @@ function _nomeNoTexto(name, txt){
   const toks=nrm(name).replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(w=>w.length>=3);
   if(!toks.length) return true;                 // só iniciais → não dá p/ checar, mantém
   return toks.every(t=>lt.includes(t));
+}
+/* E-mail SEM dono, mas cujo local-part tem ESTRUTURA de nome (separador "." ou "_" → "amanda.avezani@",
+   "susanne.rodrigues@") → preenche o nome a partir do e-mail. SÓ quando dá ≥2 partes (firstname.lastname);
+   apelido concatenado ("allmonteiro@") fica vazio. O _blanquearNomesInventados (chamado DEPOIS) confere
+   contra o texto do PDF — se o nome inferido não aparecer, é esvaziado. Então é honesto: deriva + confere. */
+function _inferirNomeDoEmail(records){
+  let n=0;
+  for(const r of (records||[])) for(const a of (r&&r.authors||[])){
+    if(a.email && !(a.name && a.name.trim())){
+      const lp=(String(a.email).split("@")[0]||"");
+      if(/[._\-]/.test(lp) && !/^\d/.test(lp)){
+        const nome=_inferName(a.email);
+        if(nome && nome.split(/\s+/).filter(x=>x.length>=2).length>=2){ a.name=nome; n++; }
+      }
+    }
+  }
+  if(n) console.log("inferirNomeDoEmail: "+n+" nome(s) preenchido(s) do e-mail (firstname.lastname) — conferidos no texto a seguir.");
+  return n;
 }
 function _blanquearNomesInventados(records, txt){
   let n=0;
@@ -3594,6 +3615,7 @@ async function processBatch(){
   }
   // MEMÓRIA: aprende os pares confiáveis desta coleta (IA = forte; demais só se batem por conteúdo).
   try{ _limparRotulos(allResults); }catch(e){ console.warn("limparRotulos:",e); }    // DEFESA: rótulo/instituição NÃO vira título/nome (esvazia → revisar)
+  try{ _inferirNomeDoEmail(allResults); }catch(e){ console.warn("inferirNomeDoEmail:",e); }   // e-mail sem dono mas com nome claro (amanda.avezani@) → preenche; o _blanquear abaixo confere no texto
   try{ _blanquearNomesInventados(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("blanquearNomes:",e); }   // nome que NÃO está no PDF (IA chutou) → vazio
   try{ _recuperarNomeAbrev(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("recuperarNomeAbrev:",e); }   // puxa nome ABREVIADO do "AUTORIA:" (honesto, não inventa)
   try{ _recuperarNomes(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("recuperarNomes:",e); }   // puxa nome do RODAPÉ (número/nome) p/ e-mails sem nome
@@ -4858,9 +4880,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "14.5";
-const VERSION_DATE = "2026-06-22";
+const VERSION = "14.6";
+const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["14.6","2026-06-23","Três melhorias (principalmente p/ o anais de 584 MB, UNIFESP): (1) NOME PELO E‑MAIL — e‑mail que ficou sem dono mas tem nome claro («amanda.avezani@», «susanne.rodrigues@») agora preenche o nome (Amanda Avezani, Susanne Rodrigues), SEMPRE conferido no texto do PDF (não inventa; apelido tipo «allmonteiro@» fica vazio pra revisão). No teste do 584: 31 dos 58 «sem nome» foram preenchidos certo. (2) Mais afiliação barrada no campo do nome: «ICT Unifesp», «Campus …», «Unifesp», «Núcleo …». (3) NO‑CACHE: o app pede pro navegador sempre pegar a versão nova — pra acabar com o problema de rodar versão antiga em cache (o GitHub Pages guardava o arquivo). Mesmo assim, se desconfiar, abra em aba anônima e confira a versão no rodapé."],
   ["14.5","2026-06-22","Mais TÍTULO vazado no campo do nome vai pra revisão. A v14.4 já pegava nome que começa com artigo/cargo/afiliação, mas escapava título que começa com substantivo («ADAPTAÇÕES DA LIGA DE SAÚDE…», «CARACTERIZAÇÃO DA QUALIDADE», «DE CRIANÇAS EM TRATAMENTO ONCOLÓGICO», «ANÁLISE DA PERFORMANCE…»). Agora o app barra «nome» que contém palavra de TÍTULO (saúde, tratamento, análise, criança, educação, pesquisa, desempenho…) ou preposição no meio (em, para, com, sobre…). Testado: 0 nomes de pessoa reais barrados — só pega frase/título. Ajuda o anais de 584 MB (UNIFESP) E o gigante (III Congresso tinha ~120 títulos vazados no nome). Esses ficam vazios pra revisão; com a IA ligada, ela põe o nome certo."],
   ["14.4","2026-06-22","Nome que na verdade é TÍTULO, AFILIAÇÃO ou CARGO agora vai pra revisão/IA, em vez de aparecer como se fosse o autor. No anais de 584 MB (UNIFESP) saíam coisas como «O DIA A DIA DE ADOLESCENTE» (título), «Departamento de Educação» (afiliação) e «MENDES, Graduanda» (cargo) no campo do NOME. Agora o app barra: nome que começa com artigo/preposição («O/A/Para…»), ou que contém cargo (graduando, docente, discente, orientador, residente, mestrando, bolsista…) ou afiliação (departamento, escola paulista, setor…). Esses ficam vazios pra revisão (e a IA, se ligada, preenche o nome certo). Testado: 0 nomes de pessoa REAIS marcados (só pega título/cargo/afiliação que tinham vazado). Ajuda também outros anais com o mesmo tipo de vazamento."],
   ["14.3","2026-06-22","E‑mail do «Autor correspondente» agora vai pro AUTOR CERTO (anais tipo III Congresso). ANTES o app jogava esse e‑mail SEMPRE no 1º autor da lista — mas o autor correspondente quase nunca é o primeiro, então saía «Manuela => carolinecorrea812» (e‑mail da Caroline no nome da Manuela). AGORA o app casa o e‑mail com o autor cujo NOME bate, inclusive por apelido/abreviação (gera.oliveir→Geraldo Oliveira, tati_bia→Tatiane Beatriz, carolinecorrea→Caroline Correa). Testado no III Congresso: 92% dos e‑mails de autor correspondente passam a cair no nome certo; os 8% que não batem com ninguém da lista (orientador de fora) ficam como ⚠ pra IA/revisão, em vez de no autor errado."],
