@@ -2992,12 +2992,17 @@ async function extractFromHTML(rawHtml, sourceName){
 function flattenRows(records){
   // 1 linha por autor — SÓ autores COM e-mail (regra do projeto; nunca exporta linha sem e-mail).
   const rows = [];
+  const visto = new Set();                                   // dedup de LINHA: mesmo (título + e-mail) não repete
   for(const rec of records){
     const title = rec.title || "(sem título)";
     for(const a of (rec.authors||[])){
       if(a._del) continue;                                  // linha excluída manualmente
       if(!(a.email && a.email.trim())) continue;
-      rows.push([title, a.name||"", a.email.trim(), rec.source_file||""]);
+      const email = a.email.trim();
+      const chave = _norm(title)+"|"+email.toLowerCase();
+      if(visto.has(chave)) continue;                        // mesma obra + mesmo e-mail já saiu → não duplica
+      visto.add(chave);
+      rows.push([title, a.name||"", email, rec.source_file||""]);
     }
   }
   return rows;
@@ -4912,9 +4917,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "14.8";
+const VERSION = "14.9";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["14.9","2026-06-23","Duas coisas importantes: (1) FIM DO CACHE — o app agora checa sozinho se tem versão nova no ar; se tiver, aparece uma FAIXA LARANJA no topo «Atualizar agora». Era o que te travava: o GitHub Pages guardava o arquivo e você rodava versão velha sem saber (por isso meus consertos «não apareciam»). IMPORTANTE: pra PEGAR essa v14.9 a primeira vez, abra UMA vez em aba anônima (Ctrl+Shift+N) ou aperte Ctrl+Shift+R; daí pra frente o app te avisa sozinho. (2) DEDUP de linha: o mesmo trabalho + mesmo e-mail não sai repetido (no anais de 584 MB o mesmo «Tipo: EXTENSÃO…» aparecia 19× com o e-mail idêntico — agora sai 1×)."],
   ["14.8","2026-06-23","RECUPERA o título real quando o bloco de METADADOS estava no lugar dele (anais de 584 MB / UNIFESP). O cortador grudava «Campus: SÃO PAULO Tipo: PÓS GRADUAÇÃO Área: … Sub-Área: <valor> TÍTULO REAL» — e isso aparecia como se fosse o título. Agora o app corta os metadados e o valor curto da sub-área, e fica com o TÍTULO de verdade que vem no fim («A ESPIRITUALIDADE NA FORMAÇÃO DE ESTUDANTES E ENFERMEIROS: UMA REVISÃO INTEGRATIVA»). Testado: 81 títulos-metadado → 90 títulos limpos, 0 metadado; e não mexe nos outros anais (III Congresso, ECAM = 0 alterados). OBS: nesse anais, os trabalhos sem título nenhum continuam dependendo da IA pra completar — então rode com «🧠 IA orquestra a esteira» MARCADO."],
   ["14.7","2026-06-23","Conserto dos «títulos lixo» dos avisos (anais de 584 MB): (1) @ DE INSTAGRAM/HANDLE não é mais coletado como e‑mail — «virtual@respirafundo.fisio», «o@respirafundo.fisio», «e@voluntariado.epm» têm TLD que não existe (.fisio/.epm) ou local‑part de 1 letra, então o app passou a rejeitar (e some o título lixo «PROJETO DE EXTENSÃO VIRTUAL@RESPIRAFUNDO.FISIO» que vinha junto). (2) BLOCO DE METADADOS no lugar do título («Tipo: PÓS GRADUAÇÃO Área: … Sub‑Área: …») agora vira «(sem título)» pra revisão, em vez de mostrar a metainfo como se fosse o título. (3) título com «@dominio» grudado também vai pra revisão. Testado: 0 e‑mails reais rejeitados (3806 conferidos). Os avisos que sobram já têm título BOM — é só o nome que falta (e‑mail apelido), e isso é revisão honesta."],
   ["14.6","2026-06-23","Três melhorias (principalmente p/ o anais de 584 MB, UNIFESP): (1) NOME PELO E‑MAIL — e‑mail que ficou sem dono mas tem nome claro («amanda.avezani@», «susanne.rodrigues@») agora preenche o nome (Amanda Avezani, Susanne Rodrigues), SEMPRE conferido no texto do PDF (não inventa; apelido tipo «allmonteiro@» fica vazio pra revisão). No teste do 584: 31 dos 58 «sem nome» foram preenchidos certo. (2) Mais afiliação barrada no campo do nome: «ICT Unifesp», «Campus …», «Unifesp», «Núcleo …». (3) NO‑CACHE: o app pede pro navegador sempre pegar a versão nova — pra acabar com o problema de rodar versão antiga em cache (o GitHub Pages guardava o arquivo). Mesmo assim, se desconfiar, abra em aba anônima e confira a versão no rodapé."],
@@ -5088,6 +5094,19 @@ const CHANGELOG = [
 ];
 (function initVersion(){
   const vb=document.getElementById("verBadge"); if(vb) vb.textContent="v"+VERSION;
+  // AVISO DE VERSÃO NOVA (resolve o cache): busca o index.html do servidor SEM cache; se a versão de lá for
+  // mais nova que a carregada, mostra uma faixa pra atualizar — assim você nunca fica preso numa versão velha.
+  setTimeout(async function(){ try{
+    const r=await fetch("index.html?_cb="+Date.now(), {cache:"no-store"}); if(!r.ok) return;
+    const m=(await r.text()).match(/const VERSION = "([0-9.]+)"/);
+    if(m && m[1] && m[1]!==VERSION){
+      const b=document.createElement("div");
+      b.style.cssText="position:fixed;top:0;left:0;right:0;z-index:99999;background:#e8590c;color:#fff;padding:12px 16px;text-align:center;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.3)";
+      b.innerHTML="🔄 Tem uma versão mais nova (v"+m[1]+") no ar — você está na v"+VERSION+". <button id='_btUpd' style='background:#fff;color:#e8590c;border:0;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer;margin-left:8px'>Atualizar agora</button>";
+      document.body.appendChild(b);
+      const bt=document.getElementById("_btUpd"); if(bt) bt.onclick=function(){ location.href=location.pathname+"?v="+m[1]+"_"+Date.now(); };
+    }
+  }catch(_){} }, 1500);
   const vs=document.getElementById("verState"); if(vs) vs.textContent="(atual: v"+VERSION+" · "+VERSION_DATE+")";
   const list=document.getElementById("changelogList");
   if(list) list.innerHTML = CHANGELOG.map((c,i)=>
