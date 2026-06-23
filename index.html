@@ -1951,7 +1951,7 @@ function _tituloRuim(s){ s=(s||"").trim(); if(!s) return false;
   if(/\//.test(s) && s.length<40) return true;                                   // sigla curta "(PROINIC/BIC- UNI.)"
   if(/^(faculdades?\s+d|universidades?\s+(federal|estadual|cat[óo]lica|paulista|metodista|presbiteriana|comunit\w*|aberta|do\b|da\b|de\b)|instituto de|institui[çc][ãa]o de|centro universit[áa]ri|funda[çc][ãa]o universidade)/i.test(s)) return true; // COMEÇA com afiliação (ex.: "Universidade Federal de…", "Faculdade de Medicina…") — NÃO pega título "Universidades promotoras…" nem "Programa de Leitura…"
   if(/\bdoi\b|v\.\s*\d+,\s*n\.\s*\d+|global open|et al\./i.test(s)) return true;  // referência bibliográfica colada
-  if(/^(tipo|[áa]rea|sub[\- ]?[áa]rea|sess[ãa]o|data|sala|campus|modalidade)\s*:/i.test(s)) return true;   // BLOCO DE METADADOS no lugar do título ("Tipo: PÓS GRADUAÇÃO Área:…")
+  if(/^(trabalho|tipo|[áa]rea|sub[\- ]?[áa]rea|sess[ãa]o|data|sala|campus|modalidade)\s*:/i.test(s)) return true;   // BLOCO DE METADADOS no lugar do título ("Trabalho: Sessão:…", "Tipo: PÓS GRADUAÇÃO Área:…")
   if(/@[a-z0-9.\-]+\.[a-z]{2,}/i.test(s)) return true;                            // título com @/handle grudado ("…EXTENSÃO VIRTUAL@RESPIRAFUNDO.FISIO") = lixo
   return false; }
 function _nomeRuim(s){ s=(s||"").trim(); if(!s) return false;
@@ -1978,13 +1978,19 @@ function _limparTituloAnais(t){
 /* RECUPERA o título quando o cortador grudou o BLOCO DE METADADOS na frente (anais UNIFESP: "Campus: … Tipo: …
    Área: … Sub-Área: <valor> <TÍTULO REAL>"). O título real vem DEPOIS da Sub-Área; corta os metadados e o valor
    curto da sub-área (o título começa no 1º artigo/palavra-de-título). Só age quando o título COMEÇA com metadado. */
+/* Devolve: o TÍTULO REAL (se achou depois da Sub-Área), o original (se não é bloco de metadado), ou NULL
+   (é bloco de metadado SEM título real — só a sub-área → não é artigo, descartar). */
 function _repararTituloMetadado(t){
-  if(!t || !/^\s*(campus|tipo do trabalho|tipo|[áa]rea|sub[\- ]?[áa]rea|sess[ãa]o|data|sala|modalidade)\s*:/i.test(t)) return t;
-  if(!/sub[\- ]?[áa]rea\s*:/i.test(t)) return t;
+  if(!t || !/^\s*(trabalho|campus|tipo do trabalho|tipo|[áa]rea|sub[\- ]?[áa]rea|sess[ãa]o|data|sala|modalidade)\s*:/i.test(t)) return t;
+  if(!/sub[\- ]?[áa]rea\s*:/i.test(t)) return null;                 // metadado sem Sub-Área = não é artigo
   let resto = t.replace(/^[\s\S]*?sub[\- ]?[áa]rea\s*:\s*/i,"").trim();
-  const m = resto.match(/\b(A|O|AS|OS|UM|UMA|ESTUDO|AN[ÁA]LISE|AVALIA[ÇC][ÃA]O|IMPACTO|EFEITO|PERFIL|RELATO|REVIS[ÃA]O|PROJETO|USO|IMPORT[ÂA]NCIA|DESENVOLV|CARACTERIZA|INFLU[ÊE]NCIA|PRODU[ÇC]|CONSTRU[ÇC]|IMPLEMENTA|COMPARA|PERCEP[ÇC]|INVESTIGA|DETERMINA|IDENTIFICA|TELE|BOLET|NOTIFICA)\b/i);
-  if(m && m.index>0) resto = resto.slice(m.index).trim();
-  return resto.length>=8 ? resto : t;
+  // o TÍTULO REAL começa numa PALAVRA de título (artigo/verbo de pesquisa). Busca por palavra inteira
+  // (delimitada por espaço) — NÃO usar \b, que em JS casa errado dentro de acento ("PROMOÇÃO"→falso "O").
+  const TIT=/^(a|o|as|os|um|uma|estudo|an[áa]lise|avalia[çc][ãa]o|impacto|efeito|perfil|relato|revis[ãa]o|projeto|uso|import[âa]ncia|desenvolv\w*|caracteriza\w*|influ[êe]ncia|produ[çc]\w*|constru[çc]\w*|implementa\w*|compara\w*|percep[çc]\w*|investiga\w*|determina\w*|identifica\w*|tele\w*|bolet\w*|notifica\w*|conhec\w*|relat[óo]rio)$/i;
+  const W=resto.split(/\s+/);
+  let idx=-1; for(let i=1;i<W.length;i++){ if(TIT.test(W[i].replace(/[.,;:]+$/,""))){ idx=i; break; } }
+  if(idx>0) return W.slice(idx).join(" ").trim();                  // achou o TÍTULO REAL depois da sub-área
+  return null;                                                     // só sobrou o valor da sub-área = não tem título real → descartar
 }
 /* O nome APARECE no PDF? (todos os tokens com ≥3 letras existem no texto). Nome de iniciais ("A.C.S") passa
    (não dá p/ verificar). Pega a IA inventando/expandindo: "SANTOS, A.C.S" → "Ana Carolina Santos" (carolina não
@@ -2052,7 +2058,7 @@ function _limparRotulos(records){
   let nt=0, nn=0, ntc=0;
   for(const r of (records||[])){
     if(r && r.title){ const lt=_limparTituloAnais(r.title); if(lt!==r.title){ r.title=lt; ntc++; } }   // título grudado c/ cabeçalho → só o título
-    if(r && r.title){ const rt=_repararTituloMetadado(r.title); if(rt!==r.title){ r.title=rt; ntc++; } }   // bloco de metadados na frente (UNIFESP) → recupera o título real
+    if(r && r.title){ const rt=_repararTituloMetadado(r.title); if(rt===null){ r.title=""; nt++; } else if(rt!==r.title){ r.title=rt; ntc++; } }   // metadados na frente (UNIFESP): recupera título real, ou esvazia se não tiver título real
     if(r && _tituloRuim(r.title)){ r.title=""; nt++; }                           // título-lixo → vazio (vira "sem título" p/ revisar)
     for(const a of (r&&r.authors||[])){ if(a.name && _nomeRuim(a.name)){ a.name=""; nn++; } }
   }
@@ -3367,11 +3373,13 @@ async function collectFromPDF(file, mode){
     // aparecer na mensagem de "repetidos juntados". Também junta hífen de quebra de coluna ("CAR‑DÍACA"→"CARDÍACA").
     try{
       works.forEach(w=>{ if(w&&w.title){
-        let r=_repararTituloMetadado(w.title); if(r!==w.title) w.title=r;
-        w.title=w.title.replace(/(^|\s)([A-Za-zà-ÿ]+)-([A-ZÀ-Ý])/g, (mm,sp,a,b)=> (a.length<=4 && !/^(pr[éeè]|p[óo]s|sub|ex|co|re|bem|in|m[áa]|av[óo]|av[óo]s)$/i.test(a)) ? sp+a+b : mm);   // junta fragmento CURTO de quebra de coluna (CAR-DÍACA→CARDÍACA); mantém PRÉ-NATAL, TÉCNICO-CIENTÍFICA, etc.
+        const r=_repararTituloMetadado(w.title);
+        if(r===null){ w._dropMeta=true; }                   // bloco de metadados SEM título real → não é artigo
+        else { if(r!==w.title) w.title=r;
+          w.title=w.title.replace(/(^|\s)([A-Za-zà-ÿ]+)-([A-ZÀ-Ý])/g, (mm,sp,a,b)=> (a.length<=4 && !/^(pr[éeè]|p[óo]s|sub|ex|co|re|bem|in|m[áa]|av[óo]|av[óo]s)$/i.test(a)) ? sp+a+b : mm); }   // junta fragmento CURTO de quebra de coluna (CAR-DÍACA→CARDÍACA); mantém PRÉ-NATAL, TÉCNICO-CIENTÍFICA
       }});
       const _antes=works.length;
-      works=works.filter(w=>!(w && w.title && /^\s*(tipo do trabalho|tipo|campus|sess[ãa]o|data|sala|modalidade)\s*:/i.test(w.title)));
+      works=works.filter(w=>!(w && (w._dropMeta || (w.title && /^\s*(trabalho|tipo do trabalho|tipo|campus|sess[ãa]o|data|sala|modalidade)\s*:/i.test(w.title)))));
       if(works.length<_antes) console.log("descartados "+(_antes-works.length)+" não‑artigo(s) (bloco de metadados, não é trabalho).");
     }catch(_){}
     works = _dedupWorks(works);     // tira trabalhos repetidos (mesmo título em 2 seções: Resumos + Artigos)
@@ -4929,9 +4937,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "15.1";
+const VERSION = "15.2";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["15.2","2026-06-23","Bloco de metadados SEM título real agora é DESCARTADO (não vira «trabalho»). No 584 MB havia entradas como «Trabalho: Sessão: 267 … Sub-Área: SAÚDE COLETIVA, PROMOÇÃO E EDUCAÇÃO EM SAÚDE» — é só metadado, sem título de artigo. Antes o app deixava o valor da sub-área («SAÚDE COLETIVA…») como se fosse o título; agora ele percebe que NÃO tem título real depois da Sub-Área e joga fora (não é trabalho). Quando TEM título real depois («…Sub-Área: PRÁTICAS INTEGRATIVAS A ESPIRITUALIDADE NA FORMAÇÃO…»), recupera o título certo. Também: «Trabalho:» no começo do título passou a contar como metadado. Testado: 2117 títulos reais de outros anais, 0 descartado por engano."],
   ["15.1","2026-06-23","Dois ajustes no anais de 584 MB: (1) o descarte dos não‑artigos (bloco de metadados) agora roda ANTES de juntar repetidos — então esse lixo «Tipo: INICIAÇÃO CIENTÍFICA…» NÃO aparece mais na mensagem «X repetidos juntados» (antes ele já era jogado fora do CSV, mas ainda assustava na mensagem). (2) TÍTULO com hífen de quebra de coluna corrigido: «FREQUÊNCIA CAR‑DÍACA» → «FREQUÊNCIA CARDÍACA», «ANEMIA FER‑ROPRIVA» → «FERROPRIVA». Só junta fragmento CURTO de quebra; mantém hífen legítimo (PRÉ‑NATAL, PÓS‑PARTO, TÉCNICO‑CIENTÍFICA, COVID‑19)."],
   ["15.0","2026-06-23","DESCARTA não‑artigos (bloco de metadados) ANTES de contar/mostrar — não só na exportação. No anais de 584 MB (UNIFESP) havia uma seção‑listagem onde cada entrada é só «Tipo:/Campus:/Área:/Sessão:…» + um e‑mail repetido; o app contava cada uma como «trabalho» (inflava o «sumário lista 776» e enchia a conferência de «Tipo: INICIAÇÃO CIENTÍFICA…» repetidos). Agora, depois de recuperar o título real do bloco quando dá, o que continua sendo só metadado é JOGADO FORA (não é trabalho) — some da contagem, da conferência e do CSV. Testado: III Congresso, ECAM e caderno não perdem nenhum trabalho (0 descartados); só cai o lixo de metadado."],
   ["14.9","2026-06-23","Duas coisas importantes: (1) FIM DO CACHE — o app agora checa sozinho se tem versão nova no ar; se tiver, aparece uma FAIXA LARANJA no topo «Atualizar agora». Era o que te travava: o GitHub Pages guardava o arquivo e você rodava versão velha sem saber (por isso meus consertos «não apareciam»). IMPORTANTE: pra PEGAR essa v14.9 a primeira vez, abra UMA vez em aba anônima (Ctrl+Shift+N) ou aperte Ctrl+Shift+R; daí pra frente o app te avisa sozinho. (2) DEDUP de linha: o mesmo trabalho + mesmo e-mail não sai repetido (no anais de 584 MB o mesmo «Tipo: EXTENSÃO…» aparecia 19× com o e-mail idêntico — agora sai 1×)."],
