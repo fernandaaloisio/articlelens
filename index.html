@@ -943,7 +943,24 @@ function extractEmails(text){
   // 2) e-mails normais (ignorando os que estavam em chave)
   const plain = text.replace(/\{[^}]+\}@[a-zA-Z0-9.\-]+/g," ");
   (plain.match(EMAIL_RE)||[]).forEach(e=>found.push(e.toLowerCase().replace(/[.,;)]+$/,"")));
-  return [...new Set(found)];
+  return [...new Set(found)].filter(_emailReal);
+}
+/* É um e-mail DE VERDADE? Rejeita @ do Instagram/handle que o regex pega por engano: TLD inexistente
+   («virtual@respirafundo.fisio», «e@voluntariado.epm») ou local-part de 1 letra («o@», «e@»). */
+const _TLD_VALIDO = /\.(com|org|net|edu|gov|mil|int|info|biz|name|pro|io|co|me|app|dev|tv|xyz|online|site|tech|store|blog|adv|eco|nom|ind|art|med|inf)$|\.[a-z]{2}$/i;
+function _emailReal(e){
+  e=String(e||"").trim().toLowerCase(); const at=e.indexOf("@");
+  if(at<1) return false;
+  const loc=e.slice(0,at), dom=e.slice(at+1);
+  if(loc.length<2 || !/\./.test(dom)) return false;
+  return _TLD_VALIDO.test(dom);
+}
+function _removerEmailFalso(records){
+  let n=0;
+  for(const r of (records||[])){ if(r&&Array.isArray(r.authors)){ const a0=r.authors.length;
+    r.authors=r.authors.filter(a=>!a.email || _emailReal(a.email)); n+=a0-r.authors.length; } }
+  if(n) console.log("removerEmailFalso: "+n+" '@' inválido (handle/TLD inexistente) removido.");
+  return n;
 }
 
 /* =========================================================================
@@ -1934,6 +1951,8 @@ function _tituloRuim(s){ s=(s||"").trim(); if(!s) return false;
   if(/\//.test(s) && s.length<40) return true;                                   // sigla curta "(PROINIC/BIC- UNI.)"
   if(/^(faculdades?\s+d|universidades?\s+(federal|estadual|cat[óo]lica|paulista|metodista|presbiteriana|comunit\w*|aberta|do\b|da\b|de\b)|instituto de|institui[çc][ãa]o de|centro universit[áa]ri|funda[çc][ãa]o universidade)/i.test(s)) return true; // COMEÇA com afiliação (ex.: "Universidade Federal de…", "Faculdade de Medicina…") — NÃO pega título "Universidades promotoras…" nem "Programa de Leitura…"
   if(/\bdoi\b|v\.\s*\d+,\s*n\.\s*\d+|global open|et al\./i.test(s)) return true;  // referência bibliográfica colada
+  if(/^(tipo|[áa]rea|sub[\- ]?[áa]rea|sess[ãa]o|data|sala|campus|modalidade)\s*:/i.test(s)) return true;   // BLOCO DE METADADOS no lugar do título ("Tipo: PÓS GRADUAÇÃO Área:…")
+  if(/@[a-z0-9.\-]+\.[a-z]{2,}/i.test(s)) return true;                            // título com @/handle grudado ("…EXTENSÃO VIRTUAL@RESPIRAFUNDO.FISIO") = lixo
   return false; }
 function _nomeRuim(s){ s=(s||"").trim(); if(!s) return false;
   if(_ROTULO_RE.test(s)) return true;
@@ -3614,6 +3633,7 @@ async function processBatch(){
     try{ const v2=validarTudo(); if(v2 && (v2.corr||v2.inv)) setStatus("✅ Validador (pós‑IA): "+v2.corr+" corrigidos · "+v2.inv+" inválidos."); }catch(e){ console.warn("validarTudo pós‑IA:",e); }
   }
   // MEMÓRIA: aprende os pares confiáveis desta coleta (IA = forte; demais só se batem por conteúdo).
+  try{ _removerEmailFalso(allResults); }catch(e){ console.warn("removerEmailFalso:",e); }   // @ do Instagram/handle (virtual@respirafundo.fisio) NÃO é e-mail → fora
   try{ _limparRotulos(allResults); }catch(e){ console.warn("limparRotulos:",e); }    // DEFESA: rótulo/instituição NÃO vira título/nome (esvazia → revisar)
   try{ _inferirNomeDoEmail(allResults); }catch(e){ console.warn("inferirNomeDoEmail:",e); }   // e-mail sem dono mas com nome claro (amanda.avezani@) → preenche; o _blanquear abaixo confere no texto
   try{ _blanquearNomesInventados(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("blanquearNomes:",e); }   // nome que NÃO está no PDF (IA chutou) → vazio
@@ -4880,9 +4900,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "14.6";
+const VERSION = "14.7";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["14.7","2026-06-23","Conserto dos «títulos lixo» dos avisos (anais de 584 MB): (1) @ DE INSTAGRAM/HANDLE não é mais coletado como e‑mail — «virtual@respirafundo.fisio», «o@respirafundo.fisio», «e@voluntariado.epm» têm TLD que não existe (.fisio/.epm) ou local‑part de 1 letra, então o app passou a rejeitar (e some o título lixo «PROJETO DE EXTENSÃO VIRTUAL@RESPIRAFUNDO.FISIO» que vinha junto). (2) BLOCO DE METADADOS no lugar do título («Tipo: PÓS GRADUAÇÃO Área: … Sub‑Área: …») agora vira «(sem título)» pra revisão, em vez de mostrar a metainfo como se fosse o título. (3) título com «@dominio» grudado também vai pra revisão. Testado: 0 e‑mails reais rejeitados (3806 conferidos). Os avisos que sobram já têm título BOM — é só o nome que falta (e‑mail apelido), e isso é revisão honesta."],
   ["14.6","2026-06-23","Três melhorias (principalmente p/ o anais de 584 MB, UNIFESP): (1) NOME PELO E‑MAIL — e‑mail que ficou sem dono mas tem nome claro («amanda.avezani@», «susanne.rodrigues@») agora preenche o nome (Amanda Avezani, Susanne Rodrigues), SEMPRE conferido no texto do PDF (não inventa; apelido tipo «allmonteiro@» fica vazio pra revisão). No teste do 584: 31 dos 58 «sem nome» foram preenchidos certo. (2) Mais afiliação barrada no campo do nome: «ICT Unifesp», «Campus …», «Unifesp», «Núcleo …». (3) NO‑CACHE: o app pede pro navegador sempre pegar a versão nova — pra acabar com o problema de rodar versão antiga em cache (o GitHub Pages guardava o arquivo). Mesmo assim, se desconfiar, abra em aba anônima e confira a versão no rodapé."],
   ["14.5","2026-06-22","Mais TÍTULO vazado no campo do nome vai pra revisão. A v14.4 já pegava nome que começa com artigo/cargo/afiliação, mas escapava título que começa com substantivo («ADAPTAÇÕES DA LIGA DE SAÚDE…», «CARACTERIZAÇÃO DA QUALIDADE», «DE CRIANÇAS EM TRATAMENTO ONCOLÓGICO», «ANÁLISE DA PERFORMANCE…»). Agora o app barra «nome» que contém palavra de TÍTULO (saúde, tratamento, análise, criança, educação, pesquisa, desempenho…) ou preposição no meio (em, para, com, sobre…). Testado: 0 nomes de pessoa reais barrados — só pega frase/título. Ajuda o anais de 584 MB (UNIFESP) E o gigante (III Congresso tinha ~120 títulos vazados no nome). Esses ficam vazios pra revisão; com a IA ligada, ela põe o nome certo."],
   ["14.4","2026-06-22","Nome que na verdade é TÍTULO, AFILIAÇÃO ou CARGO agora vai pra revisão/IA, em vez de aparecer como se fosse o autor. No anais de 584 MB (UNIFESP) saíam coisas como «O DIA A DIA DE ADOLESCENTE» (título), «Departamento de Educação» (afiliação) e «MENDES, Graduanda» (cargo) no campo do NOME. Agora o app barra: nome que começa com artigo/preposição («O/A/Para…»), ou que contém cargo (graduando, docente, discente, orientador, residente, mestrando, bolsista…) ou afiliação (departamento, escola paulista, setor…). Esses ficam vazios pra revisão (e a IA, se ligada, preenche o nome certo). Testado: 0 nomes de pessoa REAIS marcados (só pega título/cargo/afiliação que tinham vazado). Ajuda também outros anais com o mesmo tipo de vazamento."],
