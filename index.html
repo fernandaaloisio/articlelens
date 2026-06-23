@@ -3435,9 +3435,13 @@ async function collectFromPDF(file, mode){
     recs.forEach(r=>(r.authors||[]).forEach(a=>{ if(a.email) capPdf.add(a.email.toLowerCase().trim()); }));
     const hit = [...capPdf].filter(e=>alvoPdf.has(e)).length;
     const pctMail = alvoPdf.size>0 ? Math.round(100*hit/alvoPdf.size) : 100;
-    // (B) trabalhos — esperados = SUMÁRIO (só ele; nº de RESUMO conta 2× e engana); localizados = recs
+    // (B) trabalhos — esperados = SUMÁRIO DE VERDADE (lastIndice.viaSumario). NUNCA usar a contagem de blocos do
+    //     próprio cortador como "esperado": ela é PRÉ‑dedup/PRÉ‑descarte e vem de outro cortador que a IA depois
+    //     substitui (ex.: cortarPorIntroducao corta 776 blocos no 584 MB → vira ~430 reais após juntar repetidos
+    //     e jogar fora metadados). Comparar 430 contra 776 fabrica um "346 não localizados" FALSO e trava o PDF
+    //     mesmo com 100% dos e‑mails capturados. Só há "esperado" confiável quando lemos um sumário real.
     let trabEsper = 0, trabCap = recs.length, pctTrab = 100;
-    if(modelo.tipo==="anais" && lastIndice && lastIndice.total){
+    if(modelo.tipo==="anais" && lastIndice && lastIndice.total && lastIndice.viaSumario){
       trabEsper = lastIndice.total;
       pctTrab = Math.min(100, Math.round(100*trabCap/trabEsper));
     }
@@ -3692,7 +3696,7 @@ async function processBatch(){
           +" trabalhos estão prontos — clique em <b>Excel</b> para baixar.","warn"); }
   try{ renderCobertura(ex); }catch(e){ console.warn("renderCobertura:",e); }
   const trab = allResults.length;
-  const idxMsg = lastIndice ? " · índice esperava "+lastIndice.total : "";
+  const idxMsg = (lastIndice && lastIndice.viaSumario) ? " · índice esperava "+lastIndice.total : "";
   const revMsg = inic.nFlag ? " · ⚠️ "+inic.nFlag+" nomes só com iniciais — REVISAR" : "";
   const _tempoTot = _batchTimer ? " · ⏱ "+_fmtDur(Date.now()-_batchTimer.t0) : "";
   setStatus("Linha concluída: <b>"+trab+"</b> trabalhos com e‑mail"+idxMsg+" · "+ex.trabRem
@@ -4339,7 +4343,7 @@ function _iaBloqueada(){ const p=_acertoPct(); return (p!=null && p<ACERTO_MIN) 
 function renderCobertura(ex){
   const box=document.getElementById("coberturaBox"); if(!box) return;
   box.style.display=""; box.open=true;          // já abre o painel (com a verificação) após a coleta
-  const idxN = lastIndice ? lastIndice.total : null;
+  const idxN = (lastIndice && lastIndice.viaSumario) ? lastIndice.total : null;   // só sumário REAL é gabarito de quantidade
   // TOTAL de e‑mails coletados = 1 por autor‑com‑e‑mail (= linhas do Excel; conta repetições entre trabalhos)
   const totCapt = allResults.reduce((s,w)=>s+(w.authors||[]).filter(a=>a.email).length,0);
   let _resAt="";
@@ -4558,7 +4562,7 @@ async function verificarIncertosIA(){
     const custo=aiUsage.usd-usdBefore;
     _somaCustoRun(custo);   // a verificação (lupa) entra no custo por e-mail da coleta
     // RELATÓRIO das 3 perguntas
-    const idxN=lastIndice?lastIndice.total:null;
+    const idxN=(lastIndice && lastIndice.viaSumario)?lastIndice.total:null;
     const localizei=allResults.length+lastRemovidos.length;
     const semA=lastRemovidos.filter(r=>!r.temArroba).length, comA=lastRemovidos.filter(r=>r.temArroba).length;
     const q1 = idxN!=null
@@ -4585,7 +4589,7 @@ document.getElementById("verificarIA").onclick = verificarIncertosIA;
   const esc=s=>'"'+String(s==null?"":s).replace(/"/g,'""')+'"';
   const captUni=new Set(); allResults.forEach(w=>(w.authors||[]).forEach(a=>{ if(a.email) captUni.add(a.email.toLowerCase().trim()); }));
   const alvo=_emailAlvo?_emailAlvo.uni.size:0;
-  const idxN=lastIndice?lastIndice.total:null;
+  const idxN=(lastIndice && lastIndice.viaSumario)?lastIndice.total:null;
   const nmail=(allResults||[]).reduce((s,w)=>s+(w.authors||[]).filter(a=>a.email).length,0);
   const custoBRL=(lastRun?lastRun.cost:0)*USD_BRL, perBRL=nmail?custoBRL/nmail:0;
   const L=[];
@@ -4937,9 +4941,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "15.2";
+const VERSION = "15.3";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["15.3","2026-06-23","FIM do «menos de 95% de aproveitamento» FALSO no anais de 584 MB (UNIFESP). O app dizia «sumário lista 776 · 346 não localizados (revisar)» e TRAVAVA o PDF (⛔) — mas isso era mentira da CONTAGEM, não falta de dado: os 776 eram os blocos que o cortador picou ANTES de juntar repetidos e jogar metadados fora (viram ~430 trabalhos reais), e a IA ainda troca o cortador por outro. Comparar 430 contra 776 inventava um buraco de «346 faltando». Conferi: os e‑mails estavam 100% capturados (a rede de segurança garante todo @ do PDF no resultado). Agora a contagem «esperada» só vale quando o app LEU um sumário de verdade (índice com títulos). Sem sumário real, ele não inventa um alvo nem trava — mostra só «N trabalhos coletados» + a cobertura de e‑mail (que é a medida confiável). Resultado: esse anais não cai mais em falso ⛔, e os anais que TÊM sumário de verdade continuam conferidos igual. (Os trabalhos sem nome/título seguem indo pra revisão normal e pra IA completar — nada some.)"],
   ["15.2","2026-06-23","Bloco de metadados SEM título real agora é DESCARTADO (não vira «trabalho»). No 584 MB havia entradas como «Trabalho: Sessão: 267 … Sub-Área: SAÚDE COLETIVA, PROMOÇÃO E EDUCAÇÃO EM SAÚDE» — é só metadado, sem título de artigo. Antes o app deixava o valor da sub-área («SAÚDE COLETIVA…») como se fosse o título; agora ele percebe que NÃO tem título real depois da Sub-Área e joga fora (não é trabalho). Quando TEM título real depois («…Sub-Área: PRÁTICAS INTEGRATIVAS A ESPIRITUALIDADE NA FORMAÇÃO…»), recupera o título certo. Também: «Trabalho:» no começo do título passou a contar como metadado. Testado: 2117 títulos reais de outros anais, 0 descartado por engano."],
   ["15.1","2026-06-23","Dois ajustes no anais de 584 MB: (1) o descarte dos não‑artigos (bloco de metadados) agora roda ANTES de juntar repetidos — então esse lixo «Tipo: INICIAÇÃO CIENTÍFICA…» NÃO aparece mais na mensagem «X repetidos juntados» (antes ele já era jogado fora do CSV, mas ainda assustava na mensagem). (2) TÍTULO com hífen de quebra de coluna corrigido: «FREQUÊNCIA CAR‑DÍACA» → «FREQUÊNCIA CARDÍACA», «ANEMIA FER‑ROPRIVA» → «FERROPRIVA». Só junta fragmento CURTO de quebra; mantém hífen legítimo (PRÉ‑NATAL, PÓS‑PARTO, TÉCNICO‑CIENTÍFICA, COVID‑19)."],
   ["15.0","2026-06-23","DESCARTA não‑artigos (bloco de metadados) ANTES de contar/mostrar — não só na exportação. No anais de 584 MB (UNIFESP) havia uma seção‑listagem onde cada entrada é só «Tipo:/Campus:/Área:/Sessão:…» + um e‑mail repetido; o app contava cada uma como «trabalho» (inflava o «sumário lista 776» e enchia a conferência de «Tipo: INICIAÇÃO CIENTÍFICA…» repetidos). Agora, depois de recuperar o título real do bloco quando dá, o que continua sendo só metadado é JOGADO FORA (não é trabalho) — some da contagem, da conferência e do CSV. Testado: III Congresso, ECAM e caderno não perdem nenhum trabalho (0 descartados); só cai o lixo de metadado."],
