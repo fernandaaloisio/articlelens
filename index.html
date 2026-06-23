@@ -1975,6 +1975,17 @@ function _limparTituloAnais(t){
   if(m.length){ const last=m[m.length-1]; s=s.slice(last.index+last[0].length); }      // tira o cabeçalho/sumário do começo
   return s.replace(/\s+/g," ").trim();
 }
+/* RECUPERA o título quando o cortador grudou o BLOCO DE METADADOS na frente (anais UNIFESP: "Campus: … Tipo: …
+   Área: … Sub-Área: <valor> <TÍTULO REAL>"). O título real vem DEPOIS da Sub-Área; corta os metadados e o valor
+   curto da sub-área (o título começa no 1º artigo/palavra-de-título). Só age quando o título COMEÇA com metadado. */
+function _repararTituloMetadado(t){
+  if(!t || !/^\s*(campus|tipo do trabalho|tipo|[áa]rea|sub[\- ]?[áa]rea|sess[ãa]o|data|sala|modalidade)\s*:/i.test(t)) return t;
+  if(!/sub[\- ]?[áa]rea\s*:/i.test(t)) return t;
+  let resto = t.replace(/^[\s\S]*?sub[\- ]?[áa]rea\s*:\s*/i,"").trim();
+  const m = resto.match(/\b(A|O|AS|OS|UM|UMA|ESTUDO|AN[ÁA]LISE|AVALIA[ÇC][ÃA]O|IMPACTO|EFEITO|PERFIL|RELATO|REVIS[ÃA]O|PROJETO|USO|IMPORT[ÂA]NCIA|DESENVOLV|CARACTERIZA|INFLU[ÊE]NCIA|PRODU[ÇC]|CONSTRU[ÇC]|IMPLEMENTA|COMPARA|PERCEP[ÇC]|INVESTIGA|DETERMINA|IDENTIFICA|TELE|BOLET|NOTIFICA)\b/i);
+  if(m && m.index>0) resto = resto.slice(m.index).trim();
+  return resto.length>=8 ? resto : t;
+}
 /* O nome APARECE no PDF? (todos os tokens com ≥3 letras existem no texto). Nome de iniciais ("A.C.S") passa
    (não dá p/ verificar). Pega a IA inventando/expandindo: "SANTOS, A.C.S" → "Ana Carolina Santos" (carolina não
    está no texto) → rejeitado. E "psycotrin@ufg.br" sem dono → qualquer nome que a IA chutar é rejeitado. */
@@ -2041,6 +2052,7 @@ function _limparRotulos(records){
   let nt=0, nn=0, ntc=0;
   for(const r of (records||[])){
     if(r && r.title){ const lt=_limparTituloAnais(r.title); if(lt!==r.title){ r.title=lt; ntc++; } }   // título grudado c/ cabeçalho → só o título
+    if(r && r.title){ const rt=_repararTituloMetadado(r.title); if(rt!==r.title){ r.title=rt; ntc++; } }   // bloco de metadados na frente (UNIFESP) → recupera o título real
     if(r && _tituloRuim(r.title)){ r.title=""; nt++; }                           // título-lixo → vazio (vira "sem título" p/ revisar)
     for(const a of (r&&r.authors||[])){ if(a.name && _nomeRuim(a.name)){ a.name=""; nn++; } }
   }
@@ -4900,9 +4912,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "14.7";
+const VERSION = "14.8";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["14.8","2026-06-23","RECUPERA o título real quando o bloco de METADADOS estava no lugar dele (anais de 584 MB / UNIFESP). O cortador grudava «Campus: SÃO PAULO Tipo: PÓS GRADUAÇÃO Área: … Sub-Área: <valor> TÍTULO REAL» — e isso aparecia como se fosse o título. Agora o app corta os metadados e o valor curto da sub-área, e fica com o TÍTULO de verdade que vem no fim («A ESPIRITUALIDADE NA FORMAÇÃO DE ESTUDANTES E ENFERMEIROS: UMA REVISÃO INTEGRATIVA»). Testado: 81 títulos-metadado → 90 títulos limpos, 0 metadado; e não mexe nos outros anais (III Congresso, ECAM = 0 alterados). OBS: nesse anais, os trabalhos sem título nenhum continuam dependendo da IA pra completar — então rode com «🧠 IA orquestra a esteira» MARCADO."],
   ["14.7","2026-06-23","Conserto dos «títulos lixo» dos avisos (anais de 584 MB): (1) @ DE INSTAGRAM/HANDLE não é mais coletado como e‑mail — «virtual@respirafundo.fisio», «o@respirafundo.fisio», «e@voluntariado.epm» têm TLD que não existe (.fisio/.epm) ou local‑part de 1 letra, então o app passou a rejeitar (e some o título lixo «PROJETO DE EXTENSÃO VIRTUAL@RESPIRAFUNDO.FISIO» que vinha junto). (2) BLOCO DE METADADOS no lugar do título («Tipo: PÓS GRADUAÇÃO Área: … Sub‑Área: …») agora vira «(sem título)» pra revisão, em vez de mostrar a metainfo como se fosse o título. (3) título com «@dominio» grudado também vai pra revisão. Testado: 0 e‑mails reais rejeitados (3806 conferidos). Os avisos que sobram já têm título BOM — é só o nome que falta (e‑mail apelido), e isso é revisão honesta."],
   ["14.6","2026-06-23","Três melhorias (principalmente p/ o anais de 584 MB, UNIFESP): (1) NOME PELO E‑MAIL — e‑mail que ficou sem dono mas tem nome claro («amanda.avezani@», «susanne.rodrigues@») agora preenche o nome (Amanda Avezani, Susanne Rodrigues), SEMPRE conferido no texto do PDF (não inventa; apelido tipo «allmonteiro@» fica vazio pra revisão). No teste do 584: 31 dos 58 «sem nome» foram preenchidos certo. (2) Mais afiliação barrada no campo do nome: «ICT Unifesp», «Campus …», «Unifesp», «Núcleo …». (3) NO‑CACHE: o app pede pro navegador sempre pegar a versão nova — pra acabar com o problema de rodar versão antiga em cache (o GitHub Pages guardava o arquivo). Mesmo assim, se desconfiar, abra em aba anônima e confira a versão no rodapé."],
   ["14.5","2026-06-22","Mais TÍTULO vazado no campo do nome vai pra revisão. A v14.4 já pegava nome que começa com artigo/cargo/afiliação, mas escapava título que começa com substantivo («ADAPTAÇÕES DA LIGA DE SAÚDE…», «CARACTERIZAÇÃO DA QUALIDADE», «DE CRIANÇAS EM TRATAMENTO ONCOLÓGICO», «ANÁLISE DA PERFORMANCE…»). Agora o app barra «nome» que contém palavra de TÍTULO (saúde, tratamento, análise, criança, educação, pesquisa, desempenho…) ou preposição no meio (em, para, com, sobre…). Testado: 0 nomes de pessoa reais barrados — só pega frase/título. Ajuda o anais de 584 MB (UNIFESP) E o gigante (III Congresso tinha ~120 títulos vazados no nome). Esses ficam vazios pra revisão; com a IA ligada, ela põe o nome certo."],
