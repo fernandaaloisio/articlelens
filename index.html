@@ -3362,15 +3362,19 @@ async function collectFromPDF(file, mode){
         }
       }catch(e){ console.warn("aiColetarAnais:", e&&e.message); }
     }
-    works = _dedupWorks(works);     // tira trabalhos repetidos (mesmo título em 2 seções: Resumos + Artigos)
     // UNIFESP & cia: recupera o título real do bloco de metadados e DESCARTA não‑artigos (entrada de índice/
-    // listagem cujo "título" é só metadado «Tipo:/Campus:/Sessão:…» e não dá pra recuperar título real).
+    // listagem cujo "título" é só metadado «Tipo:/Campus:/Sessão:…»). Roda ANTES do dedup, pra esse lixo NÃO
+    // aparecer na mensagem de "repetidos juntados". Também junta hífen de quebra de coluna ("CAR‑DÍACA"→"CARDÍACA").
     try{
-      works.forEach(w=>{ if(w&&w.title){ const r=_repararTituloMetadado(w.title); if(r!==w.title) w.title=r; } });
+      works.forEach(w=>{ if(w&&w.title){
+        let r=_repararTituloMetadado(w.title); if(r!==w.title) w.title=r;
+        w.title=w.title.replace(/(^|\s)([A-Za-zà-ÿ]+)-([A-ZÀ-Ý])/g, (mm,sp,a,b)=> (a.length<=4 && !/^(pr[éeè]|p[óo]s|sub|ex|co|re|bem|in|m[áa]|av[óo]|av[óo]s)$/i.test(a)) ? sp+a+b : mm);   // junta fragmento CURTO de quebra de coluna (CAR-DÍACA→CARDÍACA); mantém PRÉ-NATAL, TÉCNICO-CIENTÍFICA, etc.
+      }});
       const _antes=works.length;
       works=works.filter(w=>!(w && w.title && /^\s*(tipo do trabalho|tipo|campus|sess[ãa]o|data|sala|modalidade)\s*:/i.test(w.title)));
       if(works.length<_antes) console.log("descartados "+(_antes-works.length)+" não‑artigo(s) (bloco de metadados, não é trabalho).");
     }catch(_){}
+    works = _dedupWorks(works);     // tira trabalhos repetidos (mesmo título em 2 seções: Resumos + Artigos)
     // REDE DE SEGURANÇA: garante que TODO @ do PDF (não‑institucional) esteja no resultado — se a IA ou o
     // determinístico perdeu algum, ele entra como registro com CONTEXTO (a IA/revisão completa nome+título).
     try{
@@ -4925,9 +4929,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "15.0";
+const VERSION = "15.1";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["15.1","2026-06-23","Dois ajustes no anais de 584 MB: (1) o descarte dos não‑artigos (bloco de metadados) agora roda ANTES de juntar repetidos — então esse lixo «Tipo: INICIAÇÃO CIENTÍFICA…» NÃO aparece mais na mensagem «X repetidos juntados» (antes ele já era jogado fora do CSV, mas ainda assustava na mensagem). (2) TÍTULO com hífen de quebra de coluna corrigido: «FREQUÊNCIA CAR‑DÍACA» → «FREQUÊNCIA CARDÍACA», «ANEMIA FER‑ROPRIVA» → «FERROPRIVA». Só junta fragmento CURTO de quebra; mantém hífen legítimo (PRÉ‑NATAL, PÓS‑PARTO, TÉCNICO‑CIENTÍFICA, COVID‑19)."],
   ["15.0","2026-06-23","DESCARTA não‑artigos (bloco de metadados) ANTES de contar/mostrar — não só na exportação. No anais de 584 MB (UNIFESP) havia uma seção‑listagem onde cada entrada é só «Tipo:/Campus:/Área:/Sessão:…» + um e‑mail repetido; o app contava cada uma como «trabalho» (inflava o «sumário lista 776» e enchia a conferência de «Tipo: INICIAÇÃO CIENTÍFICA…» repetidos). Agora, depois de recuperar o título real do bloco quando dá, o que continua sendo só metadado é JOGADO FORA (não é trabalho) — some da contagem, da conferência e do CSV. Testado: III Congresso, ECAM e caderno não perdem nenhum trabalho (0 descartados); só cai o lixo de metadado."],
   ["14.9","2026-06-23","Duas coisas importantes: (1) FIM DO CACHE — o app agora checa sozinho se tem versão nova no ar; se tiver, aparece uma FAIXA LARANJA no topo «Atualizar agora». Era o que te travava: o GitHub Pages guardava o arquivo e você rodava versão velha sem saber (por isso meus consertos «não apareciam»). IMPORTANTE: pra PEGAR essa v14.9 a primeira vez, abra UMA vez em aba anônima (Ctrl+Shift+N) ou aperte Ctrl+Shift+R; daí pra frente o app te avisa sozinho. (2) DEDUP de linha: o mesmo trabalho + mesmo e-mail não sai repetido (no anais de 584 MB o mesmo «Tipo: EXTENSÃO…» aparecia 19× com o e-mail idêntico — agora sai 1×)."],
   ["14.8","2026-06-23","RECUPERA o título real quando o bloco de METADADOS estava no lugar dele (anais de 584 MB / UNIFESP). O cortador grudava «Campus: SÃO PAULO Tipo: PÓS GRADUAÇÃO Área: … Sub-Área: <valor> TÍTULO REAL» — e isso aparecia como se fosse o título. Agora o app corta os metadados e o valor curto da sub-área, e fica com o TÍTULO de verdade que vem no fim («A ESPIRITUALIDADE NA FORMAÇÃO DE ESTUDANTES E ENFERMEIROS: UMA REVISÃO INTEGRATIVA»). Testado: 81 títulos-metadado → 90 títulos limpos, 0 metadado; e não mexe nos outros anais (III Congresso, ECAM = 0 alterados). OBS: nesse anais, os trabalhos sem título nenhum continuam dependendo da IA pra completar — então rode com «🧠 IA orquestra a esteira» MARCADO."],
