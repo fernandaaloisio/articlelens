@@ -4690,6 +4690,15 @@ document.getElementById("clearResults").onclick = ()=>{
 
 function _exp(fn){
   if(!allResults.length){ toast("Nada para exportar.","warn"); return; }
+  // TRAVA RÍGIDA: se algum PDF ficou travado (⛔ cobertura abaixo da meta), NÃO libera o arquivo p/ usuário comum.
+  // A coleta desse PDF não passou na conferência automática e precisa de revisão do administrador antes de sair.
+  if(!_ehAdmin() && _pdfsBloqueados && _pdfsBloqueados.length){
+    const nm = _pdfsBloqueados.map(p=>p.file).filter(Boolean);
+    toast("⛔ Exportação bloqueada: "+_pdfsBloqueados.length+" PDF(s) não passaram na conferência de cobertura"
+      +(nm.length?(" ("+nm.slice(0,3).join(", ")+(nm.length>3?"…":"")+")"):"")
+      +". <b>Entre em contato com o administrador</b> para revisar e liberar antes de baixar.","err");
+    return;
+  }
   // bloqueia se houver ⚠ pendentes — SÓ para login não‑admin (admin baixa direto)
   const pend = _ehAdmin() ? 0 : _pendentesCount();
   if(pend>0){
@@ -4941,9 +4950,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "15.3";
+const VERSION = "15.4";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["15.4","2026-06-23","Quando um PDF é TRAVADO (⛔ cobertura abaixo da meta), o sistema agora NÃO libera mais o arquivo (Excel/CSV/JSON) para o usuário comum — a coleta desse PDF não passou na conferência automática e precisa de revisão. Ao tentar baixar, aparece: «⛔ Exportação bloqueada: N PDF(s) não passaram na conferência de cobertura. Entre em contato com o administrador para revisar e liberar antes de baixar.» O ADMINISTRADOR continua baixando direto (é quem revisa e libera), igual já era nas linhas pendentes. Assim nenhum resultado incompleto sai sem o adm conferir."],
   ["15.3","2026-06-23","FIM do «menos de 95% de aproveitamento» FALSO no anais de 584 MB (UNIFESP). O app dizia «sumário lista 776 · 346 não localizados (revisar)» e TRAVAVA o PDF (⛔) — mas isso era mentira da CONTAGEM, não falta de dado: os 776 eram os blocos que o cortador picou ANTES de juntar repetidos e jogar metadados fora (viram ~430 trabalhos reais), e a IA ainda troca o cortador por outro. Comparar 430 contra 776 inventava um buraco de «346 faltando». Conferi: os e‑mails estavam 100% capturados (a rede de segurança garante todo @ do PDF no resultado). Agora a contagem «esperada» só vale quando o app LEU um sumário de verdade (índice com títulos). Sem sumário real, ele não inventa um alvo nem trava — mostra só «N trabalhos coletados» + a cobertura de e‑mail (que é a medida confiável). Resultado: esse anais não cai mais em falso ⛔, e os anais que TÊM sumário de verdade continuam conferidos igual. (Os trabalhos sem nome/título seguem indo pra revisão normal e pra IA completar — nada some.)"],
   ["15.2","2026-06-23","Bloco de metadados SEM título real agora é DESCARTADO (não vira «trabalho»). No 584 MB havia entradas como «Trabalho: Sessão: 267 … Sub-Área: SAÚDE COLETIVA, PROMOÇÃO E EDUCAÇÃO EM SAÚDE» — é só metadado, sem título de artigo. Antes o app deixava o valor da sub-área («SAÚDE COLETIVA…») como se fosse o título; agora ele percebe que NÃO tem título real depois da Sub-Área e joga fora (não é trabalho). Quando TEM título real depois («…Sub-Área: PRÁTICAS INTEGRATIVAS A ESPIRITUALIDADE NA FORMAÇÃO…»), recupera o título certo. Também: «Trabalho:» no começo do título passou a contar como metadado. Testado: 2117 títulos reais de outros anais, 0 descartado por engano."],
   ["15.1","2026-06-23","Dois ajustes no anais de 584 MB: (1) o descarte dos não‑artigos (bloco de metadados) agora roda ANTES de juntar repetidos — então esse lixo «Tipo: INICIAÇÃO CIENTÍFICA…» NÃO aparece mais na mensagem «X repetidos juntados» (antes ele já era jogado fora do CSV, mas ainda assustava na mensagem). (2) TÍTULO com hífen de quebra de coluna corrigido: «FREQUÊNCIA CAR‑DÍACA» → «FREQUÊNCIA CARDÍACA», «ANEMIA FER‑ROPRIVA» → «FERROPRIVA». Só junta fragmento CURTO de quebra; mantém hífen legítimo (PRÉ‑NATAL, PÓS‑PARTO, TÉCNICO‑CIENTÍFICA, COVID‑19)."],
