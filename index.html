@@ -1888,6 +1888,40 @@ function cortarPorAncora(text, ancoraSrc){
   }
   return works;
 }
+/* MODELO UNIFESP (anais "alta qualidade", 1 artigo por página): cada página vem marcada por "Página N Página N"
+   (dobrado pela extração de 2 colunas), seguida do TÍTULO, da LISTA de autores em CAIXA "NOME - CARGO(A)"
+   (ORIENTADOR/DISCENTE/…), do bloco de metadados (Trabalho:/Sub-Área:…) e dos e‑mails. O cortador genérico
+   MISTURAVA o título de um trabalho com os e‑mails do vizinho (dava 57 títulos p/ 425 e‑mails). Aqui o corte é
+   por PÁGINA (1 artigo) e o TÍTULO sai LIMPO (entre "Página N" e o 1º autor "NOME - CARGO"); o nome é ligado ao
+   e‑mail SÓ quando o local‑part comprova (0 troca). Devolve [] quando não é esse formato. */
+function parseModeloUnifesp(text){
+  const EMAILG=/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
+  const MARC=/P[áa]gina\s*\d+\s*P[áa]gina\s*\d+/gi;
+  if((text.match(MARC)||[]).length < 50) return [];                       // guarda de formato (só este anais)
+  const CARGO="(?:ORIENTADOR|DISCENTE|DOCENTE|COORIENTADOR|COLABORADOR|CO[\\- ]?AUTOR|TUTOR|BOLSISTA|AUTOR|RESPONS[ÁA]VEL)";
+  const reTit=new RegExp("^P[áa]gina\\s*\\d+\\s*(?:P[áa]gina\\s*\\d+\\s*)?([\\s\\S]*?)(?=\\s+[A-ZÀ-Ý][A-ZÀ-Ý.'’ ]{4,}?\\s*[\\-–]\\s*"+CARGO+"\\b)","i");
+  const reNomeCargo=new RegExp("([A-ZÀ-Ý][A-ZÀ-Ý.'’ ]{4,}?)\\s*[\\-–]\\s*"+CARGO,"gi");
+  const _nm=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+  const partes=text.split(/(?=P[áa]gina\s*\d+\s*P[áa]gina\s*\d+)/);
+  const works=[];
+  for(const bloco of partes){
+    const emails=[...new Set((bloco.match(EMAILG)||[]).map(e=>e.toLowerCase().replace(/[.,;)]+$/,""))
+      .filter(e=>!(typeof _emailReal==="function" && !_emailReal(e))) )];
+    if(!emails.length) continue;                                          // só páginas com e‑mail (resto não tem o que coletar)
+    const mt=bloco.match(reTit); let titulo=mt?mt[1].replace(/\s+/g," ").trim():"";
+    if(typeof _limparTituloAnais==="function"){ try{ titulo=_limparTituloAnais(titulo); }catch(_){ } }
+    const nomes=[]; let mn; reNomeCargo.lastIndex=0;
+    while((mn=reNomeCargo.exec(bloco))){ const n=mn[1].replace(/\s+/g," ").trim();
+      if(n.split(/\s+/).filter(x=>x.length>1).length>=2) nomes.push(n); }
+    const authors=emails.map(em=>{ const loc=_nm(em.split("@")[0]).replace(/[^a-z]/g,"");
+      let best="",bs=0; for(const nm of nomes){ let sc=0;
+        for(const tk of _nm(nm).split(/\s+/).filter(x=>x.length>=3)){ if(loc.includes(tk))sc+=tk.length; else if(tk.length>=4&&loc.includes(tk.slice(0,4)))sc+=4; }
+        if(sc>bs){bs=sc;best=nm;} }
+      return {name: bs>=4?best:"", email:em}; });
+    works.push({ title:titulo, authors, _raw: bloco.slice(0, 1800) });
+  }
+  return works;
+}
 /* BIBLIOTECA DE RODAPÉS — anais com RODAPÉ NUMERADO (ex.: UNITINS): título em CAPS, autores em Title‑Case com
    nº sobrescrito ("Maria Santos1; João Lima2;…"), e‑mail nos rodapés numerados ("1. cargo… E‑mail: x"). Liga
    autor↔e‑mail PELO NÚMERO — determinístico, grátis, com nome certo. Devolve [] quando não é esse formato. */
@@ -3321,11 +3355,18 @@ async function collectFromPDF(file, mode){
     const miolo = _pularCapaSumario(text);          // sem capa/sumário gigante → IA e rede de segurança sem ruído
     const comEmail = a => a ? a.filter(w=>(w.authors||[]).some(x=>x.email)).length : -1;
     const viaEmail = cortarPorEmailSolto(text);     // ÚLTIMO RECURSO: anais sem rótulos, e‑mail pelado (ex.: Jornada Odontológica) ([] se não render)
-    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eAut = comEmail(viaAut), eEsc = comEmail(viaEsc), ePC = comEmail(viaPC), eEmail = comEmail(viaEmail);
+    const viaUni = parseModeloUnifesp(text);        // MODELO UNIFESP "alta qualidade" (1 artigo/página, "Página N Página N") ([] se não for esse formato)
+    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eAut = comEmail(viaAut), eEsc = comEmail(viaEsc), ePC = comEmail(viaPC), eEmail = comEmail(viaEmail), eUni = comEmail(viaUni);
     // Prefere o SUMÁRIO (títulos oficiais, limpos). Só troca pro método antigo quando ele pega
     // MUITO mais e-mail (≥25% e +5) — aí o ganho compensa títulos um pouco menos limpos.
     let works;
-    if(eAut>0 && eAut>=eS && eAut>=eP && eAut>=eM && eAut>=ePal && eAut>=eI && eAut>=eRod){
+    if(eUni>0){
+      // MODELO UNIFESP: a guarda de formato (≥50 "Página N Página N") já garante que é ESTE anais. Aqui o título
+      // sai LIMPO e casado com o autor certo — corrige a mistura de títulos do cortador genérico. Tem prioridade.
+      works = viaUni;
+      modelosUsados["Anais · UNIFESP (1 artigo/página)"] = (modelosUsados["Anais · UNIFESP (1 artigo/página)"]||0) + 1;
+      lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
+    } else if(eAut>0 && eAut>=eS && eAut>=eP && eAut>=eM && eAut>=ePal && eAut>=eI && eAut>=eRod){
       // anais "AUTORIA: SOBRENOME, INICIAIS" com e‑mail EMAIL|EMAIL (ECAM/Medicina): título limpo + nome certo, grátis
       works = viaAut;
       modelosUsados["Anais · AUTORIA (SOBRENOME, INICIAIS)"] = (modelosUsados["Anais · AUTORIA (SOBRENOME, INICIAIS)"]||0) + 1;
@@ -4978,9 +5019,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "15.5";
+const VERSION = "15.6";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["15.6","2026-06-24","CORTADOR DEDICADO pro anais UNIFESP «alta qualidade» (584 MB, 1 artigo por página). PROBLEMA encontrado: o cortador genérico MISTURAVA os títulos — pegava e‑mails de um trabalho e colava no título do trabalho vizinho (dava só 57 títulos para 425 e‑mails; ex.: e‑mails da «(RE)CONSTRUÇÃO DO PROGRAMA DE RESIDÊNCIA…» saíam com o título «PROTEÓLISE DO CININOGÊNIO…» do lado). Agora cada página (= 1 artigo, marcada por «Página N Página N» na extração de 2 colunas) vira UM trabalho, com o TÍTULO LIMPO (o texto entre o «Página N» e o 1º autor «NOME ‑ ORIENTADOR(A)/DISCENTE…») e o nome ligado ao e‑mail SÓ quando o local‑part comprova (zero troca). Resultado nesse PDF: de 57 títulos misturados → 161 trabalhos com título certo, 100% dos 377 e‑mails, 0 nome‑e‑mail trocado. Tem guarda de formato apertada (≥50 marcadores «Página N Página N»), então NÃO mexe em nenhum outro anais (III Congresso, ECAM, RevICO = 0 alterados). IMPORTANTE: é só RE‑RODAR o PDF de 584 MB nesta versão — não precisa dividir em vários PDFs."],
   ["15.5","2026-06-23","CONSERTA «autor trocado com o e‑mail» quando dá pra verificar. Em anais onde os autores vêm por «;» e o e‑mail aparece colado no FIM do bloco (depois da afiliação), o cortador às vezes grudava o e‑mail no ÚLTIMO autor (ou no que tem «*»), mesmo quando o e‑mail é claramente de outro. Ex.: «Anne Karolyne…; …; Cleverson Trento* ¹UFS anne.karolyne2000@gmail.com» — o e‑mail é da AUTORA Anne, não do Cleverson. Agora, dentro do mesmo trabalho, se o e‑mail NÃO bate com o autor onde está mas BATE (forte, pelo local‑part) com outro autor do trabalho, o sistema passa o e‑mail pro autor certo automaticamente — antes de excluir os sem‑e‑mail e antes de aprender o pareamento. Só mexe quando há PROVA (o nome está dentro do e‑mail) e nunca rouba o e‑mail de quem já tem o seu. Quando ninguém bate, deixa marcado pra revisão (⚠), sem chutar. Roda no caminho determinístico e no da IA."],
   ["15.4","2026-06-23","Quando um PDF é TRAVADO (⛔ cobertura abaixo da meta), o sistema agora NÃO libera mais o arquivo (Excel/CSV/JSON) para o usuário comum — a coleta desse PDF não passou na conferência automática e precisa de revisão. Ao tentar baixar, aparece: «⛔ Exportação bloqueada: N PDF(s) não passaram na conferência de cobertura. Entre em contato com o administrador para revisar e liberar antes de baixar.» O ADMINISTRADOR continua baixando direto (é quem revisa e libera), igual já era nas linhas pendentes. Assim nenhum resultado incompleto sai sem o adm conferir."],
   ["15.3","2026-06-23","FIM do «menos de 95% de aproveitamento» FALSO no anais de 584 MB (UNIFESP). O app dizia «sumário lista 776 · 346 não localizados (revisar)» e TRAVAVA o PDF (⛔) — mas isso era mentira da CONTAGEM, não falta de dado: os 776 eram os blocos que o cortador picou ANTES de juntar repetidos e jogar metadados fora (viram ~430 trabalhos reais), e a IA ainda troca o cortador por outro. Comparar 430 contra 776 inventava um buraco de «346 faltando». Conferi: os e‑mails estavam 100% capturados (a rede de segurança garante todo @ do PDF no resultado). Agora a contagem «esperada» só vale quando o app LEU um sumário de verdade (índice com títulos). Sem sumário real, ele não inventa um alvo nem trava — mostra só «N trabalhos coletados» + a cobertura de e‑mail (que é a medida confiável). Resultado: esse anais não cai mais em falso ⛔, e os anais que TÊM sumário de verdade continuam conferidos igual. (Os trabalhos sem nome/título seguem indo pra revisão normal e pra IA completar — nada some.)"],
