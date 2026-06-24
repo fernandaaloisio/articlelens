@@ -646,6 +646,32 @@ function _parearNomesComEmails(works){
     let j=0; for(const a of ainda){ if(j<livres.length){ a.email=livres[j++]; } }   // ordem (rodapé costuma seguir a ordem dos autores)
   });
 }
+// AUTOR TROCADO COM O E‑MAIL: dentro do MESMO trabalho, se um e‑mail está num autor cujo nome NÃO bate, mas
+// bate (forte) com OUTRO autor do trabalho, passa o e‑mail pro autor certo. É verificável pelo local‑part do
+// e‑mail (ex.: «anne.karolyne2000@…» é da AUTORA «Anne Karolyne…», não do «Cleverson…*» que estava colado antes
+// do @). Conserta o pareamento errado venha do cortador (e‑mail inline no fim do bloco) ou da IA. Só mexe quando
+// há prova (match forte) e nunca rouba o e‑mail de quem JÁ tem o seu e‑mail certo.
+function _corrigirEmailTrocado(works){
+  // match FORTE: ignora os "return true" degenerados do _emailBate (nome/local‑part curtos) — exige prova real.
+  const forte=(nm,em)=>{ const lp=_norm(em||"").split("@")[0].replace(/[^a-z]/g,"");
+    const tk=_norm(nm||"").split(/\s+/).filter(t=>t.length>=3);
+    return lp.length>=4 && tk.length>=1 && _emailBate(nm,em); };
+  let n=0;
+  (works||[]).forEach(r=>{
+    if(!Array.isArray(r.authors) || r.authors.length<2) return;
+    for(const a of r.authors){
+      if(!a.email || !a.name) continue;
+      if(forte(a.name, a.email)) continue;                                   // já casa → ok
+      const certo = r.authors.find(b=> b!==a && b.name && forte(b.name, a.email));
+      if(!certo) continue;                                                   // ninguém casa → deixa p/ revisão (⚠)
+      if(certo.email && forte(certo.name, certo.email)) continue;            // o certo já tem o SEU e‑mail → não rouba
+      const swap = certo.email || "";                                       // troca os e‑mails entre os dois
+      certo.email = a.email; a.email = swap; certo._emailTrocado = true; n++;
+    }
+  });
+  if(n) console.log("e‑mail trocado de autor corrigido: "+n);
+  return n;
+}
 // adiciona os órfãos como autores reais (nome vazio + _orphan) — 1x por registro
 function _materializarOrfaos(){
   (allResults||[]).forEach(r=>{
@@ -3680,6 +3706,7 @@ async function processBatch(){
   try{ _blanquearNomesInventados(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("blanquearNomes:",e); }   // nome que NÃO está no PDF (IA chutou) → vazio
   try{ _recuperarNomeAbrev(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("recuperarNomeAbrev:",e); }   // puxa nome ABREVIADO do "AUTORIA:" (honesto, não inventa)
   try{ _recuperarNomes(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("recuperarNomes:",e); }   // puxa nome do RODAPÉ (número/nome) p/ e-mails sem nome
+  try{ _corrigirEmailTrocado(allResults); }catch(e){ console.warn("corrigirEmailTrocado:",e); }   // e-mail no autor errado → passa pro autor que o local-part comprova (ANTES de excluir/aprender)
   try{ _parearNomesComEmails(allResults); }catch(e){ console.warn("parear:",e); }   // pareia nome↔e-mail solto ANTES de excluir/aprender
   try{ _aprenderMemoria(allResults); }catch(e){ console.warn("aprenderMemoria:",e); }
   // BLINDAGEM: cada passo final em try/catch — se um falhar, os DADOS continuam prontos
@@ -4205,6 +4232,7 @@ function renderResults(){
   if(!allResults.length){ res.classList.remove("show"); return; }
   res.classList.add("show");
   _limparInstitucional();        // remove e-mail de setor (callcenter@, secretaria@…) que virou autor
+  _corrigirEmailTrocado(allResults);   // e-mail no autor errado → autor que o local-part comprova (idempotente)
   _parearNomesComEmails(allResults);   // pareia autor‑só‑nome com e‑mail solto do mesmo trabalho
   _materializarOrfaos();         // órfãos viram autores reais ANTES de contar/listar
   _reusarNomesPorEmail();        // reusa nome de e-mail já pareado com sucesso em outro artigo
@@ -4950,9 +4978,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "15.4";
+const VERSION = "15.5";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["15.5","2026-06-23","CONSERTA «autor trocado com o e‑mail» quando dá pra verificar. Em anais onde os autores vêm por «;» e o e‑mail aparece colado no FIM do bloco (depois da afiliação), o cortador às vezes grudava o e‑mail no ÚLTIMO autor (ou no que tem «*»), mesmo quando o e‑mail é claramente de outro. Ex.: «Anne Karolyne…; …; Cleverson Trento* ¹UFS anne.karolyne2000@gmail.com» — o e‑mail é da AUTORA Anne, não do Cleverson. Agora, dentro do mesmo trabalho, se o e‑mail NÃO bate com o autor onde está mas BATE (forte, pelo local‑part) com outro autor do trabalho, o sistema passa o e‑mail pro autor certo automaticamente — antes de excluir os sem‑e‑mail e antes de aprender o pareamento. Só mexe quando há PROVA (o nome está dentro do e‑mail) e nunca rouba o e‑mail de quem já tem o seu. Quando ninguém bate, deixa marcado pra revisão (⚠), sem chutar. Roda no caminho determinístico e no da IA."],
   ["15.4","2026-06-23","Quando um PDF é TRAVADO (⛔ cobertura abaixo da meta), o sistema agora NÃO libera mais o arquivo (Excel/CSV/JSON) para o usuário comum — a coleta desse PDF não passou na conferência automática e precisa de revisão. Ao tentar baixar, aparece: «⛔ Exportação bloqueada: N PDF(s) não passaram na conferência de cobertura. Entre em contato com o administrador para revisar e liberar antes de baixar.» O ADMINISTRADOR continua baixando direto (é quem revisa e libera), igual já era nas linhas pendentes. Assim nenhum resultado incompleto sai sem o adm conferir."],
   ["15.3","2026-06-23","FIM do «menos de 95% de aproveitamento» FALSO no anais de 584 MB (UNIFESP). O app dizia «sumário lista 776 · 346 não localizados (revisar)» e TRAVAVA o PDF (⛔) — mas isso era mentira da CONTAGEM, não falta de dado: os 776 eram os blocos que o cortador picou ANTES de juntar repetidos e jogar metadados fora (viram ~430 trabalhos reais), e a IA ainda troca o cortador por outro. Comparar 430 contra 776 inventava um buraco de «346 faltando». Conferi: os e‑mails estavam 100% capturados (a rede de segurança garante todo @ do PDF no resultado). Agora a contagem «esperada» só vale quando o app LEU um sumário de verdade (índice com títulos). Sem sumário real, ele não inventa um alvo nem trava — mostra só «N trabalhos coletados» + a cobertura de e‑mail (que é a medida confiável). Resultado: esse anais não cai mais em falso ⛔, e os anais que TÊM sumário de verdade continuam conferidos igual. (Os trabalhos sem nome/título seguem indo pra revisão normal e pra IA completar — nada some.)"],
   ["15.2","2026-06-23","Bloco de metadados SEM título real agora é DESCARTADO (não vira «trabalho»). No 584 MB havia entradas como «Trabalho: Sessão: 267 … Sub-Área: SAÚDE COLETIVA, PROMOÇÃO E EDUCAÇÃO EM SAÚDE» — é só metadado, sem título de artigo. Antes o app deixava o valor da sub-área («SAÚDE COLETIVA…») como se fosse o título; agora ele percebe que NÃO tem título real depois da Sub-Área e joga fora (não é trabalho). Quando TEM título real depois («…Sub-Área: PRÁTICAS INTEGRATIVAS A ESPIRITUALIDADE NA FORMAÇÃO…»), recupera o título certo. Também: «Trabalho:» no começo do título passou a contar como metadado. Testado: 2117 títulos reais de outros anais, 0 descartado por engano."],
