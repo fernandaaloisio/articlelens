@@ -1957,6 +1957,41 @@ function cortarPorRodapeNum(text){
   }
   return works;
 }
+/* MODELO "RODAPÉ ORCID NUMERADO" (ex.: 65‑1‑PB / anais com resumos expandidos): autor "NOME (n)" na linha de
+   autores e o e‑mail no RODAPÉ "(n) <ORCID/afiliação, c/ siglas entre parênteses> E‑mail: x". Liga autor↔e‑mail
+   PELO NÚMERO (determinístico, sem troca), 1 trabalho por artigo (NÃO duplica título em PT/EN). O título vem nos
+   dois idiomas grudados; pega o trecho após o nº de página/fim das referências do artigo anterior. Devolve []
+   quando não é esse formato (guarda: ≥12 rodapés "(n) … E‑mail:"). */
+function parseModeloRodapeOrcid(text){
+  const reFoot=/\((\d{1,2})\)((?:(?!\(\d{1,2}\))[\s\S]){0,320}?)E\s*-?\s*mail\s*:\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})/gi;
+  const foots=[]; let m;
+  while((m=reFoot.exec(text))){ const email=m[3].toLowerCase().replace(/[.,;)]+$/,"");
+    if(typeof _emailReal==="function" && !_emailReal(email)) continue;
+    foots.push({n:+m[1], email, pos:m.index}); }
+  if(foots.length<12) return [];                                              // guarda de formato
+  const arts=[]; let cur=null;                                               // agrupa por reset do nº (volta p/ 1)
+  for(const f of foots){ if(f.n===1){ cur={foots:[]}; arts.push(cur); } if(cur) cur.foots.push(f); }
+  const _limpaNm=s=>(s||"").replace(/\s+/g," ").replace(/^[,;.\s]+|[,;.\s]+$/g,"").trim();
+  const nomeOk=n=>n && n.split(/\s+/).filter(x=>x.length>1).length>=2;
+  const works=[];
+  for(let i=0;i<arts.length;i++){
+    const a=arts[i]; const foot1=a.foots[0].pos;
+    const prevEnd = i>0 ? arts[i-1].foots[arts[i-1].foots.length-1].pos : 0;
+    let pre=text.slice(prevEnd, foot1).replace(/=====\s*P\d+\s*=====/g," ");
+    const mAuth=pre.match(/((?:[A-ZÀ-Ý][A-Za-zÀ-ÿ.'\-]+(?:\s+[A-Za-zÀ-ÿ.'\-]+){0,5}\s*\(\d{1,2}\)\s*[;,]?\s*)+)\s*$/);
+    const authorLine=mAuth?mAuth[1]:""; let cab=mAuth?pre.slice(0,pre.length-mAuth[1].length):pre;
+    let titulo=cab;                                                          // título = após o nº de página / fim das refs do artigo anterior
+    const cuts=[...cab.matchAll(/(?:\s\d{1,4}\s|respons[áa]bilidade dos seus autores\.?|Refer[êe]ncias?\s*:|References\s*:|Acesso em[^.]*\.)/gi)];
+    if(cuts.length){ const last=cuts[cuts.length-1]; titulo=cab.slice(last.index+last[0].length); }
+    titulo=titulo.replace(/\s+/g," ").trim(); if(titulo.length>200) titulo="";
+    const nomeN={}; const reNm=/([A-ZÀ-Ý][A-Za-zÀ-ÿ.'\-]+(?:\s+[A-Za-zÀ-ÿ.'\-]+){0,5})\s*\((\d{1,2})\)/g; let mm;
+    while((mm=reNm.exec(authorLine))){ const nm=_limpaNm(mm[1]); if(nomeOk(nm)) nomeN[+mm[2]]=nm; }
+    const authors=[]; const vis=new Set();
+    for(const f of a.foots){ if(vis.has(f.email)) continue; vis.add(f.email); authors.push({name:nomeN[f.n]||"", email:f.email}); }
+    if(authors.length) works.push({title:titulo, authors, _raw:text.slice(Math.max(0,prevEnd), Math.min(text.length, foot1+600))});
+  }
+  return works;
+}
 /* ÚLTIMO RECURSO p/ anais SEM rótulos (ex.: "Jornada Odontológica"): formato "número → TÍTULO (Title Case) →
    AUTORES + afiliação → e‑mail PELADO (1 por trabalho) → Objetivo/Palavras‑chave". Sem RESUMO/Introdução/sumário
    e título NÃO é CAIXA ALTA, então os outros cortadores não pegam. Aqui o e‑mail é a ÂNCORA: o trabalho é o bloco
@@ -3356,7 +3391,8 @@ async function collectFromPDF(file, mode){
     const comEmail = a => a ? a.filter(w=>(w.authors||[]).some(x=>x.email)).length : -1;
     const viaEmail = cortarPorEmailSolto(text);     // ÚLTIMO RECURSO: anais sem rótulos, e‑mail pelado (ex.: Jornada Odontológica) ([] se não render)
     const viaUni = parseModeloUnifesp(text);        // MODELO UNIFESP "alta qualidade" (1 artigo/página, "Página N Página N") ([] se não for esse formato)
-    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eAut = comEmail(viaAut), eEsc = comEmail(viaEsc), ePC = comEmail(viaPC), eEmail = comEmail(viaEmail), eUni = comEmail(viaUni);
+    const viaOrc = parseModeloRodapeOrcid(text);    // MODELO "rodapé ORCID numerado" (autor (n) ↔ rodapé "(n) … E‑mail:"), ex.: 65‑1‑PB ([] se não for esse formato)
+    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eAut = comEmail(viaAut), eEsc = comEmail(viaEsc), ePC = comEmail(viaPC), eEmail = comEmail(viaEmail), eUni = comEmail(viaUni), eOrc = comEmail(viaOrc);
     // Prefere o SUMÁRIO (títulos oficiais, limpos). Só troca pro método antigo quando ele pega
     // MUITO mais e-mail (≥25% e +5) — aí o ganho compensa títulos um pouco menos limpos.
     let works;
@@ -3365,6 +3401,12 @@ async function collectFromPDF(file, mode){
       // sai LIMPO e casado com o autor certo — corrige a mistura de títulos do cortador genérico. Tem prioridade.
       works = viaUni;
       modelosUsados["Anais · UNIFESP (1 artigo/página)"] = (modelosUsados["Anais · UNIFESP (1 artigo/página)"]||0) + 1;
+      lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
+    } else if(eOrc>0){
+      // MODELO RODAPÉ ORCID: a guarda (≥12 rodapés "(n) … E‑mail:") já garante o formato. Liga autor↔e‑mail PELO
+      // NÚMERO (sem troca) e 1 trabalho por artigo (não duplica PT/EN). E‑mail que faltar entra pela rede de segurança.
+      works = viaOrc;
+      modelosUsados["Anais · rodapé ORCID numerado"] = (modelosUsados["Anais · rodapé ORCID numerado"]||0) + 1;
       lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
     } else if(eAut>0 && eAut>=eS && eAut>=eP && eAut>=eM && eAut>=ePal && eAut>=eI && eAut>=eRod){
       // anais "AUTORIA: SOBRENOME, INICIAIS" com e‑mail EMAIL|EMAIL (ECAM/Medicina): título limpo + nome certo, grátis
@@ -5019,9 +5061,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "15.6";
+const VERSION = "15.7";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["15.7","2026-06-25","CORTADOR DEDICADO pro anais de «rodapé ORCID numerado» (ex.: 65‑1‑PB / resumos expandidos). PROBLEMA: o app não reconhecia esse formato (autor «NOME (n)» + rodapé «(n) ORCID; Afiliação (SIGLA) … E‑mail: x» + corpo «Resumo:») e caía no genérico, que (1) DUPLICAVA o trabalho — título em português E em inglês viravam dois — e (2) às vezes botava a AFILIAÇÃO no lugar do nome. Agora um cortador próprio liga autor↔e‑mail PELO NÚMERO (sem troca), faz 1 trabalho por artigo (não duplica PT/EN) e tira o título limpo. Nesse PDF: 64 artigos, ~123 e‑mails pareados com nome certo (≥94% casando), 0 duplicata PT/EN. Tem guarda apertada (≥12 rodapés «(n) … E‑mail:»), então NÃO mexe em outro anais (UNIFESP, RevICO = 0). OBS honesta: títulos muito longos (PT+inglês grudados) e e‑mails que o rodapé não casou vão pra REVISÃO / pra IA completar — nada some (a rede de segurança garante todo @). Também: a afiliação que virava nome («Universidade…», «Instituto Federal…») já era barrada e mandada pra revisão."],
   ["15.6","2026-06-24","CORTADOR DEDICADO pro anais UNIFESP «alta qualidade» (584 MB, 1 artigo por página). PROBLEMA encontrado: o cortador genérico MISTURAVA os títulos — pegava e‑mails de um trabalho e colava no título do trabalho vizinho (dava só 57 títulos para 425 e‑mails; ex.: e‑mails da «(RE)CONSTRUÇÃO DO PROGRAMA DE RESIDÊNCIA…» saíam com o título «PROTEÓLISE DO CININOGÊNIO…» do lado). Agora cada página (= 1 artigo, marcada por «Página N Página N» na extração de 2 colunas) vira UM trabalho, com o TÍTULO LIMPO (o texto entre o «Página N» e o 1º autor «NOME ‑ ORIENTADOR(A)/DISCENTE…») e o nome ligado ao e‑mail SÓ quando o local‑part comprova (zero troca). Resultado nesse PDF: de 57 títulos misturados → 161 trabalhos com título certo, 100% dos 377 e‑mails, 0 nome‑e‑mail trocado. Tem guarda de formato apertada (≥50 marcadores «Página N Página N»), então NÃO mexe em nenhum outro anais (III Congresso, ECAM, RevICO = 0 alterados). IMPORTANTE: é só RE‑RODAR o PDF de 584 MB nesta versão — não precisa dividir em vários PDFs."],
   ["15.5","2026-06-23","CONSERTA «autor trocado com o e‑mail» quando dá pra verificar. Em anais onde os autores vêm por «;» e o e‑mail aparece colado no FIM do bloco (depois da afiliação), o cortador às vezes grudava o e‑mail no ÚLTIMO autor (ou no que tem «*»), mesmo quando o e‑mail é claramente de outro. Ex.: «Anne Karolyne…; …; Cleverson Trento* ¹UFS anne.karolyne2000@gmail.com» — o e‑mail é da AUTORA Anne, não do Cleverson. Agora, dentro do mesmo trabalho, se o e‑mail NÃO bate com o autor onde está mas BATE (forte, pelo local‑part) com outro autor do trabalho, o sistema passa o e‑mail pro autor certo automaticamente — antes de excluir os sem‑e‑mail e antes de aprender o pareamento. Só mexe quando há PROVA (o nome está dentro do e‑mail) e nunca rouba o e‑mail de quem já tem o seu. Quando ninguém bate, deixa marcado pra revisão (⚠), sem chutar. Roda no caminho determinístico e no da IA."],
   ["15.4","2026-06-23","Quando um PDF é TRAVADO (⛔ cobertura abaixo da meta), o sistema agora NÃO libera mais o arquivo (Excel/CSV/JSON) para o usuário comum — a coleta desse PDF não passou na conferência automática e precisa de revisão. Ao tentar baixar, aparece: «⛔ Exportação bloqueada: N PDF(s) não passaram na conferência de cobertura. Entre em contato com o administrador para revisar e liberar antes de baixar.» O ADMINISTRADOR continua baixando direto (é quem revisa e libera), igual já era nas linhas pendentes. Assim nenhum resultado incompleto sai sem o adm conferir."],
