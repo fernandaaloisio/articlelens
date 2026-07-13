@@ -1123,22 +1123,46 @@ function marcarNomesFaltando(records){
 function _dominioProtegido(email){
   return /\.(com|edu|org|gov|net|mil)\.br$/i.test(email) || /@[a-z0-9.\-]+\.br$/i.test(email);
 }
-/* Placeholder digitado pelo próprio autor (t@, eee@, teste@) — não é falha da coleta:
-   sai do denominador da cobertura e vira revisão em vez de "e‑mail perdido". */
-function _emailPlaceholder(email){
+/* Placeholder / e‑mail‑lixo digitado no próprio PDF (t@, eee@, 535@, toto@…) — não é autor válido.
+   v16.2 (MOD v3 Parte 4): além do local ≤2 e da lista fixa, pega caractere REPETIDO (aaa/xxx), só
+   DÍGITOS CURTOS (535 — matrícula de 5+ dígitos como 230022340@aluno… é e‑mail REAL e fica), e local
+   CURTO (≤4) que NÃO casa com o nome do autor (toto@ p/ Elizabeth). Apelido curto que casa fica
+   (bru@ p/ Bruna), e INICIAIS também (jvcs@ p/ João Victor Costa Silva — subsequência do nome). */
+function _emailPlaceholder(email, nome){
   const loc = (email.split("@")[0] || "").toLowerCase();
-  if (loc.length <= 2) return true;                        // t@, e@, xx@
-  return /^(teste?|asd|qwe|ewq|zxc|x+|a+|e+|abc|1+|nao|sem|email|user|aaa+|eee+)$/.test(loc);
+  if (loc.length <= 2){                                    // t@, e@, xx@ — MAS jv@piacentini.com.br é REAL:
+    if (nome){                                             // iniciais (jv = João Vitor) ou domínio com o sobrenome
+      const nrmL=s=>s.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+      const toks=nrmL(nome).split(/\s+/).filter(x=>x.length>=2);
+      const ini=toks.map(t=>t[0]).join(""), locL=loc.replace(/[^a-z]/g,"");
+      const dom=nrmL(email.split("@")[1]||"");
+      if((locL.length>=2 && ini.startsWith(locL)) || toks.some(t=>t.length>=5 && dom.includes(t))) return false;
+    }
+    return true;
+  }
+  if (/^(teste?|asd|qwe|ewq|zxc|abc|nao|sem|email|user)$/.test(loc)) return true;
+  if (/^(.)\1+$/.test(loc)) return true;                   // aaa, eee, xxx, 111
+  if (/^\d{1,4}$/.test(loc)) return true;                  // 535, 123 — só dígitos E curto (matrícula fica)
+  if (loc.length <= 4 && nome){
+    const nrmL = s => s.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+    const toks = nrmL(nome).split(/\s+/).filter(x=>x.length>=3);
+    const casaPrefixo = toks.some(t => loc.includes(t.slice(0,3)));            // bru@ ← Bruna
+    const locL = loc.replace(/[^a-z]/g,""), nomeL = nrmL(nome).replace(/[^a-z]/g,"");
+    let i=0; for(const c of nomeL){ if(c===locL[i]) i++; }                     // subsequência: jvcs@ ← João Victor C. Silva
+    const casaIniciais = locL.length>=2 && i>=locL.length;
+    if (!casaPrefixo && !casaIniciais) return true;        // curto e não lembra o autor → placeholder
+  }
+  return false;
 }
 /* Placeholder NÃO é autor (v16.1 — MOD v3): marca _del (não sai no CSV/Excel/JSON) e registra no
    Relatório de descartes — separado, não removido calado (mesmo estilo do lastDuplicatas). */
 let lastPlaceholders = [];
 function descartarPlaceholders(records){
   for (const rec of (records||[])) for (const a of (rec.authors||[])) {
-    if (a.email && !a._ph && _emailPlaceholder(a.email)) {
+    if (a.email && !a._ph && _emailPlaceholder(a.email, a.name)) {   // v16.2: usa o NOME p/ julgar local curto
       a._del = true; a._ph = true;                        // _ph = já registrado (idempotente)
-      lastPlaceholders.push({ titulo: rec.title||"(sem título)",
-        email: a.email, motivo: "placeholder digitado no PDF", fonte: rec.source_file||"" });
+      lastPlaceholders.push({ titulo: rec.title||"(sem título)", nome: a.name||"",
+        email: a.email, motivo: "e‑mail placeholder/suspeito", fonte: rec.source_file||"" });
     }
   }
   return lastPlaceholders.length;
@@ -4985,9 +5009,9 @@ document.getElementById("verificarIA").onclick = verificarIncertosIA;
   L.push(["Título","Tinha @ no texto? (extração falhou)","Fonte"]);
   rem.forEach(r=>L.push([r.title, r.temArroba?"SIM — revisar":"não", r.source||""]));
   L.push([]);
-  L.push(["④ PLACEHOLDERS descartados (e‑mail de mentira digitado no próprio PDF: t@, eee@, teste@…) ("+ph.length+")"]);
-  L.push(["Título","E‑mail","Motivo","Fonte"]);
-  ph.forEach(p=>L.push([p.titulo, p.email, p.motivo, p.fonte||""]));
+  L.push(["④ PLACEHOLDERS descartados (e‑mail de mentira/suspeito digitado no próprio PDF: t@, eee@, 535@, toto@…) ("+ph.length+")"]);
+  L.push(["Título","Nome","E‑mail","Motivo","Fonte"]);
+  ph.forEach(p=>L.push([p.titulo, p.nome||"", p.email, p.motivo, p.fonte||""]));
   const csv="﻿"+L.map(r=>r.map(esc).join(",")).join("\r\n");
   download(new Blob([csv],{type:"text/csv;charset=utf-8;"}), "relatorio_descartes.csv");
   toast("Relatório de descartes baixado: "+dup.length+" repetidos · "+blo.length+" travados · "+rem.length+" sem e‑mail · "+ph.length+" placeholder(s).");
@@ -5301,9 +5325,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.1";
+const VERSION = "16.2";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.2","2026-07-13","DETECTOR DE PLACEHOLDER mais esperto (MOD v3, Parte 4 revisada). Além de t@/eee@/teste@, agora pega: caractere REPETIDO (aaa@, xxx@), só DÍGITOS CURTOS (535@, 123@) e local CURTO (≤4 letras) que NÃO lembra o nome do autor (toto@ da Elizabeth, wss@ do Lucas, rew@ do Carlos → descartes). O que CASA com o autor FICA: apelido (bru@ da Bruna), INICIAIS (jvcs@ do João Victor Costa Silva) e até local de 2 letras quando são as iniciais com domínio próprio (jv@piacentini.com.br do João Vitor Piacentini — caso real que a regra crua descartaria). PROTEÇÃO importante que o MOD não previa: e‑mail de MATRÍCULA (230022340@aluno…, 0520047@professor… — reais, dos PDFs EVEN) NÃO é placeholder (só dígitos até 4 conta). O relatório de descartes (seção ④) agora mostra também o NOME do autor da linha descartada. Testado: 16/16 casos sintéticos + Conciam real (14 lixos verdadeiros marcados, incluindo os da auditoria do MOD; 0 e‑mail legítimo perdido), UNIFESP 0 falso positivo."],
   ["16.1","2026-07-13","MOD v3 («a cura») aplicado — a recuperação de nome agora também CORRIGE, e nenhum caminho inventa nome. (1) SOBRESCREVE nome errado usando o PDF como verdade: letra‑lixo do título grudada («I Milena De Jesus Lage» → «Milena De Jesus Lage»), nome derivado do e‑mail («Lantmann Med» → «Estela Maris Lantmann Rocha») e truncado («Luiza Rudy» → «Luiza Chiodini Rudy»); MANTÉM o nome do coletor quando ele é mais completo e está escrito no PDF (nome quebrado em 2 linhas). (2) PLACEHOLDER (t@, eee@, xx@…) não é autor: sai do CSV/Excel/JSON e vai pra seção ④ do Relatório de descartes — separado, não removido calado. De quebra, o JSON agora respeita linha excluída (_del), que ele ignorava. (3) CURA NA FONTE do nome inventado: a conferência «o nome está no PDF?» passa a IGNORAR os e‑mails do texto (era por isso que «Lantmann Med» passava — os tokens estavam dentro de lantmann.med@, não no texto real); e o pareamento NUNCA mais escreve o e‑mail reformatado como nome — e‑mail sem par entra com nome VAZIO marcado pra revisão/recuperação. Consequência honesta: nome derivado de e‑mail só sobrevive se estiver IMPRESSO no PDF. Testado: os 4 tipos de erro do MOD corrigidos, caso «mais completo» mantido, placeholders idempotentes, Conciam 131 trabalhos/725 linhas todas com nome, UNIFESP/RevICO/65‑1‑PB inalterados."],
   ["16.0","2026-07-13","MOD DE CORREÇÃO DE NOMES aplicado — fecha a CAUSA‑RAIZ do Conciam/523357. (1) O cortador «Nome (e‑mail)» agora corta pelos marcadores «RESUMO ‑ CATEGORIA» (1 por trabalho) em vez de só «Introdução:» — os trabalhos de RELATO DE EXPERIÊNCIA, que não têm Introdução própria e viravam dezenas de trabalhos grudados num bloco só (e‑mails sem nome), agora saem separados e com autor certo: 131 trabalhos, 725 linhas TODAS com nome, títulos limpos («“AÇÃO ENTRE RIOS”…» sem o rótulo de categoria). (2) Apóstrofo seguido de MAIÚSCULA no nome: «Sant’Ana», «D’Ávila», «Dall’oglio» entram INTEIROS (antes «Sant’Ana» virava «Ana» — o token de nome quebrava no apóstrofo); palavra toda em CAIXA ALTA de título continua excluída. (3) REDE FINAL no funil de exportação: a recuperação de nome roda no _exp() — que cobre os TRÊS botões (CSV, Excel e JSON; o MOD sugeria o flattenRows, mas por ele só passa o CSV) — então nome que está escrito no PDF não sai mais vazio por NENHUM caminho. Verificado item a item contra o checklist do MOD: Giulia Borges Lopes ✓, Pietro Gabriel Sant’Ana ✓ (no trabalho «Cobertura Vacinal de Gestantes»), khadija1112@outlook.com.br intacto ✓, eee@gmail.com vazio de propósito e marcado p/ revisão ✓ (o «nome» no PDF é só «E»), UNIFESP/RevICO/65‑1‑PB inalterados ✓."],
   ["15.9","2026-07-13","PATCH DE NOMES + ORQUESTRAÇÃO DA IA (os dois arquivos de patch aplicados e testados). (1) RECUPERAÇÃO de nome: para todo autor com e‑mail mas SEM nome (ou truncado), o app agora lê o padrão «Nome (email)» direto do texto cru do PDF e preenche pela adjacência — nunca inventa, só copia o que está escrito; com reforço contra resíduo de título em CAIXA ALTA na frente do nome. (2) APÓSTROFO CURVO (’) aceito nos nomes — «Sant’Ana» entra inteiro, não só «Ana». (3) TRAVA DE NOME: a cobertura agora mede NOME além de e‑mail; PDF com muita linha sem nome TRAVA (⛔ motivo «nome») e o painel 📊 mostra as duas % — nada de nome quebrado vazando com «100%». IMPORTANTE: a trava de nome é REAVALIADA no fim da esteira (depois da IA e das recuperações) — se o nome recuperou, o ⛔ sai sozinho (sem alarme falso estilo v15.3). (4) E‑MAIL .com.br VÁLIDO protegido: hotmail/outlook/live.com.br EXISTIRAM (domínios Microsoft no Brasil) e NÃO são mais «corrigidos» p/ .com; só gmail.com.br (que nunca existiu) continua sendo normalizado. (5) PLACEHOLDER (t@, eee@, teste@) sai do denominador da cobertura — é digitação do próprio autor, não falha da coleta. (6) IA CIENTE DE NOME: o juiz de qualidade agora mede nome também; a IA só é dispensada se título E nome estão bons, e só ASSUME o resultado se NÃO PERDER nome em relação ao determinístico — acabou a regressão «IA coletou e apagou os nomes». Testado no Conciam (100% nome, IA nem roda), 65‑1‑PB, UNIFESP e RevICO (cutters intactos)."],
