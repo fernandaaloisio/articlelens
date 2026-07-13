@@ -2086,19 +2086,30 @@ function parseModeloRodapeOrcid(text){
    colado no nome → pareamento nome↔e‑mail DIRETO (0 troca), 1 trabalho por artigo. O cortador genérico não lê
    "(email)" e jogava tudo solto. Guarda: ≥30 "Nome (email)" no PDF. Devolve [] fora desse formato. */
 function parseModeloNomeEmailParen(text){
-  // nome em Title‑Case (NÃO pega palavra do título em CAIXA ALTA) + "(email)" colado
-  const reAut=/([A-ZÀ-Ý][a-zà-ÿ'’‘\-]+(?:\s+(?:d[aeo]s?|e|[A-ZÀ-Ý][a-zà-ÿ'’‘\-]+)){0,5})\s*\(\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\s*\)/g;   // aceita apóstrofo CURVO (’) — "Sant’Ana" inteiro (v15.9)
+  // TOKEN de nome: começa maiúscula + minúsculas, e aceita MAIÚSCULA depois de apóstrofo/hífen
+  // ("Sant’Ana", "D’Ávila", "Dall’oglio" inteiros) — mas palavra TODA‑CAPS de título continua excluída (v16.0).
+  const NOMET="[A-ZÀ-Ý][a-zà-ÿ]*(?:['’‘\\-][A-Za-zÀ-ÿ][a-zà-ÿ]*)*";
+  const reAut=new RegExp("("+NOMET+"(?:\\s+(?:d[aeo]s?|e|"+NOMET+")){0,5})\\s*\\(\\s*([A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,})\\s*\\)","g");
   let cnt=0; { const rg=new RegExp(reAut.source,"g"); let mm; while((mm=rg.exec(text))){ if(typeof _emailReal!=="function"||_emailReal(mm[2])){ if(++cnt>=30) break; } } }
   if(cnt<30) return [];                                                     // guarda de formato
-  const reIntro=/Introdu[çc][ãa]o\s*:/gi; const intros=[]; let m;
-  while((m=reIntro.exec(text))) intros.push(m.index);
-  if(intros.length<8) return [];
-  const CAT="(?:EPIDEMIOL[ÓO]GICO|RELATO\\s+DE\\s+CASO|RELATO|INICIANTES?|PESQUISAS?\\s+ORIGINA(?:IS|L)|ORIGINA(?:IS|L)|P[ÔO]STER|POSTER|LIGAS(?:\\s+ACAD[ÊE]MICAS?)?|REVIS[ÃA]O(?:\\s+SISTEM[ÁA]TICA|\\s+DE\\s+LITERATURA)?)";
+  // CORTE pela marca "RESUMO -" (1 por trabalho — pega TAMBÉM os "Relato de Experiência" que NÃO têm
+  // "Introdução:" própria e antes viravam blocos gigantes grudados = e‑mails sem nome). Fallback: Introdução:.
+  const marks=[...text.matchAll(/RESUMO\s*[-–]/gi)].map(x=>x.index);
+  let anchors, porMarcador=false;
+  if(marks.length>=10){ anchors=marks; porMarcador=true; }
+  else { const intros=[...text.matchAll(/Introdu[çc][ãa]o\s*:/gi)].map(x=>x.index);
+         if(intros.length<8) return []; anchors=intros; }
+  const CAT="(?:EPIDEMIOL[ÓO]GICO|RELATO\\s+DE\\s+EXPERI[ÊE]NCIA(?:\\s+EM\\s+SA[ÚU]DE\\s+COLETIVA)?|RELATO\\s+DE\\s+CASO|RELATO|LIGAS\\s+ACAD[ÊE]MICAS(?:\\s+NA\\s+COMUNIDADE)?|LIGAS|INICIANTES?(?:\\s+[IVX]{1,4})?|PESQUISAS?\\s+ORIGINA(?:IS|L)|ORIGINA(?:IS|L)|P[ÔO]STER|POSTER|REVIS[ÃA]O(?:\\s+SISTEM[ÁA]TICA|\\s+DE\\s+LITERATURA)?)";
   const reCat=new RegExp("^[\\s\\S]*?RESUMO\\s*[-–]\\s*"+CAT+"\\s+","i");
+  const reBody=/\b(INTRODU[ÇC][ÃA]O|OBJETIVOS?|M[ÉE]TODOS?|METODOLOGIA|RESULTADOS?|DISCUSS[ÃA]O|DESCRI[ÇC][ÃA]O|CONTEXTUALIZA[ÇC][ÃA]O)\s*:/i;
   const works=[];
-  for(let i=0;i<intros.length;i++){
-    const ini=intros[i], prev=i>0?intros[i-1]:0;
-    const head=text.slice(prev, ini).replace(/=====\s*P\d+\s*=====/g," ");
+  for(let i=0;i<anchors.length;i++){
+    const ini=anchors[i];
+    const fim=(i+1<anchors.length)?anchors[i+1]:Math.min(text.length, ini+20000);
+    // por marcador: o bloco É o trabalho (marca→próxima marca); por Introdução: cabeçalho = trecho ANTERIOR
+    let bloco=(porMarcador ? text.slice(ini,fim) : text.slice(i>0?anchors[i-1]:0, ini)).replace(/=====\s*P\d+\s*=====/g," ");
+    const mb=bloco.slice(porMarcador?40:0).search(reBody);                  // cabeçalho = até o rótulo de corpo
+    const head= mb>=0 ? bloco.slice(0,(porMarcador?40:0)+mb) : bloco.slice(0,4000);
     const authors=[]; let a; reAut.lastIndex=0; let firstPos=-1; const vis=new Set();
     while((a=reAut.exec(head))){ const email=a[2].toLowerCase().replace(/[.,;)]+$/,"");
       if(typeof _emailReal==="function" && !_emailReal(email)) continue;
@@ -2110,7 +2121,7 @@ function parseModeloNomeEmailParen(text){
     let t2=cab.replace(reCat,"");
     if(t2===cab) t2=cab.replace(/^[\s\S]*?RESUMO\s*[-–]\s*/i,"");           // categoria desconhecida: tira só "RESUMO -"
     let titulo=t2.replace(/\s+/g," ").trim(); if(titulo.length>240) titulo="";
-    works.push({title:titulo, authors, _raw:head.slice(-1400)+text.slice(ini,Math.min(text.length,ini+300))});
+    works.push({title:titulo, authors, _raw:head.slice(-1600)});
   }
   return works;
 }
@@ -4991,6 +5002,10 @@ document.getElementById("clearResults").onclick = ()=>{
 
 function _exp(fn){
   if(!allResults.length){ toast("Nada para exportar.","warn"); return; }
+  // REDE FINAL (v16.0 — WIRE 1 do MOD): preenche nome colado "Nome (email)" lendo o texto cru, ganhe quem
+  // ganhar (determinístico, IA ou edição manual). Aqui é o funil dos 3 exports (CSV/Excel/JSON) — o MOD
+  // sugeria o flattenRows, mas só o CSV passa por lá; o _exp cobre 100% dos caminhos. Idempotente.
+  try{ recuperarNomesColados(allResults, _runTextos); }catch(e){ console.warn("recuperarNomes(exp):", e); }
   // TRAVA RÍGIDA: se algum PDF ficou travado (⛔ cobertura abaixo da meta), NÃO libera o arquivo p/ usuário comum.
   // A coleta desse PDF não passou na conferência automática e precisa de revisão do administrador antes de sair.
   if(!_ehAdmin() && _pdfsBloqueados && _pdfsBloqueados.length){
@@ -5251,9 +5266,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "15.9";
+const VERSION = "16.0";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.0","2026-07-13","MOD DE CORREÇÃO DE NOMES aplicado — fecha a CAUSA‑RAIZ do Conciam/523357. (1) O cortador «Nome (e‑mail)» agora corta pelos marcadores «RESUMO ‑ CATEGORIA» (1 por trabalho) em vez de só «Introdução:» — os trabalhos de RELATO DE EXPERIÊNCIA, que não têm Introdução própria e viravam dezenas de trabalhos grudados num bloco só (e‑mails sem nome), agora saem separados e com autor certo: 131 trabalhos, 725 linhas TODAS com nome, títulos limpos («“AÇÃO ENTRE RIOS”…» sem o rótulo de categoria). (2) Apóstrofo seguido de MAIÚSCULA no nome: «Sant’Ana», «D’Ávila», «Dall’oglio» entram INTEIROS (antes «Sant’Ana» virava «Ana» — o token de nome quebrava no apóstrofo); palavra toda em CAIXA ALTA de título continua excluída. (3) REDE FINAL no funil de exportação: a recuperação de nome roda no _exp() — que cobre os TRÊS botões (CSV, Excel e JSON; o MOD sugeria o flattenRows, mas por ele só passa o CSV) — então nome que está escrito no PDF não sai mais vazio por NENHUM caminho. Verificado item a item contra o checklist do MOD: Giulia Borges Lopes ✓, Pietro Gabriel Sant’Ana ✓ (no trabalho «Cobertura Vacinal de Gestantes»), khadija1112@outlook.com.br intacto ✓, eee@gmail.com vazio de propósito e marcado p/ revisão ✓ (o «nome» no PDF é só «E»), UNIFESP/RevICO/65‑1‑PB inalterados ✓."],
   ["15.9","2026-07-13","PATCH DE NOMES + ORQUESTRAÇÃO DA IA (os dois arquivos de patch aplicados e testados). (1) RECUPERAÇÃO de nome: para todo autor com e‑mail mas SEM nome (ou truncado), o app agora lê o padrão «Nome (email)» direto do texto cru do PDF e preenche pela adjacência — nunca inventa, só copia o que está escrito; com reforço contra resíduo de título em CAIXA ALTA na frente do nome. (2) APÓSTROFO CURVO (’) aceito nos nomes — «Sant’Ana» entra inteiro, não só «Ana». (3) TRAVA DE NOME: a cobertura agora mede NOME além de e‑mail; PDF com muita linha sem nome TRAVA (⛔ motivo «nome») e o painel 📊 mostra as duas % — nada de nome quebrado vazando com «100%». IMPORTANTE: a trava de nome é REAVALIADA no fim da esteira (depois da IA e das recuperações) — se o nome recuperou, o ⛔ sai sozinho (sem alarme falso estilo v15.3). (4) E‑MAIL .com.br VÁLIDO protegido: hotmail/outlook/live.com.br EXISTIRAM (domínios Microsoft no Brasil) e NÃO são mais «corrigidos» p/ .com; só gmail.com.br (que nunca existiu) continua sendo normalizado. (5) PLACEHOLDER (t@, eee@, teste@) sai do denominador da cobertura — é digitação do próprio autor, não falha da coleta. (6) IA CIENTE DE NOME: o juiz de qualidade agora mede nome também; a IA só é dispensada se título E nome estão bons, e só ASSUME o resultado se NÃO PERDER nome em relação ao determinístico — acabou a regressão «IA coletou e apagou os nomes». Testado no Conciam (100% nome, IA nem roda), 65‑1‑PB, UNIFESP e RevICO (cutters intactos)."],
   ["15.8","2026-07-13","CORTADOR DEDICADO pro anais Even3/Conciam (formato «Nome (e‑mail)», ex.: 523357). Nesse anais cada autor vem como «Nome Sobrenome (email@…)» logo depois do título em CAIXA ALTA (com o rótulo «RESUMO - CATEGORIA» na frente). O app não sabia ler o e‑mail ENTRE PARÊNTESES e jogava tudo solto (cada @ virava um «trabalho» sem nome nem título). Agora um cortador próprio lê «Nome (email)» com pareamento DIRETO (o e‑mail está colado no nome → 0 troca), monta 1 trabalho por artigo e tira o título limpo (remove o «RESUMO - CATEGORIA»). Nesse PDF: 129 artigos, 100% com título certo, 488 e‑mails com nome casado (~95%; os poucos que «não casam» são e‑mails pessoais que não têm o nome, tipo lab@). Guarda apertada (≥30 «Nome (email)»), então NÃO mexe em outro anais (UNIFESP, RevICO, 65‑1‑PB = 0). Rode com a IA ligada pra completar os poucos e‑mails que ficarem sem nome."],
   ["15.7","2026-06-25","CORTADOR DEDICADO pro anais de «rodapé ORCID numerado» (ex.: 65‑1‑PB / resumos expandidos). PROBLEMA: o app não reconhecia esse formato (autor «NOME (n)» + rodapé «(n) ORCID; Afiliação (SIGLA) … E‑mail: x» + corpo «Resumo:») e caía no genérico, que (1) DUPLICAVA o trabalho — título em português E em inglês viravam dois — e (2) às vezes botava a AFILIAÇÃO no lugar do nome. Agora um cortador próprio liga autor↔e‑mail PELO NÚMERO (sem troca), faz 1 trabalho por artigo (não duplica PT/EN) e tira o título limpo. Nesse PDF: 64 artigos, ~123 e‑mails pareados com nome certo (≥94% casando), 0 duplicata PT/EN. Tem guarda apertada (≥12 rodapés «(n) … E‑mail:»), então NÃO mexe em outro anais (UNIFESP, RevICO = 0). OBS honesta: títulos muito longos (PT+inglês grudados) e e‑mails que o rodapé não casou vão pra REVISÃO / pra IA completar — nada some (a rede de segurança garante todo @). Também: a afiliação que virava nome («Universidade…», «Instituto Federal…») já era barrada e mandada pra revisão."],
