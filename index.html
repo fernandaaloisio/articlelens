@@ -1992,6 +1992,39 @@ function parseModeloRodapeOrcid(text){
   }
   return works;
 }
+/* MODELO "NOME (e‑mail)" — anais Even3 (ex.: Conciam / 523357): cada autor vem como "Nome Sobrenome (email)"
+   logo após o TÍTULO em CAIXA ALTA, precedido do rótulo "RESUMO - CATEGORIA". O e‑mail fica ENTRE PARÊNTESES
+   colado no nome → pareamento nome↔e‑mail DIRETO (0 troca), 1 trabalho por artigo. O cortador genérico não lê
+   "(email)" e jogava tudo solto. Guarda: ≥30 "Nome (email)" no PDF. Devolve [] fora desse formato. */
+function parseModeloNomeEmailParen(text){
+  // nome em Title‑Case (NÃO pega palavra do título em CAIXA ALTA) + "(email)" colado
+  const reAut=/([A-ZÀ-Ý][a-zà-ÿ'\-]+(?:\s+(?:d[aeo]s?|e|[A-ZÀ-Ý][a-zà-ÿ'\-]+)){0,5})\s*\(\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})\s*\)/g;
+  let cnt=0; { const rg=new RegExp(reAut.source,"g"); let mm; while((mm=rg.exec(text))){ if(typeof _emailReal!=="function"||_emailReal(mm[2])){ if(++cnt>=30) break; } } }
+  if(cnt<30) return [];                                                     // guarda de formato
+  const reIntro=/Introdu[çc][ãa]o\s*:/gi; const intros=[]; let m;
+  while((m=reIntro.exec(text))) intros.push(m.index);
+  if(intros.length<8) return [];
+  const CAT="(?:EPIDEMIOL[ÓO]GICO|RELATO\\s+DE\\s+CASO|RELATO|INICIANTES?|PESQUISAS?\\s+ORIGINA(?:IS|L)|ORIGINA(?:IS|L)|P[ÔO]STER|POSTER|LIGAS(?:\\s+ACAD[ÊE]MICAS?)?|REVIS[ÃA]O(?:\\s+SISTEM[ÁA]TICA|\\s+DE\\s+LITERATURA)?)";
+  const reCat=new RegExp("^[\\s\\S]*?RESUMO\\s*[-–]\\s*"+CAT+"\\s+","i");
+  const works=[];
+  for(let i=0;i<intros.length;i++){
+    const ini=intros[i], prev=i>0?intros[i-1]:0;
+    const head=text.slice(prev, ini).replace(/=====\s*P\d+\s*=====/g," ");
+    const authors=[]; let a; reAut.lastIndex=0; let firstPos=-1; const vis=new Set();
+    while((a=reAut.exec(head))){ const email=a[2].toLowerCase().replace(/[.,;)]+$/,"");
+      if(typeof _emailReal==="function" && !_emailReal(email)) continue;
+      if(vis.has(email)) continue; vis.add(email);
+      if(firstPos<0) firstPos=a.index;
+      authors.push({name:a[1].replace(/\s+/g," ").trim(), email}); }
+    if(!authors.length) continue;
+    let cab=head.slice(0, firstPos);
+    let t2=cab.replace(reCat,"");
+    if(t2===cab) t2=cab.replace(/^[\s\S]*?RESUMO\s*[-–]\s*/i,"");           // categoria desconhecida: tira só "RESUMO -"
+    let titulo=t2.replace(/\s+/g," ").trim(); if(titulo.length>240) titulo="";
+    works.push({title:titulo, authors, _raw:head.slice(-1400)+text.slice(ini,Math.min(text.length,ini+300))});
+  }
+  return works;
+}
 /* ÚLTIMO RECURSO p/ anais SEM rótulos (ex.: "Jornada Odontológica"): formato "número → TÍTULO (Title Case) →
    AUTORES + afiliação → e‑mail PELADO (1 por trabalho) → Objetivo/Palavras‑chave". Sem RESUMO/Introdução/sumário
    e título NÃO é CAIXA ALTA, então os outros cortadores não pegam. Aqui o e‑mail é a ÂNCORA: o trabalho é o bloco
@@ -3392,7 +3425,8 @@ async function collectFromPDF(file, mode){
     const viaEmail = cortarPorEmailSolto(text);     // ÚLTIMO RECURSO: anais sem rótulos, e‑mail pelado (ex.: Jornada Odontológica) ([] se não render)
     const viaUni = parseModeloUnifesp(text);        // MODELO UNIFESP "alta qualidade" (1 artigo/página, "Página N Página N") ([] se não for esse formato)
     const viaOrc = parseModeloRodapeOrcid(text);    // MODELO "rodapé ORCID numerado" (autor (n) ↔ rodapé "(n) … E‑mail:"), ex.: 65‑1‑PB ([] se não for esse formato)
-    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eAut = comEmail(viaAut), eEsc = comEmail(viaEsc), ePC = comEmail(viaPC), eEmail = comEmail(viaEmail), eUni = comEmail(viaUni), eOrc = comEmail(viaOrc);
+    const viaNep = parseModeloNomeEmailParen(text); // MODELO "Nome (email)" (Even3/Conciam, ex.: 523357) ([] se não for esse formato)
+    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eAut = comEmail(viaAut), eEsc = comEmail(viaEsc), ePC = comEmail(viaPC), eEmail = comEmail(viaEmail), eUni = comEmail(viaUni), eOrc = comEmail(viaOrc), eNep = comEmail(viaNep);
     // Prefere o SUMÁRIO (títulos oficiais, limpos). Só troca pro método antigo quando ele pega
     // MUITO mais e-mail (≥25% e +5) — aí o ganho compensa títulos um pouco menos limpos.
     let works;
@@ -3407,6 +3441,12 @@ async function collectFromPDF(file, mode){
       // NÚMERO (sem troca) e 1 trabalho por artigo (não duplica PT/EN). E‑mail que faltar entra pela rede de segurança.
       works = viaOrc;
       modelosUsados["Anais · rodapé ORCID numerado"] = (modelosUsados["Anais · rodapé ORCID numerado"]||0) + 1;
+      lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
+    } else if(eNep>0){
+      // MODELO "Nome (email)" (Even3/Conciam): a guarda (≥30 "Nome (email)") garante o formato. E‑mail colado no
+      // nome → pareamento DIRETO (0 troca), título limpo (tira "RESUMO - CATEGORIA"), 1 trabalho por artigo.
+      works = viaNep;
+      modelosUsados["Anais · Nome (e‑mail) [Even3]"] = (modelosUsados["Anais · Nome (e‑mail) [Even3]"]||0) + 1;
       lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
     } else if(eAut>0 && eAut>=eS && eAut>=eP && eAut>=eM && eAut>=ePal && eAut>=eI && eAut>=eRod){
       // anais "AUTORIA: SOBRENOME, INICIAIS" com e‑mail EMAIL|EMAIL (ECAM/Medicina): título limpo + nome certo, grátis
@@ -5061,9 +5101,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "15.7";
+const VERSION = "15.8";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["15.8","2026-07-13","CORTADOR DEDICADO pro anais Even3/Conciam (formato «Nome (e‑mail)», ex.: 523357). Nesse anais cada autor vem como «Nome Sobrenome (email@…)» logo depois do título em CAIXA ALTA (com o rótulo «RESUMO - CATEGORIA» na frente). O app não sabia ler o e‑mail ENTRE PARÊNTESES e jogava tudo solto (cada @ virava um «trabalho» sem nome nem título). Agora um cortador próprio lê «Nome (email)» com pareamento DIRETO (o e‑mail está colado no nome → 0 troca), monta 1 trabalho por artigo e tira o título limpo (remove o «RESUMO - CATEGORIA»). Nesse PDF: 129 artigos, 100% com título certo, 488 e‑mails com nome casado (~95%; os poucos que «não casam» são e‑mails pessoais que não têm o nome, tipo lab@). Guarda apertada (≥30 «Nome (email)»), então NÃO mexe em outro anais (UNIFESP, RevICO, 65‑1‑PB = 0). Rode com a IA ligada pra completar os poucos e‑mails que ficarem sem nome."],
   ["15.7","2026-06-25","CORTADOR DEDICADO pro anais de «rodapé ORCID numerado» (ex.: 65‑1‑PB / resumos expandidos). PROBLEMA: o app não reconhecia esse formato (autor «NOME (n)» + rodapé «(n) ORCID; Afiliação (SIGLA) … E‑mail: x» + corpo «Resumo:») e caía no genérico, que (1) DUPLICAVA o trabalho — título em português E em inglês viravam dois — e (2) às vezes botava a AFILIAÇÃO no lugar do nome. Agora um cortador próprio liga autor↔e‑mail PELO NÚMERO (sem troca), faz 1 trabalho por artigo (não duplica PT/EN) e tira o título limpo. Nesse PDF: 64 artigos, ~123 e‑mails pareados com nome certo (≥94% casando), 0 duplicata PT/EN. Tem guarda apertada (≥12 rodapés «(n) … E‑mail:»), então NÃO mexe em outro anais (UNIFESP, RevICO = 0). OBS honesta: títulos muito longos (PT+inglês grudados) e e‑mails que o rodapé não casou vão pra REVISÃO / pra IA completar — nada some (a rede de segurança garante todo @). Também: a afiliação que virava nome («Universidade…», «Instituto Federal…») já era barrada e mandada pra revisão."],
   ["15.6","2026-06-24","CORTADOR DEDICADO pro anais UNIFESP «alta qualidade» (584 MB, 1 artigo por página). PROBLEMA encontrado: o cortador genérico MISTURAVA os títulos — pegava e‑mails de um trabalho e colava no título do trabalho vizinho (dava só 57 títulos para 425 e‑mails; ex.: e‑mails da «(RE)CONSTRUÇÃO DO PROGRAMA DE RESIDÊNCIA…» saíam com o título «PROTEÓLISE DO CININOGÊNIO…» do lado). Agora cada página (= 1 artigo, marcada por «Página N Página N» na extração de 2 colunas) vira UM trabalho, com o TÍTULO LIMPO (o texto entre o «Página N» e o 1º autor «NOME ‑ ORIENTADOR(A)/DISCENTE…») e o nome ligado ao e‑mail SÓ quando o local‑part comprova (zero troca). Resultado nesse PDF: de 57 títulos misturados → 161 trabalhos com título certo, 100% dos 377 e‑mails, 0 nome‑e‑mail trocado. Tem guarda de formato apertada (≥50 marcadores «Página N Página N»), então NÃO mexe em nenhum outro anais (III Congresso, ECAM, RevICO = 0 alterados). IMPORTANTE: é só RE‑RODAR o PDF de 584 MB nesta versão — não precisa dividir em vários PDFs."],
   ["15.5","2026-06-23","CONSERTA «autor trocado com o e‑mail» quando dá pra verificar. Em anais onde os autores vêm por «;» e o e‑mail aparece colado no FIM do bloco (depois da afiliação), o cortador às vezes grudava o e‑mail no ÚLTIMO autor (ou no que tem «*»), mesmo quando o e‑mail é claramente de outro. Ex.: «Anne Karolyne…; …; Cleverson Trento* ¹UFS anne.karolyne2000@gmail.com» — o e‑mail é da AUTORA Anne, não do Cleverson. Agora, dentro do mesmo trabalho, se o e‑mail NÃO bate com o autor onde está mas BATE (forte, pelo local‑part) com outro autor do trabalho, o sistema passa o e‑mail pro autor certo automaticamente — antes de excluir os sem‑e‑mail e antes de aprender o pareamento. Só mexe quando há PROVA (o nome está dentro do e‑mail) e nunca rouba o e‑mail de quem já tem o seu. Quando ninguém bate, deixa marcado pra revisão (⚠), sem chutar. Roda no caminho determinístico e no da IA."],
