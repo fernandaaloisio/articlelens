@@ -713,6 +713,11 @@ function _juntarEmailQuebrado(s){
 /* REPARA e‑mail com ESPAÇO no meio (o PDF mete espaço junto do @ ou antes do TLD): "x@ gmail.com",
    "bb.com. br", "gmail. com" → junta. Conservador: o 2º nível só liga TLDs conhecidos, p/ não colar frase. */
 function _repararEmailEspacos(s){
+  // LOCAL quebrado por espaço logo após o rótulo "E-mail:" (v16.4): «E-mail: amanda_simoes souza@hotmail»
+  // → junta. SÓ depois do rótulo explícito (colar palavras soltas fora dele seria perigoso); até 2 pedaços,
+  // todos minúsculos (não engole nome próprio da frase).
+  s = s.replace(/(E\s*-?\s*mail\s*:?\s*)([a-z0-9._%+\-]{2,}(?:\s+[a-z0-9._%+\-]{2,}){1,2})\s*@/gi,
+                (m,rot,loc)=> rot + loc.replace(/\s+/g,"") + "@");
   s = s.replace(/([a-z0-9._%+\-]+)\s*@\s*([a-z0-9])/gi, "$1@$2");                                       // espaço junto do @
   s = s.replace(/(@[a-z0-9.\-]*[a-z0-9])\s*\.\s*(com|br|org|net|edu|gov|info|inf|co|gob)\b/gi, "$1.$2"); // ". br" / ". com"
   s = s.replace(/(@[a-z0-9.\-]+\.[a-z]{2,4})\s*\.\s*(br|com)\b/gi, "$1.$2");                             // 2º nível "x.com . br"
@@ -2171,6 +2176,67 @@ function parseModeloNomeEmailParen(text){
   }
   return works;
 }
+/* MODELO "SUMÁRIO + BIOGRAFIAS" (ex.: Profletras): os E‑MAILS ficam TODOS numa seção final de bios
+   («NOME EM CAPS … E‑mail: x» — "Sobre os autores/Organizadores") e os artigos só têm NOMES. O casamento é:
+   SUMÁRIO numerado («N. TÍTULO <pág> Autor1; Autor2») dá título↔nomes, e a seção de bios dá nome↔e‑mail —
+   cruzando os dois sai a linha completa. Bio sem artigo vira registro com nome (título p/ revisão). Guardas:
+   ≥5 e‑mails com ≥70% no último quarto do doc + SUMÁRIO real + ≥5 bios. Devolve [] fora desse formato. */
+function parseModeloSumarioBio(text){
+  const EMAILG=/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
+  const nrm=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+  const semEspaco=s=>nrm(s).replace(/[^a-z]/g,"");
+  const emails=[...text.matchAll(EMAILG)].map(m=>({e:m[0].toLowerCase().replace(/[.,;)]+$/,""),i:m.index}))
+    .filter(x=>!(typeof _emailReal==="function") || _emailReal(x.e));
+  if(emails.length<5) return [];
+  const noFim=emails.filter(x=>x.i>text.length*0.75).length;
+  if(noFim < emails.length*0.7) return [];                        // e‑mails espalhados → não é este formato
+  // 1) BIOS: nome = último run TODO‑CAPS antes de cada e‑mail
+  const bio={};
+  for(const {e,i} of emails){
+    const seg=text.slice(Math.max(0,i-700), i);
+    const runs=[...seg.matchAll(/(?:\b[A-ZÀ-Ý]{2,}[A-ZÀ-Ý']*\s+){1,7}\b[A-ZÀ-Ý]{2,}[A-ZÀ-Ý']*/g)];
+    if(!runs.length) continue;
+    let nome=runs[runs.length-1][0].replace(/\s+/g," ").trim()
+      .replace(/^(?:ORGANIZADOR(?:AS|ES)?|E|SOBRE|OS|AS|AUTOR(?:ES|AS)?)\s+/g,"");
+    if(nome.split(/\s+/).length<2) continue;
+    const k=semEspaco(nome);
+    if(k.length>=8 && !bio[k]) bio[k]={email:e, nome};
+  }
+  if(Object.keys(bio).length<5) return [];
+  // 2) SUMÁRIO: «N. TÍTULO <pág> Autor1; Autor2» (título CAPS; autores Title‑Case)
+  const mSum=text.slice(0,Math.floor(text.length*0.35)).match(/S\s*U\s*M\s*[ÁA]\s*R\s*I\s*O/i);
+  if(!mSum) return [];
+  const sum=text.slice(mSum.index, Math.floor(text.length*0.3)).replace(/=====\s*P\d+\s*=====/g," ");
+  const entradas=[...sum.matchAll(/\b\d{1,2}\s*\.\s+(?=[A-ZÀ-Ý])/g)].map(m=>m.index);
+  if(entradas.length<5) return [];
+  const CONN_NOME=/^(de|da|do|dos|das|e)$/;                       // junta fragmento de NOME quebrado pela extração
+  const juntaNome=s=>s
+    .replace(/\b([A-Za-zÀ-ÿ]{2,})\s+([a-zà-ÿ]{1,3})\b(?=\s|$)/g,(m,a,b)=> CONN_NOME.test(b)?m:a+b)
+    .replace(/\b([A-ZÀ-Ý][a-zà-ÿ]?)\s+([a-zà-ÿ]{2,})\b/g,(m,a,b)=> CONN_NOME.test(a)||CONN_NOME.test(b)?m:a+b);
+  const works=[];
+  for(let i=0;i<entradas.length;i++){
+    const ini=entradas[i], fim=(i+1<entradas.length)?entradas[i+1]:Math.min(sum.length, ini+600);
+    const bloco=sum.slice(ini,fim).replace(/\s+/g," ").trim();
+    const m=bloco.match(/^\d{1,2}\s*\.\s+([\s\S]+?)\s+\d[\d ]{0,3}\s+([A-ZÀ-Ý][a-zà-ÿ'][\s\S]*)$/);
+    if(!m) continue;
+    const titulo=m[1].replace(/\s+/g," ").trim();                 // título fica como está no PDF (não colar CAPS)
+    const L=(titulo.match(/\p{L}/gu)||[]).length, U=(titulo.match(/\p{Lu}/gu)||[]).length;
+    if(L<10 || U/L<0.55) continue;                                // sumário é CAPS — mata lixo de ficha/expediente
+    const autores=m[2].split(/;/).map(s=>juntaNome(s.replace(/\s+/g," ").trim()))
+      .filter(s=>s.length>3 && s.length<60 && /^[A-ZÀ-Ý]/.test(s) && !/[()@:]|Ficha|Capa|Design/i.test(s));
+    if(!autores.length || autores.length>6) continue;
+    const authors=autores.map(nm=>{ const k=semEspaco(nm); let em="";
+      for(const bk in bio){ if(bk===k || bk.includes(k) || k.includes(bk)){ em=bio[bk].email; break; } }
+      return {name:nm, email:em}; });
+    works.push({title:titulo, authors, _raw:bloco});
+  }
+  if(!works.length) return [];
+  // 3) bio NÃO usada vira registro com NOME (título vazio → revisão/IA) — melhor que rede sem nome
+  const usados=new Set(); works.forEach(w=>w.authors.forEach(a=>{if(a.email)usados.add(a.email);}));
+  for(const bk in bio){ if(!usados.has(bio[bk].email))
+    works.push({title:"", authors:[{name:bio[bk].nome, email:bio[bk].email}], _sobraBio:true, _raw:"(seção de autores/organizadores)"}); }
+  return works;
+}
 /* ÚLTIMO RECURSO p/ anais SEM rótulos (ex.: "Jornada Odontológica"): formato "número → TÍTULO (Title Case) →
    AUTORES + afiliação → e‑mail PELADO (1 por trabalho) → Objetivo/Palavras‑chave". Sem RESUMO/Introdução/sumário
    e título NÃO é CAIXA ALTA, então os outros cortadores não pegam. Aqui o e‑mail é a ÂNCORA: o trabalho é o bloco
@@ -3597,7 +3663,8 @@ async function collectFromPDF(file, mode){
     const viaUni = parseModeloUnifesp(text);        // MODELO UNIFESP "alta qualidade" (1 artigo/página, "Página N Página N") ([] se não for esse formato)
     const viaOrc = parseModeloRodapeOrcid(text);    // MODELO "rodapé ORCID numerado" (autor (n) ↔ rodapé "(n) … E‑mail:"), ex.: 65‑1‑PB ([] se não for esse formato)
     const viaNep = parseModeloNomeEmailParen(text); // MODELO "Nome (email)" (Even3/Conciam, ex.: 523357) ([] se não for esse formato)
-    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eAut = comEmail(viaAut), eEsc = comEmail(viaEsc), ePC = comEmail(viaPC), eEmail = comEmail(viaEmail), eUni = comEmail(viaUni), eOrc = comEmail(viaOrc), eNep = comEmail(viaNep);
+    const viaSB = parseModeloSumarioBio(text);      // MODELO "sumário + biografias" (e‑mails só na seção de autores, ex.: Profletras) ([] se não for esse formato)
+    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eAut = comEmail(viaAut), eEsc = comEmail(viaEsc), ePC = comEmail(viaPC), eEmail = comEmail(viaEmail), eUni = comEmail(viaUni), eOrc = comEmail(viaOrc), eNep = comEmail(viaNep), eSB = comEmail(viaSB);
     // Prefere o SUMÁRIO (títulos oficiais, limpos). Só troca pro método antigo quando ele pega
     // MUITO mais e-mail (≥25% e +5) — aí o ganho compensa títulos um pouco menos limpos.
     let works;
@@ -3619,6 +3686,12 @@ async function collectFromPDF(file, mode){
       works = viaNep;
       modelosUsados["Anais · Nome (e‑mail) [Even3]"] = (modelosUsados["Anais · Nome (e‑mail) [Even3]"]||0) + 1;
       lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
+    } else if(eSB>0){
+      // MODELO SUMÁRIO+BIOGRAFIAS (Profletras): e‑mails só na seção final de autores; o casamento vem do
+      // SUMÁRIO (título↔nomes) × BIOS (nome↔e‑mail). Guarda: e‑mails concentrados no fim + sumário + ≥5 bios.
+      works = viaSB;
+      modelosUsados["Anais · sumário+biografias"] = (modelosUsados["Anais · sumário+biografias"]||0) + 1;
+      lastIndice = { total: works.filter(w=>!w._sobraBio).length, fixed: works.filter(w=>w.title).length, viaSumario:false };
     } else if(eAut>0 && eAut>=eS && eAut>=eP && eAut>=eM && eAut>=ePal && eAut>=eI && eAut>=eRod){
       // anais "AUTORIA: SOBRENOME, INICIAIS" com e‑mail EMAIL|EMAIL (ECAM/Medicina): título limpo + nome certo, grátis
       works = viaAut;
@@ -5333,9 +5406,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.3";
+const VERSION = "16.4";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.4","2026-07-13","NOVO MODELO «sumário + biografias» (ex.: Profletras). Nesse formato os E‑MAILS ficam TODOS numa seção final («Sobre os autores/Organizadores»: NOME EM CAPS + currículo + E‑mail: x) e os artigos só têm os NOMES. O app agora CASA os dados: lê o SUMÁRIO numerado («N. TÍTULO pág Autor1; Autor2») pra ligar título↔nomes, lê as BIOS pra ligar nome↔e‑mail, e cruza os dois — sai a linha completa Título·Nome·E‑mail. Bio sem artigo no sumário vira registro com nome (título vazio → revisão). Também: (1) conserto na EXTRAÇÃO — e‑mail com o começo quebrado por espaço depois do rótulo «E‑mail:» («amanda_simoes souza@…») agora é juntado (antes virava e‑mail ERRADO «souza@…»); (2) nomes com fragmento de extração são juntados («Amand a»→«Amanda», «Fl ávia»→«Flávia») preservando «de/da/dos»; título NÃO é colado (juntar CAIXA ALTA sem dicionário inventa palavra). No Profletras: 14 artigos + 4 organizadores, 18/18 e‑mails, 100% com nome. Guardas apertadas (e‑mails ≥70% no fim + sumário + ≥5 bios); teste de regressão nos 16 PDFs da bateria: tudo igual ou melhor, nenhum modelo mudou."],
   ["16.3","2026-07-13","Consistência da COBERTURA com o detector de placeholder (achado no teste de regressão de 16 PDFs). O descarte de placeholder julga com o NOME do autor (toto@ da Elizabeth = lixo), mas o denominador da cobertura julgava SEM o nome — então o lixo descartado ainda contava como «e‑mail perdido» e a cobertura caía (100%→99% no Conciam e no ANAIS 2019; num PDF pequeno com vários lixos poderia até TRAVAR ⛔ de mentira). Agora a trava por PDF passa o nome que a coleta já conhece pro julgamento do alvo, e a meta geral do lote também filtra placeholder óbvio (t@, eee@, 535@). Teste de regressão v15.8→v16.3 nos 16 PDFs reais da pasta: cobertura 100% em todos, nenhum modelo mudou, nome MELHOROU em 4 (UNIFESP 82→87%, 65‑1‑PB 75→76%, XXXVII 6→7%, Conciam mantido 99%), nenhuma linha perdida além dos placeholders descartados (que estão listados no relatório ④)."],
   ["16.2","2026-07-13","DETECTOR DE PLACEHOLDER mais esperto (MOD v3, Parte 4 revisada). Além de t@/eee@/teste@, agora pega: caractere REPETIDO (aaa@, xxx@), só DÍGITOS CURTOS (535@, 123@) e local CURTO (≤4 letras) que NÃO lembra o nome do autor (toto@ da Elizabeth, wss@ do Lucas, rew@ do Carlos → descartes). O que CASA com o autor FICA: apelido (bru@ da Bruna), INICIAIS (jvcs@ do João Victor Costa Silva) e até local de 2 letras quando são as iniciais com domínio próprio (jv@piacentini.com.br do João Vitor Piacentini — caso real que a regra crua descartaria). PROTEÇÃO importante que o MOD não previa: e‑mail de MATRÍCULA (230022340@aluno…, 0520047@professor… — reais, dos PDFs EVEN) NÃO é placeholder (só dígitos até 4 conta). O relatório de descartes (seção ④) agora mostra também o NOME do autor da linha descartada. Testado: 16/16 casos sintéticos + Conciam real (14 lixos verdadeiros marcados, incluindo os da auditoria do MOD; 0 e‑mail legítimo perdido), UNIFESP 0 falso positivo."],
   ["16.1","2026-07-13","MOD v3 («a cura») aplicado — a recuperação de nome agora também CORRIGE, e nenhum caminho inventa nome. (1) SOBRESCREVE nome errado usando o PDF como verdade: letra‑lixo do título grudada («I Milena De Jesus Lage» → «Milena De Jesus Lage»), nome derivado do e‑mail («Lantmann Med» → «Estela Maris Lantmann Rocha») e truncado («Luiza Rudy» → «Luiza Chiodini Rudy»); MANTÉM o nome do coletor quando ele é mais completo e está escrito no PDF (nome quebrado em 2 linhas). (2) PLACEHOLDER (t@, eee@, xx@…) não é autor: sai do CSV/Excel/JSON e vai pra seção ④ do Relatório de descartes — separado, não removido calado. De quebra, o JSON agora respeita linha excluída (_del), que ele ignorava. (3) CURA NA FONTE do nome inventado: a conferência «o nome está no PDF?» passa a IGNORAR os e‑mails do texto (era por isso que «Lantmann Med» passava — os tokens estavam dentro de lantmann.med@, não no texto real); e o pareamento NUNCA mais escreve o e‑mail reformatado como nome — e‑mail sem par entra com nome VAZIO marcado pra revisão/recuperação. Consequência honesta: nome derivado de e‑mail só sobrevive se estiver IMPRESSO no PDF. Testado: os 4 tipos de erro do MOD corrigidos, caso «mais completo» mantido, placeholders idempotentes, Conciam 131 trabalhos/725 linhas todas com nome, UNIFESP/RevICO/65‑1‑PB inalterados."],
