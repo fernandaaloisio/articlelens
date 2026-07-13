@@ -3555,9 +3555,11 @@ function _dedupWorks(works){
 
 async function collectFromPDF(file, mode){
   const text = await extractTextFromPDF(file);
-  // META: conta os @ do PDF (alvo de cobertura) — à prova de formato, sem IA. Ignora institucional.
+  // META: conta os @ do PDF (alvo de cobertura) — à prova de formato, sem IA. Ignora institucional
+  // e placeholder óbvio (t@, eee@, 535@ — v16.3): lixo digitado no PDF não é alvo a capturar.
   try{ const ats=(text.match(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/gi)||[])
-        .map(e=>e.toLowerCase().replace(/[.,;)]+$/,"")).filter(e=>!_emailInstitucional(e));
+        .map(e=>e.toLowerCase().replace(/[.,;)]+$/,"")).filter(e=>!_emailInstitucional(e))
+        .filter(e=>!(typeof _emailPlaceholder==="function" && _emailPlaceholder(e)));
     _emailAlvo.tot+=ats.length; ats.forEach(e=>_emailAlvo.uni.add(e));
     _runTextos.push({file:file.name, text}); }catch(_){}
   let modelo = detectarModelo(text, mode);
@@ -3757,9 +3759,15 @@ async function collectFromPDF(file, mode){
   //       A contagem de obras é RUIDOSA ("Resumo"+"Abstract" = 2×/obra; sumário lista itens sem e‑mail),
   //       então NÃO dá p/ exigir 95% aqui — reprovaria anais que estão 96‑100% completos.
   try{
-    // (A) e-mails — placeholders (t@, eee@, teste@…) saem do DENOMINADOR: são digitação do próprio
-    //     autor, não falha da coleta (v15.9). Eles seguem no resultado, marcados p/ revisão.
-    const alvoPdf = new Set(extractEmails(text).filter(e=>!_emailInstitucional(e)).filter(e=>!_emailPlaceholder(e)));
+    // (A) e-mails — placeholders (t@, eee@, toto@…) saem do DENOMINADOR: são digitação do próprio
+    //     autor, não falha da coleta (v15.9). v16.3: o julgamento usa o NOME do autor quando a coleta
+    //     já o conhece (toto@ da Elizabeth só é reconhecível como lixo COM o nome) — senão o lixo
+    //     descartado no export ainda contava como "e‑mail perdido" e podia travar (⛔) de mentira.
+    const nomePorEmail = {};
+    recs.forEach(r=>(r.authors||[]).forEach(a=>{ const k=(a.email||"").toLowerCase().trim();
+      if(k && a.name && !nomePorEmail[k]) nomePorEmail[k]=a.name; }));
+    const alvoPdf = new Set(extractEmails(text).filter(e=>!_emailInstitucional(e))
+      .filter(e=>!_emailPlaceholder(e, nomePorEmail[e.toLowerCase().trim()])));
     const capPdf = new Set();
     recs.forEach(r=>(r.authors||[]).forEach(a=>{ if(a.email) capPdf.add(a.email.toLowerCase().trim()); }));
     const hit = [...capPdf].filter(e=>alvoPdf.has(e)).length;
@@ -5325,9 +5333,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.2";
+const VERSION = "16.3";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.3","2026-07-13","Consistência da COBERTURA com o detector de placeholder (achado no teste de regressão de 16 PDFs). O descarte de placeholder julga com o NOME do autor (toto@ da Elizabeth = lixo), mas o denominador da cobertura julgava SEM o nome — então o lixo descartado ainda contava como «e‑mail perdido» e a cobertura caía (100%→99% no Conciam e no ANAIS 2019; num PDF pequeno com vários lixos poderia até TRAVAR ⛔ de mentira). Agora a trava por PDF passa o nome que a coleta já conhece pro julgamento do alvo, e a meta geral do lote também filtra placeholder óbvio (t@, eee@, 535@). Teste de regressão v15.8→v16.3 nos 16 PDFs reais da pasta: cobertura 100% em todos, nenhum modelo mudou, nome MELHOROU em 4 (UNIFESP 82→87%, 65‑1‑PB 75→76%, XXXVII 6→7%, Conciam mantido 99%), nenhuma linha perdida além dos placeholders descartados (que estão listados no relatório ④)."],
   ["16.2","2026-07-13","DETECTOR DE PLACEHOLDER mais esperto (MOD v3, Parte 4 revisada). Além de t@/eee@/teste@, agora pega: caractere REPETIDO (aaa@, xxx@), só DÍGITOS CURTOS (535@, 123@) e local CURTO (≤4 letras) que NÃO lembra o nome do autor (toto@ da Elizabeth, wss@ do Lucas, rew@ do Carlos → descartes). O que CASA com o autor FICA: apelido (bru@ da Bruna), INICIAIS (jvcs@ do João Victor Costa Silva) e até local de 2 letras quando são as iniciais com domínio próprio (jv@piacentini.com.br do João Vitor Piacentini — caso real que a regra crua descartaria). PROTEÇÃO importante que o MOD não previa: e‑mail de MATRÍCULA (230022340@aluno…, 0520047@professor… — reais, dos PDFs EVEN) NÃO é placeholder (só dígitos até 4 conta). O relatório de descartes (seção ④) agora mostra também o NOME do autor da linha descartada. Testado: 16/16 casos sintéticos + Conciam real (14 lixos verdadeiros marcados, incluindo os da auditoria do MOD; 0 e‑mail legítimo perdido), UNIFESP 0 falso positivo."],
   ["16.1","2026-07-13","MOD v3 («a cura») aplicado — a recuperação de nome agora também CORRIGE, e nenhum caminho inventa nome. (1) SOBRESCREVE nome errado usando o PDF como verdade: letra‑lixo do título grudada («I Milena De Jesus Lage» → «Milena De Jesus Lage»), nome derivado do e‑mail («Lantmann Med» → «Estela Maris Lantmann Rocha») e truncado («Luiza Rudy» → «Luiza Chiodini Rudy»); MANTÉM o nome do coletor quando ele é mais completo e está escrito no PDF (nome quebrado em 2 linhas). (2) PLACEHOLDER (t@, eee@, xx@…) não é autor: sai do CSV/Excel/JSON e vai pra seção ④ do Relatório de descartes — separado, não removido calado. De quebra, o JSON agora respeita linha excluída (_del), que ele ignorava. (3) CURA NA FONTE do nome inventado: a conferência «o nome está no PDF?» passa a IGNORAR os e‑mails do texto (era por isso que «Lantmann Med» passava — os tokens estavam dentro de lantmann.med@, não no texto real); e o pareamento NUNCA mais escreve o e‑mail reformatado como nome — e‑mail sem par entra com nome VAZIO marcado pra revisão/recuperação. Consequência honesta: nome derivado de e‑mail só sobrevive se estiver IMPRESSO no PDF. Testado: os 4 tipos de erro do MOD corrigidos, caso «mais completo» mantido, placeholders idempotentes, Conciam 131 trabalhos/725 linhas todas com nome, UNIFESP/RevICO/65‑1‑PB inalterados."],
   ["16.0","2026-07-13","MOD DE CORREÇÃO DE NOMES aplicado — fecha a CAUSA‑RAIZ do Conciam/523357. (1) O cortador «Nome (e‑mail)» agora corta pelos marcadores «RESUMO ‑ CATEGORIA» (1 por trabalho) em vez de só «Introdução:» — os trabalhos de RELATO DE EXPERIÊNCIA, que não têm Introdução própria e viravam dezenas de trabalhos grudados num bloco só (e‑mails sem nome), agora saem separados e com autor certo: 131 trabalhos, 725 linhas TODAS com nome, títulos limpos («“AÇÃO ENTRE RIOS”…» sem o rótulo de categoria). (2) Apóstrofo seguido de MAIÚSCULA no nome: «Sant’Ana», «D’Ávila», «Dall’oglio» entram INTEIROS (antes «Sant’Ana» virava «Ana» — o token de nome quebrava no apóstrofo); palavra toda em CAIXA ALTA de título continua excluída. (3) REDE FINAL no funil de exportação: a recuperação de nome roda no _exp() — que cobre os TRÊS botões (CSV, Excel e JSON; o MOD sugeria o flattenRows, mas por ele só passa o CSV) — então nome que está escrito no PDF não sai mais vazio por NENHUM caminho. Verificado item a item contra o checklist do MOD: Giulia Borges Lopes ✓, Pietro Gabriel Sant’Ana ✓ (no trabalho «Cobertura Vacinal de Gestantes»), khadija1112@outlook.com.br intacto ✓, eee@gmail.com vazio de propósito e marcado p/ revisão ✓ (o «nome» no PDF é só «E»), UNIFESP/RevICO/65‑1‑PB inalterados ✓."],
