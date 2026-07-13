@@ -1064,7 +1064,7 @@ function recuperarNomesColados(records, runTextos){
   const nomePlausivel = n => {
     const t = n.split(/\s+/).filter(x => x.length > 1);
     return t.length >= 1 && t.length <= 6 && /^[A-ZÀ-Ý]/.test(n) &&
-           !/universidade|faculdade|instituto|orientador|docente|discente|hospital|secretaria/i.test(n);
+           !/universidade|faculdade|instituto|orientador|docente|discente|hospital|secretaria|coletiva|epidemiol|revis|relato|resumo|introdu|literatura|comparativa/i.test(n);
   };
   for (const { text } of (runTextos || [])) {
     let m; RE.lastIndex = 0;
@@ -1074,22 +1074,31 @@ function recuperarNomesColados(records, runTextos){
       if (nomePlausivel(nome) && !mapa.has(email)) mapa.set(email, nome);
     }
   }
+  // v3 (MOD "a cura"): além de PREENCHER vazio, SOBRESCREVE nome errado usando o PDF como verdade —
+  //  • fabricado: o nome do coletor NÃO aparece literalmente no texto (mata letra‑lixo "I Milena…" e
+  //    derivado de e‑mail "Lantmann Med");
+  //  • truncado: as palavras do coletor são SUBCONJUNTO do nome real e o PDF tem mais ("Luiza Rudy" →
+  //    "Luiza Chiodini Rudy");
+  //  • mantém o do coletor quando ele é MAIS COMPLETO que o do mapa (nome quebrado em 2 linhas no PDF).
+  const normV = s => (s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/\s+/g," ").toLowerCase().trim();
+  let alvoTxt = ""; for (const { text } of (runTextos || [])) alvoTxt += "\n" + text;
+  const alvo = " " + normV(alvoTxt) + " ";
   let preenchidos = 0, corrigidos = 0;
   for (const rec of (records || [])) for (const a of (rec.authors || [])) {
     const email = (a.email || "").toLowerCase().trim();
     if (!email || !mapa.has(email)) continue;
     const certo = mapa.get(email);
     const atual = (a.name || "").trim();
-    if (!atual) {                                        // estava vazio → preenche
-      a.name = certo; a._nomeRecuperado = true; preenchidos++;
-    } else if (certo.length > atual.length &&            // estava truncado (só o FIM do nome)
-               certo.toLowerCase().endsWith(atual.toLowerCase()) &&
-               atual.split(/\s+/).length < certo.split(/\s+/).length) {
-      a.name = certo; a._nomeRecuperado = true; corrigidos++;
-    }
+    if (normV(certo) === normV(atual)) continue;                    // já é o nome do PDF
+    if (!atual) { a.name = certo; a._nomeRecuperado = true; preenchidos++; continue; }
+    const verbatim = alvo.includes(" " + normV(atual) + " ");       // o nome do coletor está escrito no PDF?
+    const wa = new Set(normV(atual).split(" ")), wm = new Set(normV(certo).split(" "));
+    const truncado = [...wa].every(w => wm.has(w)) && wm.size > wa.size;
+    if (!verbatim || truncado) { a.name = certo; a._nomeCorrigido = true; corrigidos++; }
+    // senão: coletor tem nome mais completo (e real) → mantém
   }
   if (preenchidos || corrigidos)
-    console.log("[recuperarNomes] "+preenchidos+" vazios preenchidos, "+corrigidos+" truncados corrigidos");
+    console.log("[recuperarNomes] "+preenchidos+" vazios preenchidos, "+corrigidos+" errados/truncados corrigidos");
   return { preenchidos, corrigidos, mapa };
 }
 /* Cobertura de NOME: % de linhas com e‑mail que também têm nome (a trava antiga só media e‑mail). */
@@ -1120,6 +1129,19 @@ function _emailPlaceholder(email){
   const loc = (email.split("@")[0] || "").toLowerCase();
   if (loc.length <= 2) return true;                        // t@, e@, xx@
   return /^(teste?|asd|qwe|ewq|zxc|x+|a+|e+|abc|1+|nao|sem|email|user|aaa+|eee+)$/.test(loc);
+}
+/* Placeholder NÃO é autor (v16.1 — MOD v3): marca _del (não sai no CSV/Excel/JSON) e registra no
+   Relatório de descartes — separado, não removido calado (mesmo estilo do lastDuplicatas). */
+let lastPlaceholders = [];
+function descartarPlaceholders(records){
+  for (const rec of (records||[])) for (const a of (rec.authors||[])) {
+    if (a.email && !a._ph && _emailPlaceholder(a.email)) {
+      a._del = true; a._ph = true;                        // _ph = já registrado (idempotente)
+      lastPlaceholders.push({ titulo: rec.title||"(sem título)",
+        email: a.email, motivo: "placeholder digitado no PDF", fonte: rec.source_file||"" });
+    }
+  }
+  return lastPlaceholders.length;
 }
 
 /* =========================================================================
@@ -2226,7 +2248,9 @@ function _repararTituloMetadado(t){
 function _nomeNoTexto(name, txt){
   if(!name) return false;
   const nrm=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
-  const lt=nrm(txt);
+  // CURA 3a (v16.1): tira os E‑MAILS do texto antes de conferir — senão nome derivado do e‑mail
+  // ("Lantmann Med") "passava" porque os tokens estavam dentro de lantmann.med@…, não no texto real.
+  const lt=nrm(txt).replace(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/g," ");
   const toks=nrm(name).replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(w=>w.length>=3);
   if(!toks.length) return true;                 // só iniciais → não dá p/ checar, mantém
   return toks.every(t=>lt.includes(t));
@@ -2683,7 +2707,9 @@ const _inferName = e => e.split("@")[0].replace(/[._\-]+/g," ").replace(/\d+/g,"
 function pairAuthorsEmails(names, emails){
   const norm = s => s.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
   const PREP = new Set(["de","da","do","dos","das","e","del","della","van","von","el","al","bin"]);
-  if(!names.length) return emails.map(email => ({ name: _inferName(email), email }));
+  // CURA 3b (v16.1): e‑mail sem par entra com nome VAZIO (→ revisão/recuperação), NUNCA com o
+  // e‑mail reformatado — _inferName inventava pessoa («Lantmann Med»). Ele segue só como detector.
+  if(!names.length) return emails.map(email => ({ name:"", email, _inferido:true }));
 
   const meta = names.map(n => {
     const words = norm(n).split(/\s+/).filter(Boolean);
@@ -2712,7 +2738,7 @@ function pairAuthorsEmails(names, emails){
     if(matched[c.i]==="" && !usedE[c.j]){ matched[c.i]=emails[c.j]; usedE[c.j]=true; }
   }
   const authors = names.map((name,i)=>({ name, email: matched[i] }));
-  emails.forEach((e,j)=>{ if(!usedE[j]) authors.push({ name: _inferName(e), email: e }); });
+  emails.forEach((e,j)=>{ if(!usedE[j]) authors.push({ name:"", email:e, _inferido:true }); });   // CURA 3b: vazio, não inventado
   return authors;
 }
 
@@ -2725,7 +2751,7 @@ function _emailParaAutorPrincipal(authors){
   // IMPOSSÍVEIS de casar por nome. E‑mail com nome (joao.silva@) continua pelo pareamento normal (não mexe).
   const ehMatricula = e => (String(e).split("@")[0]||"").replace(/[^a-z]/gi,"").length <= 2;
   const semEmail = (authors||[]).filter(a=>a.name && !a.email);
-  const soltos   = (authors||[]).filter(a=>a.email && ehMatricula(a.email) && (!a.name || a.name===_inferName(a.email)));
+  const soltos   = (authors||[]).filter(a=>a.email && ehMatricula(a.email) && (!a.name || a._inferido || a.name===_inferName(a.email)));   // detecta pelo flag (CURA 3b)
   if(!semEmail.length || !soltos.length) return authors;
   let si=0;
   for(const s of soltos){ if(si<semEmail.length){ semEmail[si].email=s.email; s._movido=true; si++; } else break; }
@@ -2741,7 +2767,7 @@ function extractAuthors(text, html){
    (entrada cujo nome foi inferido do próprio e-mail = heurística não casou). */
 function isAmbiguous(authors){
   const semEmail = authors.some(a => a.name && !a.email);
-  const soltos   = authors.some(a => a.email && a.name === _inferName(a.email));
+  const soltos   = authors.some(a => a.email && (a._inferido || !a.name || a.name === _inferName(a.email)));   // flag da CURA 3b (nome não é mais inventado)
   return semEmail && soltos;
 }
 
@@ -3127,8 +3153,8 @@ async function aiPairAuthorsEmails(names, emails, title){
   (parsed.pares||[]).forEach(p=>{ if(p && p.autor>=1 && p.email) map[p.autor-1]=String(p.email).trim(); });
   const used = new Set(Object.values(map).map(e=>e.toLowerCase()));
   const authors = names.map((name,i)=>({ name, email: map[i]||"" }));
-  // e-mails que a IA não usou continuam preservados como autor inferido
-  emails.forEach(e=>{ if(!used.has(e.toLowerCase())) authors.push({ name:_inferName(e), email:e }); });
+  // e-mails que a IA não usou continuam preservados — com nome VAZIO p/ revisão (CURA 3b: não inventa)
+  emails.forEach(e=>{ if(!used.has(e.toLowerCase())) authors.push({ name:"", email:e, _inferido:true }); });
   return authors;
 }
 
@@ -3294,7 +3320,8 @@ function exportXLSX(records){
 function exportJSON(records){
   const data = records.map(r=>({
     title: r.title || "",
-    authors: (r.authors||[]).map(a=>({name:a.name||"",email:a.email||""})),
+    // respeita _del (linha excluída/placeholder) — antes o JSON ignorava e vazava o que o CSV/Excel já pulava (v16.1)
+    authors: (r.authors||[]).filter(a=>!a._del).map(a=>({name:a.name||"",email:a.email||""})),
     source_file: r.source_file || ""
   }));
   const json = JSON.stringify(data, null, 2);
@@ -3787,6 +3814,7 @@ async function processBatch(){
   modelosUsados = {};
   _pdfsBloqueados = [];                    // zera os PDFs travados por baixa cobertura
   lastDuplicatas = [];                     // zera o registro de repetidos juntados
+  lastPlaceholders = [];                   // zera o registro de placeholders descartados (t@, eee@…)
   _formatoIA = null; _lastFid = null;     // zera a identificação da IA por lote
   _emailAlvo = { tot:0, uni:new Set() };  // zera a meta de @ do lote
   _runTextos = [];                        // zera os textos do lote
@@ -4938,7 +4966,9 @@ document.getElementById("verificarIA").onclick = verificarIncertosIA;
 { const _dd=document.getElementById("descartesDl"); if(_dd) _dd.onclick = ()=>{
   const esc=s=>'"'+String(s==null?"":s).replace(/"/g,'""')+'"';
   const dup=lastDuplicatas||[], blo=_pdfsBloqueados||[], rem=(typeof lastRemovidos!=="undefined"&&lastRemovidos)?lastRemovidos:[];
-  if(!dup.length && !blo.length && !rem.length){ toast("Nada foi descartado nesta coleta. 🎉"); return; }
+  try{ descartarPlaceholders(allResults); }catch(_){}                      // garante que os placeholders estão registrados
+  const ph=(typeof lastPlaceholders!=="undefined"&&lastPlaceholders)?lastPlaceholders:[];
+  if(!dup.length && !blo.length && !rem.length && !ph.length){ toast("Nada foi descartado nesta coleta. 🎉"); return; }
   const L=[];
   L.push(["RELATÓRIO DE DESCARTES — o que NÃO entrou no resultado final e por quê",""]);
   L.push(["Gerado em", (typeof VERSION!=="undefined"?("v"+VERSION):"")]);
@@ -4954,9 +4984,13 @@ document.getElementById("verificarIA").onclick = verificarIncertosIA;
   L.push(["③ TRABALHOS REMOVIDOS por NÃO ter e‑mail no PDF ("+rem.length+")"]);
   L.push(["Título","Tinha @ no texto? (extração falhou)","Fonte"]);
   rem.forEach(r=>L.push([r.title, r.temArroba?"SIM — revisar":"não", r.source||""]));
+  L.push([]);
+  L.push(["④ PLACEHOLDERS descartados (e‑mail de mentira digitado no próprio PDF: t@, eee@, teste@…) ("+ph.length+")"]);
+  L.push(["Título","E‑mail","Motivo","Fonte"]);
+  ph.forEach(p=>L.push([p.titulo, p.email, p.motivo, p.fonte||""]));
   const csv="﻿"+L.map(r=>r.map(esc).join(",")).join("\r\n");
   download(new Blob([csv],{type:"text/csv;charset=utf-8;"}), "relatorio_descartes.csv");
-  toast("Relatório de descartes baixado: "+dup.length+" repetidos · "+blo.length+" travados · "+rem.length+" sem e‑mail.");
+  toast("Relatório de descartes baixado: "+dup.length+" repetidos · "+blo.length+" travados · "+rem.length+" sem e‑mail · "+ph.length+" placeholder(s).");
 };}
 
 
@@ -5006,6 +5040,7 @@ function _exp(fn){
   // ganhar (determinístico, IA ou edição manual). Aqui é o funil dos 3 exports (CSV/Excel/JSON) — o MOD
   // sugeria o flattenRows, mas só o CSV passa por lá; o _exp cobre 100% dos caminhos. Idempotente.
   try{ recuperarNomesColados(allResults, _runTextos); }catch(e){ console.warn("recuperarNomes(exp):", e); }
+  try{ descartarPlaceholders(allResults); }catch(e){ console.warn("descartarPlaceholders:", e); }   // t@, eee@ → descartes, não CSV (v16.1)
   // TRAVA RÍGIDA: se algum PDF ficou travado (⛔ cobertura abaixo da meta), NÃO libera o arquivo p/ usuário comum.
   // A coleta desse PDF não passou na conferência automática e precisa de revisão do administrador antes de sair.
   if(!_ehAdmin() && _pdfsBloqueados && _pdfsBloqueados.length){
@@ -5266,9 +5301,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.0";
+const VERSION = "16.1";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.1","2026-07-13","MOD v3 («a cura») aplicado — a recuperação de nome agora também CORRIGE, e nenhum caminho inventa nome. (1) SOBRESCREVE nome errado usando o PDF como verdade: letra‑lixo do título grudada («I Milena De Jesus Lage» → «Milena De Jesus Lage»), nome derivado do e‑mail («Lantmann Med» → «Estela Maris Lantmann Rocha») e truncado («Luiza Rudy» → «Luiza Chiodini Rudy»); MANTÉM o nome do coletor quando ele é mais completo e está escrito no PDF (nome quebrado em 2 linhas). (2) PLACEHOLDER (t@, eee@, xx@…) não é autor: sai do CSV/Excel/JSON e vai pra seção ④ do Relatório de descartes — separado, não removido calado. De quebra, o JSON agora respeita linha excluída (_del), que ele ignorava. (3) CURA NA FONTE do nome inventado: a conferência «o nome está no PDF?» passa a IGNORAR os e‑mails do texto (era por isso que «Lantmann Med» passava — os tokens estavam dentro de lantmann.med@, não no texto real); e o pareamento NUNCA mais escreve o e‑mail reformatado como nome — e‑mail sem par entra com nome VAZIO marcado pra revisão/recuperação. Consequência honesta: nome derivado de e‑mail só sobrevive se estiver IMPRESSO no PDF. Testado: os 4 tipos de erro do MOD corrigidos, caso «mais completo» mantido, placeholders idempotentes, Conciam 131 trabalhos/725 linhas todas com nome, UNIFESP/RevICO/65‑1‑PB inalterados."],
   ["16.0","2026-07-13","MOD DE CORREÇÃO DE NOMES aplicado — fecha a CAUSA‑RAIZ do Conciam/523357. (1) O cortador «Nome (e‑mail)» agora corta pelos marcadores «RESUMO ‑ CATEGORIA» (1 por trabalho) em vez de só «Introdução:» — os trabalhos de RELATO DE EXPERIÊNCIA, que não têm Introdução própria e viravam dezenas de trabalhos grudados num bloco só (e‑mails sem nome), agora saem separados e com autor certo: 131 trabalhos, 725 linhas TODAS com nome, títulos limpos («“AÇÃO ENTRE RIOS”…» sem o rótulo de categoria). (2) Apóstrofo seguido de MAIÚSCULA no nome: «Sant’Ana», «D’Ávila», «Dall’oglio» entram INTEIROS (antes «Sant’Ana» virava «Ana» — o token de nome quebrava no apóstrofo); palavra toda em CAIXA ALTA de título continua excluída. (3) REDE FINAL no funil de exportação: a recuperação de nome roda no _exp() — que cobre os TRÊS botões (CSV, Excel e JSON; o MOD sugeria o flattenRows, mas por ele só passa o CSV) — então nome que está escrito no PDF não sai mais vazio por NENHUM caminho. Verificado item a item contra o checklist do MOD: Giulia Borges Lopes ✓, Pietro Gabriel Sant’Ana ✓ (no trabalho «Cobertura Vacinal de Gestantes»), khadija1112@outlook.com.br intacto ✓, eee@gmail.com vazio de propósito e marcado p/ revisão ✓ (o «nome» no PDF é só «E»), UNIFESP/RevICO/65‑1‑PB inalterados ✓."],
   ["15.9","2026-07-13","PATCH DE NOMES + ORQUESTRAÇÃO DA IA (os dois arquivos de patch aplicados e testados). (1) RECUPERAÇÃO de nome: para todo autor com e‑mail mas SEM nome (ou truncado), o app agora lê o padrão «Nome (email)» direto do texto cru do PDF e preenche pela adjacência — nunca inventa, só copia o que está escrito; com reforço contra resíduo de título em CAIXA ALTA na frente do nome. (2) APÓSTROFO CURVO (’) aceito nos nomes — «Sant’Ana» entra inteiro, não só «Ana». (3) TRAVA DE NOME: a cobertura agora mede NOME além de e‑mail; PDF com muita linha sem nome TRAVA (⛔ motivo «nome») e o painel 📊 mostra as duas % — nada de nome quebrado vazando com «100%». IMPORTANTE: a trava de nome é REAVALIADA no fim da esteira (depois da IA e das recuperações) — se o nome recuperou, o ⛔ sai sozinho (sem alarme falso estilo v15.3). (4) E‑MAIL .com.br VÁLIDO protegido: hotmail/outlook/live.com.br EXISTIRAM (domínios Microsoft no Brasil) e NÃO são mais «corrigidos» p/ .com; só gmail.com.br (que nunca existiu) continua sendo normalizado. (5) PLACEHOLDER (t@, eee@, teste@) sai do denominador da cobertura — é digitação do próprio autor, não falha da coleta. (6) IA CIENTE DE NOME: o juiz de qualidade agora mede nome também; a IA só é dispensada se título E nome estão bons, e só ASSUME o resultado se NÃO PERDER nome em relação ao determinístico — acabou a regressão «IA coletou e apagou os nomes». Testado no Conciam (100% nome, IA nem roda), 65‑1‑PB, UNIFESP e RevICO (cutters intactos)."],
   ["15.8","2026-07-13","CORTADOR DEDICADO pro anais Even3/Conciam (formato «Nome (e‑mail)», ex.: 523357). Nesse anais cada autor vem como «Nome Sobrenome (email@…)» logo depois do título em CAIXA ALTA (com o rótulo «RESUMO - CATEGORIA» na frente). O app não sabia ler o e‑mail ENTRE PARÊNTESES e jogava tudo solto (cada @ virava um «trabalho» sem nome nem título). Agora um cortador próprio lê «Nome (email)» com pareamento DIRETO (o e‑mail está colado no nome → 0 troca), monta 1 trabalho por artigo e tira o título limpo (remove o «RESUMO - CATEGORIA»). Nesse PDF: 129 artigos, 100% com título certo, 488 e‑mails com nome casado (~95%; os poucos que «não casam» são e‑mails pessoais que não têm o nome, tipo lab@). Guarda apertada (≥30 «Nome (email)»), então NÃO mexe em outro anais (UNIFESP, RevICO, 65‑1‑PB = 0). Rode com a IA ligada pra completar os poucos e‑mails que ficarem sem nome."],
