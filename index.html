@@ -1087,7 +1087,9 @@ function recuperarNomesColados(records, runTextos){
   //  • mantém o do coletor quando ele é MAIS COMPLETO que o do mapa (nome quebrado em 2 linhas no PDF).
   const normV = s => (s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/\s+/g," ").toLowerCase().trim();
   let alvoTxt = ""; for (const { text } of (runTextos || [])) alvoTxt += "\n" + text;
-  const alvo = " " + normV(alvoTxt) + " ";
+  // tira os E‑MAILS antes de conferir "verbatim" (mesma lição da CURA 3a): senão «Lantmann Med» passa
+  // porque o fallback de fragmentação acha l·a·n·t·m·a·n·n·(.)·m·e·d DENTRO de lantmann.med@… (v16.5)
+  const alvo = " " + normV(alvoTxt.replace(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g," ")) + " ";
   let preenchidos = 0, corrigidos = 0;
   for (const rec of (records || [])) for (const a of (rec.authors || [])) {
     const email = (a.email || "").toLowerCase().trim();
@@ -1096,7 +1098,13 @@ function recuperarNomesColados(records, runTextos){
     const atual = (a.name || "").trim();
     if (normV(certo) === normV(atual)) continue;                    // já é o nome do PDF
     if (!atual) { a.name = certo; a._nomeRecuperado = true; preenchidos++; continue; }
-    const verbatim = alvo.includes(" " + normV(atual) + " ");       // o nome do coletor está escrito no PDF?
+    // o nome do coletor está escrito no PDF? Aceita FRAGMENTADO pela extração ("Amand a Simões" = "Amanda
+    // Simões" v16.5) — letras com espaço opcional no meio, mas ANCORADO em fronteira de palavra, então a
+    // letra‑lixo ("I Milena" ← "…LEI") continua NÃO‑verbatim e é corrigida.
+    const _vb=(nm)=>{ const s=normV(nm).replace(/[^a-z0-9 ]/g,"").trim(); if(!s) return false;
+      if(alvo.includes(" "+s+" ")) return true;
+      try{ return new RegExp("(?:^|[^a-z0-9])"+s.split(" ").map(w=>w.split("").join("[ ]?")).join("[^a-z0-9]+")+"(?:[^a-z0-9]|$)").test(alvo); }catch(_){ return false; } };
+    const verbatim = _vb(atual);
     const wa = new Set(normV(atual).split(" ")), wm = new Set(normV(certo).split(" "));
     const truncado = [...wa].every(w => wm.has(w)) && wm.size > wa.size;
     if (!verbatim || truncado) { a.name = certo; a._nomeCorrigido = true; corrigidos++; }
@@ -2343,7 +2351,16 @@ function _nomeNoTexto(name, txt){
   const lt=nrm(txt).replace(/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/g," ");
   const toks=nrm(name).replace(/[^a-z0-9 ]/g," ").split(/\s+/).filter(w=>w.length>=3);
   if(!toks.length) return true;                 // só iniciais → não dá p/ checar, mantém
-  return toks.every(t=>lt.includes(t));
+  if(toks.every(t=>lt.includes(t))) return true;
+  // v16.5: aceita token FRAGMENTADO pela extração ("Amand a"→Amanda; "Fl ávia"→Flávia) — o token vale se
+  // aparece no texto com espaços no MEIO, mas começando em FRONTEIRA de palavra. Isso NÃO deixa passar a
+  // letra‑lixo ("I Milena" ← "…LEI Milena": o "i" está no meio de "lei", sem fronteira antes).
+  return toks.every(t=>{
+    if(lt.includes(t)) return true;
+    if(t.length<4) return false;
+    const re=new RegExp("(?:^|[^a-z0-9])"+t.split("").join("[ ]?")+"(?:[^a-z0-9]|$)");
+    return re.test(lt);
+  });
 }
 /* E-mail SEM dono, mas cujo local-part tem ESTRUTURA de nome (separador "." ou "_" → "amanda.avezani@",
    "susanne.rodrigues@") → preenche o nome a partir do e-mail. SÓ quando dá ≥2 partes (firstname.lastname);
@@ -5406,9 +5423,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.4";
+const VERSION = "16.5";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.5","2026-07-13","FIM da TRAVA FALSA (⛔ «nome») no Profletras. O que acontecia: a v16.4 junta nome fragmentado pela extração («Amand a»→«Amanda»), mas o verificador de honestidade não achava «Amanda» no texto (que tem «Amand a») e APAGAVA o nome consertado como se fosse inventado — 6 nomes apagados → cobertura de nome 80% → PDF travado. Agora a conferência «o nome está no PDF?» aceita nome FRAGMENTADO por espaço, exigindo que o fragmento comece em FRONTEIRA de palavra — isso mantém TODAS as defesas: a letra‑lixo («I Milena» ← «…LEI Milena», o I está no MEIO de «lei») continua sendo reprovada e corrigida, e o nome derivado de e‑mail («Lantmann Med») continua barrado (a conferência tira os e‑mails do texto antes — o mesmo reparo aplicado também no «verbatim» da recuperação, onde o fallback novo chegou a reabrir essa brecha durante o teste e foi fechado). Verificado: os 5 casos do MOD seguem corrigidos (5/5), Profletras destravado (e‑mail 100% · nome 100%), regressão nos 17 PDFs da bateria: zero mudança."],
   ["16.4","2026-07-13","NOVO MODELO «sumário + biografias» (ex.: Profletras). Nesse formato os E‑MAILS ficam TODOS numa seção final («Sobre os autores/Organizadores»: NOME EM CAPS + currículo + E‑mail: x) e os artigos só têm os NOMES. O app agora CASA os dados: lê o SUMÁRIO numerado («N. TÍTULO pág Autor1; Autor2») pra ligar título↔nomes, lê as BIOS pra ligar nome↔e‑mail, e cruza os dois — sai a linha completa Título·Nome·E‑mail. Bio sem artigo no sumário vira registro com nome (título vazio → revisão). Também: (1) conserto na EXTRAÇÃO — e‑mail com o começo quebrado por espaço depois do rótulo «E‑mail:» («amanda_simoes souza@…») agora é juntado (antes virava e‑mail ERRADO «souza@…»); (2) nomes com fragmento de extração são juntados («Amand a»→«Amanda», «Fl ávia»→«Flávia») preservando «de/da/dos»; título NÃO é colado (juntar CAIXA ALTA sem dicionário inventa palavra). No Profletras: 14 artigos + 4 organizadores, 18/18 e‑mails, 100% com nome. Guardas apertadas (e‑mails ≥70% no fim + sumário + ≥5 bios); teste de regressão nos 16 PDFs da bateria: tudo igual ou melhor, nenhum modelo mudou."],
   ["16.3","2026-07-13","Consistência da COBERTURA com o detector de placeholder (achado no teste de regressão de 16 PDFs). O descarte de placeholder julga com o NOME do autor (toto@ da Elizabeth = lixo), mas o denominador da cobertura julgava SEM o nome — então o lixo descartado ainda contava como «e‑mail perdido» e a cobertura caía (100%→99% no Conciam e no ANAIS 2019; num PDF pequeno com vários lixos poderia até TRAVAR ⛔ de mentira). Agora a trava por PDF passa o nome que a coleta já conhece pro julgamento do alvo, e a meta geral do lote também filtra placeholder óbvio (t@, eee@, 535@). Teste de regressão v15.8→v16.3 nos 16 PDFs reais da pasta: cobertura 100% em todos, nenhum modelo mudou, nome MELHOROU em 4 (UNIFESP 82→87%, 65‑1‑PB 75→76%, XXXVII 6→7%, Conciam mantido 99%), nenhuma linha perdida além dos placeholders descartados (que estão listados no relatório ④)."],
   ["16.2","2026-07-13","DETECTOR DE PLACEHOLDER mais esperto (MOD v3, Parte 4 revisada). Além de t@/eee@/teste@, agora pega: caractere REPETIDO (aaa@, xxx@), só DÍGITOS CURTOS (535@, 123@) e local CURTO (≤4 letras) que NÃO lembra o nome do autor (toto@ da Elizabeth, wss@ do Lucas, rew@ do Carlos → descartes). O que CASA com o autor FICA: apelido (bru@ da Bruna), INICIAIS (jvcs@ do João Victor Costa Silva) e até local de 2 letras quando são as iniciais com domínio próprio (jv@piacentini.com.br do João Vitor Piacentini — caso real que a regra crua descartaria). PROTEÇÃO importante que o MOD não previa: e‑mail de MATRÍCULA (230022340@aluno…, 0520047@professor… — reais, dos PDFs EVEN) NÃO é placeholder (só dígitos até 4 conta). O relatório de descartes (seção ④) agora mostra também o NOME do autor da linha descartada. Testado: 16/16 casos sintéticos + Conciam real (14 lixos verdadeiros marcados, incluindo os da auditoria do MOD; 0 e‑mail legítimo perdido), UNIFESP 0 falso positivo."],
