@@ -2298,42 +2298,61 @@ function parseModeloSumarioBio(text){
   }
   return works;
 }
-/* MODELO "RODAPÉ COM TITULAÇÃO" (ex.: anais 8º SNFPM): título em CAPS → autores Title‑Case com Nº
-   sobrescrito → «Resumo:» → rodapés «N Titulação…; Afiliação…. email» (SEM rótulo E‑mail:). Liga autor↔e‑mail
-   pelo NÚMERO, com janela POR TRABALHO (rodapé fica entre o título deste e o Resumo: do próximo — senão pega
-   o nº 1 do vizinho) e verificação por nome. Guardas: ≥10 rodapés c/ titulação/afiliação + ≥15 «Resumo:».
-   Plenárias/palestras (Resumo: sem autores numerados) são puladas. Devolve [] fora do formato. (v16.8) */
+/* MODELO "RODAPÉ NUMERADO NA PÁGINA" (ex.: 8º SNFPM) — v16.9, regra geral da coleta:
+   (1) o AUTOR termina com o Nº do rodapé;  (2) por ser NOTA DE RODAPÉ, título + nome + e-mail estão na
+   MESMA PÁGINA. Então o corte é POR PÁGINA e o vínculo é nº do nome ↔ nº do rodapé daquela página —
+   sem depender de vocabulário (Doutor/Mestre…) nem da posição do número no meio da nota.
+   GUARDA (segura, provada na bateria): ≥15 «Resumo:» E ≥10 rodapés com titulação/afiliação — identifica a
+   FAMÍLIA do formato; sem ela, a regra por página pegaria anais de outros modelos (III Congresso etc.).
+   Autores = PRIMEIRA sequência ascendente a partir do nº 1 (topo da página; fragmentos de Palavras‑chave
+   com número vêm depois e não começam do 1). Plenárias (sem autor numerado) são puladas. */
 function parseModeloRodapeTitulacao(text){
+  const EMAILG0="[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}";
+  const TIT0="(?:P[óo]s\\s*-?\\s*)?(?:Doutor(?:a|ad[oa]|and[oa])?|Mestr(?:e|a|ad[oa]|and[oa])|Especialista|Licenciad[oa]|Licenciand[oa]|Gradua(?:d|nd)[oa]|Professor(?:a)?|Bacharel(?:a)?|Acad[êe]mic[oa]|Estudante|Pedagog[oa]|Alun[oa]|T[ée]cnic[oa]|Formad[oa])";
+  const AFIL0="(?:Universidade|Instituto|Faculdade|Prefeitura|Secretaria|Col[ée]gio|Escola|Centro|Funda[çc][ãa]o|SEEDUC|PUC|UF[A-Z]{1,3})";
+  const SUP0="¹²³⁴⁵⁶⁷⁸⁹"; const t0=text.replace(/[¹²³⁴⁵⁶⁷⁸⁹]/g,c=>String(SUP0.indexOf(c)+1));
+  const reG=new RegExp("(?:^|[\\s.])(\\d{1,2})\\s+((?:"+TIT0+"|"+AFIL0+"))\\b((?:(?!"+EMAILG0+")[\\s\\S]){0,600}?)("+EMAILG0+")","g");
+  let nf=0, m0; while((m0=reG.exec(t0))){ if(++nf>=10) break; }
+  const na=(t0.match(/\bResumo\s*:/g)||[]).length;
+  if(nf<10 || na<15) return [];                                   // guarda da FAMÍLIA do formato
+  return _extrairRodapePorPagina(text);
+}
+/* extração POR PÁGINA (regra: nome nº ↔ rodapé nº na MESMA página) */
+function _extrairRodapePorPagina(text){
+  const nrm=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
   const SUP="¹²³⁴⁵⁶⁷⁸⁹"; text=text.replace(/[¹²³⁴⁵⁶⁷⁸⁹]/g,c=>String(SUP.indexOf(c)+1)).replace(/⁰/g,"0");
   const EMAILG="[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}";
-  // rodapé: "N Titulação …; afiliação …. email"   (sem rótulo E-mail:)
-  const TIT="(?:P[óo]s\s*-?\s*)?(?:Doutor(?:a|ad[oa]|and[oa])?|Mestr(?:e|a|ad[oa]|and[oa])|Especialista|Licenciad[oa]|Licenciand[oa]|Gradua(?:d|nd)[oa]|Professor(?:a)?|Bacharel(?:a)?|Acad[êe]mic[oa]|Estudante|Pedagog[oa]|Alun[oa]|T[ée]cnic[oa]|Formad[oa])";
-const AFIL="(?:Universidade|Instituto|Faculdade|Prefeitura|Secretaria|Col[ée]gio|Escola|Centro|Funda[çc][ãa]o|SEEDUC|PUC|UF[A-Z]{1,3})";
-  const reFoot=new RegExp("(?:^|[\\s.])(\\d{1,2})\\s+((?:"+TIT+"|"+AFIL+"))\\b((?:(?!"+EMAILG+")[\\s\\S]){0,600}?)("+EMAILG+")","g");
-  const foots=[]; let m;
-  while((m=reFoot.exec(text))){ const email=m[4].toLowerCase().replace(/[.,;)]+$/,"");
-    if(typeof _emailReal==="function" && !_emailReal(email)) continue;
-    foots.push({n:+m[1], email, pos:m.index}); }
-  if(foots.length<10) return [];                                            // guarda 1
-  // âncora do trabalho: "Resumo:"
-  const anchors=[...text.matchAll(/\bResumo\s*:/g)].map(x=>x.index);
-  if(anchors.length<15) return [];                                          // guarda 2
-  // autores "Nome Sobrenome N" no cabeçalho (antes do Resumo:)
-  const reAut=/([A-ZÀ-Ý][a-zà-ÿ'’.]+(?:\s+(?:d[aeio]s?|e|[A-ZÀ-Ý]\.|[A-ZÀ-Ý][A-Za-zà-ÿ'’.]+)){1,6})\s*(\d{1,2})\b/g;
-  const works=[];
-  for(let i=0;i<anchors.length;i++){
-    const ini=anchors[i], prev=(i>0)?anchors[i-1]:Math.max(0,ini-3000);
-    let head=text.slice(Math.max(prev,ini-2500), ini).replace(/=====\s*P\d+\s*=====/g," ");
-    // autores + posição do 1º
+  const reEmail=new RegExp(EMAILG,"g");
+  const pages=text.split(/\f|=====\s*P\d+\s*=====/);              // \f no app; marcador nos textos de teste
+  if(pages.length<8) return [];
+  const reAut=/([A-ZÀ-Ý][a-zà-ÿ'’.]+(?:\s+(?:d[aeio]s?|e|[A-ZÀ-Ý]\.|[A-ZÀ-Ý][A-Za-zà-ÿ'’.]+)){1,6})\s*[,;]?\s*(\d{1,2})\b/g;
+  const works=[]; let pagsComWork=0;
+  for(const pg of pages){
+    const emailsPg=[...pg.matchAll(reEmail)].map(m=>({e:m[0].toLowerCase().replace(/[.,;)]+$/,""),i:m.index}))
+      .filter(x=>!(typeof _emailReal==="function") || _emailReal(x.e));
+    if(!emailsPg.length) continue;
     const pares=[]; let a; reAut.lastIndex=0;
-    while((a=reAut.exec(head))){ pares.push({nome:a[1].replace(/\s+/g," ").trim(), n:+a[2], idx:a.index}); }
-    // pega a ÚLTIMA sequência de pares (autores ficam logo antes do Resumo; refs numeradas vêm antes)
+    while((a=reAut.exec(pg))){ pares.push({nome:a[1].replace(/\s+/g," ").trim(), n:+a[2], idx:a.index}); }
     if(!pares.length) continue;
-    let fimSeq=pares.length-1, iniSeq=fimSeq;
-    while(iniSeq>0 && pares[iniSeq-1].n < pares[iniSeq].n && (pares[iniSeq].idx - pares[iniSeq-1].idx) < 200) iniSeq--;
-    const autores=pares.slice(iniSeq, fimSeq+1);
-    // TÍTULO: varre p/ trás a partir do 1º autor aceitando tokens CAPS (ou com dígito+letra); para em minúscula/nº puro
-    const antes=head.slice(0, autores[0].idx).trim().split(/\s+/);
+    const numsAut=new Set(pares.map(p=>p.n));
+    const reFoot=new RegExp("(?:^|[\\s.;)])(\\d{1,2})\\s+((?:(?!"+EMAILG+")[\\s\\S]){2,600}?)("+EMAILG+")","g");
+    const numEmail={}; const posFootN={}; let f; reFoot.lastIndex=0;
+    while((f=reFoot.exec(pg))){ const n=+f[1], em=f[3].toLowerCase().replace(/[.,;)]+$/,"");
+      if(!numsAut.has(n)) continue;
+      if(typeof _emailReal==="function" && !_emailReal(em)) continue;
+      if(numEmail[n]===undefined){ numEmail[n]=em; posFootN[n]=f.index; } }
+    if(!Object.keys(numEmail).length) continue;
+    const posFoot=Math.min(...Object.values(posFootN));
+    const cab=pares.filter(p=>p.idx<posFoot);
+    if(!cab.length) continue;
+    // AUTORES = PRIMEIRA sequência ascendente começando no nº 1 (autores no TOPO; Palavras‑chave depois)
+    let iniSeq=cab.findIndex(p=>p.n===1);
+    if(iniSeq<0) iniSeq=0;
+    let fimSeq=iniSeq;
+    while(fimSeq+1<cab.length && cab[fimSeq+1].n===cab[fimSeq].n+1 && (cab[fimSeq+1].idx-cab[fimSeq].idx)<220) fimSeq++;
+    const autores=cab.slice(iniSeq,fimSeq+1);
+    // TÍTULO: varre p/ trás do 1º autor aceitando tokens CAPS/dígito+letra
+    const antes=pg.slice(0,autores[0].idx).trim().split(/\s+/);
     const titToks=[];
     for(let k=antes.length-1;k>=0;k--){ const t=antes[k];
       const L=(t.match(/[A-Za-zÀ-ÿ]/g)||[]).length, U=(t.match(/[A-ZÀ-Ý]/g)||[]).length;
@@ -2341,40 +2360,27 @@ const AFIL="(?:Universidade|Instituto|Faculdade|Prefeitura|Secretaria|Col[ée]gi
       if(U/L>=0.6 || /\d/.test(t)) titToks.unshift(t); else break; }
     let titulo=titToks.join(" ").replace(/\s+/g," ").trim();
     if(titulo.length>240 || titulo.replace(/[^A-Za-zÀ-ÿ]/g,"").length<10) titulo="";
-    // e-mail por NÚMERO: 1º rodapé com aquele nº DEPOIS da posição do cabeçalho deste trabalho
-    const hAbs=Math.max(prev,ini-2500);
-    const hNext=(i+1<anchors.length)?anchors[i+1]:text.length;
-    // rodapés DESTE trabalho: depois da posição dos AUTORES (título/página inicial) e antes do próximo Resumo:
-    // — os rodapés do trabalho ANTERIOR ficam antes do título deste, e os do PRÓXIMO depois do próximo anchor.
-    const autoresAbs=hAbs+autores[0].idx;
-    const winFoots=foots.filter(f=>f.pos>autoresAbs && f.pos<hNext);
+    // pareia por número + verificação por nome (não rouba e‑mail já certo)
     const casaNome=(nome,email)=>{ const loc=(email.split("@")[0]||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/[^a-z]/g,"");
-      const tk=(nome||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().split(/\s+/).filter(x=>x.length>=4);
-      return tk.some(t=>loc.includes(t)||loc.includes(t.slice(0,4))); };
-    const authors=autores.map(p=>{
-      const f=winFoots.find(f=>f.n===p.n);
-      return {name:p.nome, email:f?f.email:"", _n:p.n};
-    });
-    // VERIFICAÇÃO por nome: se o e-mail do nº não lembra o autor mas OUTRO rodapé da janela lembra, troca
-    for(const a of authors){
-      if(a.email && casaNome(a.name,a.email)) continue;
-      const certo=winFoots.find(f=>casaNome(a.name,f.email));
-      if(certo && certo.email!==a.email){
-        const dono=authors.find(b=>b!==a && b.email===certo.email);
-        if(!dono || !casaNome(dono.name,dono.email)) a.email=certo.email;   // não rouba e-mail já certo
-      }
+      const tk=nrm(nome).split(/\s+/).filter(x=>x.length>=4); return tk.some(t=>loc.includes(t)||loc.includes(t.slice(0,4))); };
+    const authors=autores.map(p=>({name:p.nome, email:numEmail[p.n]||""}));
+    for(const au of authors){
+      if(au.email && casaNome(au.name,au.email)) continue;
+      const certo=Object.values(numEmail).find(em=>casaNome(au.name,em));
+      if(certo && certo!==au.email){ const dono=authors.find(b=>b!==au&&b.email===certo);
+        if(!dono || !casaNome(dono.name,dono.email)) au.email=certo; }
     }
-    // e-mail repetido em 2 autores: fica com quem casa; o outro esvazia (revisão)
     const vis={};
-    for(const a of authors){ if(!a.email) continue;
-      if(vis[a.email]){ const o=vis[a.email];
-        if(casaNome(a.name,a.email) && !casaNome(o.name,o.email)) { o.email=""; vis[a.email]=a; }
-        else if(!casaNome(a.name,a.email)) a.email="";
-      } else vis[a.email]=a; }
-    authors.forEach(a=>delete a._n);
-    if(!titulo && !authors.some(a=>a.email)) continue;      // fragmento sem título nem e-mail (plenária/lixo) → fora
-    works.push({title:titulo, authors, _raw:head.slice(-600)});
+    for(const au of authors){ if(!au.email) continue;
+      if(vis[au.email]){ const o=vis[au.email];
+        if(casaNome(au.name,au.email)&&!casaNome(o.name,o.email)){o.email="";vis[au.email]=au;}
+        else if(!casaNome(au.name,au.email)) au.email="";
+      } else vis[au.email]=au; }
+    if(!titulo && !authors.some(x=>x.email)) continue;
+    pagsComWork++;
+    works.push({title:titulo, authors, _raw:pg.slice(0,900)});
   }
+  if(pagsComWork<8) return [];
   if(!works.some(w=>w.authors.some(a=>a.email))) return [];
   return works;
 }
@@ -5579,9 +5585,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.8";
+const VERSION = "16.9";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.9","2026-07-13","Cortador de rodapé numerado REESCRITO com as DUAS REGRAS GERAIS da coleta (sugestão da Fernanda): (1) quando o e‑mail está em NOTA DE RODAPÉ, o autor termina com o Nº da nota — o vínculo é nº do nome ↔ nº do rodapé; (2) por ser nota de rodapé, TÍTULO + NOME + E‑MAIL estão na MESMA PÁGINA — então o corte é POR PÁGINA, e o rodapé não precisa mais de vocabulário (Doutor/Mestre…) nem de posição fixa do número. Detalhes que os testes exigiram: autores são a PRIMEIRA sequência ascendente a partir do nº 1 no topo da página (fragmentos de «Palavras‑chave» seguidos do nº da nota enganavam a versão anterior), e o nº do rodapé só vale se EXISTE nos autores da página. A GUARDA continua a da v16.8 (≥15 «Resumo:» + ≥10 rodapés com titulação/afiliação) — sem ela, a regra por página pegaria anais de outros modelos (testado: capturaria III Congresso, 892E etc.). No 8º SNFPM: 137 trabalhos, e‑mails únicos pareados subiram de 186 → 201 (os rodapés SEM titulação agora entram), nome 86% → 91%, e os poucos «não casa» conferidos são iniciais/matrículas corretas. Regressão nos 17 PDFs: zero mudança."],
   ["16.8","2026-07-13","NOVO MODELO «rodapé com titulação» (ex.: anais do 8º SNFPM — o PDF que veio com 6 de 13 páginas com erro). Formato: título em CAIXA ALTA → autores em Title‑Case com Nº sobrescrito → «Resumo:» → rodapés «N Doutor em…; Universidade…, Brasil. email» (SEM o rótulo E‑mail:). Nenhum cortador reconhecia e o PDF caía no genérico — daí nomes/títulos errados e a IA tentando adivinhar título. O cortador novo: liga autor↔e‑mail PELO NÚMERO do rodapé com janela POR TRABALHO (detalhe decisivo: o rodapé nº 1 do trabalho VIZINHO fica no mesmo trecho — sem a janela certa, o e‑mail ia pro autor errado, era a maior fonte de troca), entende número sobrescrito unicode (¹²³), titulações variadas (Doutorando, Licenciando, Aluna, Graduanda…) e rodapé só com afiliação; plenárias/palestras (têm «Resumo:» mas não são artigos) são puladas. Verificação por nome por cima do número. Resultado no 8º SNFPM: 138 trabalhos, 126 com título limpo, 300 autores nomeados, 261 pareados com e‑mail (3% de «não casa» — e conferi um a um: são iniciais tipo feolce=Fernando de Oliveira Cezar e matrículas, ou seja, CERTOS); os ~40 e‑mails de rodapés muito fora do padrão entram pela rede de segurança (revisão). Regressão nos 17 PDFs da bateria: zero mudança."],
   ["16.7","2026-07-13","REESCRITA do cortador «sumário + biografias» na RAIZ (pacote @.zip) + trava anti‑explicação da IA. (1) A extração por linhas‑Y funde o Nº DE PÁGINA dentro do título do sumário, em posição imprevisível («…LINGUÍSTICAS NAS 17 AULAS…», «…PROPOSTA 9 1» = página 91 partida) — a versão antiga achava título/autores PELA POSIÇÃO do número e quebrava a cada layout (1ª rodada: tudo no último título; 2ª: 15 sem título). Agora o número de página é REMOVIDO onde estiver (1–3 dígitos puros, inclusive partido; «6º» e «II» ficam) e a divisão título/autores é pela TRANSIÇÃO DE CAIXA (título = CAIXA ALTA, autores = Title Case) — vale nas duas ordens de sumário. (2) Casamento de nome TOLERANTE: exato → contém → distância ≤2 em nomes longos — cobre grafia divergente do próprio PDF («Castelione» no sumário × «CASTELIONI» na bio) sem cruzar pessoas diferentes. (3) Sobra de organizador NUNCA é descartada sozinha: vira ⚠ com a nota da seção de origem, o revisor decide. (4) BUG SEPARADO fechado: explicação da IA («Não identificado — trecho contém apenas dados biográficos…») vazava pra coluna de TÍTULO — agora TODO título vindo da IA só é aceito se EXISTIR no texto do PDF (comparação por letras, tolera texto fragmentado); senão fica em branco pra revisão. Guarda aplicada nos 5 pontos onde a IA escreve título. Profletras: 16 trabalhos (o PDF numera «11.» duas vezes — os dois entram), 18/18 e‑mails, 100%% nome, 2 sobras ⚠ (Alessandra e Andre). Regressão nos 17 PDFs: zero mudança."],
   ["16.6","2026-07-13","Cortador «sumário + biografias» aceita as DUAS ordens de sumário (patch v16.6). No Profletras real o sumário vem «N. TÍTULO → Autores → página» (página DEPOIS dos autores) e a regra antiga só aceitava «TÍTULO → página → Autores» — 14 das 15 entradas não casavam e os e-mails caíam no último título. Agora a ordem B entra quando a A não casa (ou casa com título que não é CAIXA ALTA), com proteção pra última entrada do sumário e pra título com número («…DO 6º ANO…»). REGRA nova de sobra: organizador sem trabalho casado NUNCA é descartado sozinho — vira linha ⚠ pra revisão com a nota «(seção de ORGANIZADORES — confirmar se é coautor; se não for, excluir a linha)»; casamento que falha por grafia divergente («Castelione» × «CASTELIONI») ganha a nota de conferir grafia. A decisão é humana: coautor com grafia errada não some, e organizador puro não polui o Excel. Testado nas duas ordens + regressão nos 17 PDFs: zero mudança."],
