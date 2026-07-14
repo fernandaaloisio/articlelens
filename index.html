@@ -718,6 +718,11 @@ function _repararEmailEspacos(s){
   // todos minúsculos (não engole nome próprio da frase).
   s = s.replace(/(E\s*-?\s*mail\s*:?\s*)([a-z0-9._%+\-]{2,}(?:\s+[a-z0-9._%+\-]{2,}){1,2})\s*@/gi,
                 (m,rot,loc)=> rot + loc.replace(/\s+/g,"") + "@");
+  // LOCAL quebrado por espaço SEM rótulo (v16.10): «ana.vi tolo@sesisp…» → junta. Só quando o fragmento
+  // tem PONTO INTERNO (estrutura de local-part) e não termina em domínio (.br/.com… não cola: «unesp.br fulano@»).
+  s = s.replace(/([a-z0-9]{2,}\.(?!br\b|com\b|org\b|net\b|edu\b|gov\b)[a-z0-9][a-z0-9.]*)\s+([a-z0-9]{2,}@)/gi, "$1$2");
+  // «pereira. 173@gmail…» → junta dígitos soltos após ponto do local (fragmento típico de quebra de linha)
+  s = s.replace(/([a-z0-9]{3,}\.)\s+(\d{1,4}@)/gi, "$1$2");
   s = s.replace(/([a-z0-9._%+\-]+)\s*@\s*([a-z0-9])/gi, "$1@$2");                                       // espaço junto do @
   s = s.replace(/(@[a-z0-9.\-]*[a-z0-9])\s*\.\s*(com|br|org|net|edu|gov|info|inf|co|gob)\b/gi, "$1.$2"); // ". br" / ". com"
   s = s.replace(/(@[a-z0-9.\-]+\.[a-z]{2,4})\s*\.\s*(br|com)\b/gi, "$1.$2");                             // 2º nível "x.com . br"
@@ -2338,15 +2343,22 @@ function _extrairRodapePorPagina(text){
     const reFoot=new RegExp("(?:^|[\\s.;)])(\\d{1,2})\\s+((?:(?!"+EMAILG+")[\\s\\S]){2,600}?)("+EMAILG+")","g");
     const numEmail={}; const posFootN={}; let f; reFoot.lastIndex=0;
     while((f=reFoot.exec(pg))){ const n=+f[1], em=f[3].toLowerCase().replace(/[.,;)]+$/,"");
-      if(!numsAut.has(n)) continue;
-      if(typeof _emailReal==="function" && !_emailReal(em)) continue;
-      if(numEmail[n]===undefined){ numEmail[n]=em; posFootN[n]=f.index; } }
+      // Nº que não é de autor (página, ano, «v. 9») casaria o padrão e ENGOLIRIA o texto até o e‑mail,
+      // pulando o rodapé verdadeiro — REBOBINA o cursor p/ logo depois do número (v16.10).
+      if(!numsAut.has(n) || (typeof _emailReal==="function" && !_emailReal(em))){
+        reFoot.lastIndex = f.index + f[0].indexOf(f[1]) + String(f[1]).length;
+        continue;
+      }
+      if(numEmail[n]===undefined){ numEmail[n]=em; posFootN[n]=f.index; }
+      else reFoot.lastIndex = f.index + f[0].indexOf(f[1]) + String(f[1]).length; }
     if(!Object.keys(numEmail).length) continue;
     const posFoot=Math.min(...Object.values(posFootN));
     const cab=pares.filter(p=>p.idx<posFoot);
     if(!cab.length) continue;
-    // AUTORES = PRIMEIRA sequência ascendente começando no nº 1 (autores no TOPO; Palavras‑chave depois)
+    // AUTORES = PRIMEIRA sequência ascendente começando no nº 1 — OU no 2, quando a nota 1 é do TÍTULO
+    // («Esta Comunicação Oral apresenta…»), o que desloca a numeração dos autores (v16.10)
     let iniSeq=cab.findIndex(p=>p.n===1);
+    if(iniSeq<0) iniSeq=cab.findIndex(p=>p.n===2);
     if(iniSeq<0) iniSeq=0;
     let fimSeq=iniSeq;
     while(fimSeq+1<cab.length && cab[fimSeq+1].n===cab[fimSeq].n+1 && (cab[fimSeq+1].idx-cab[fimSeq].idx)<220) fimSeq++;
@@ -5585,9 +5597,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.9";
+const VERSION = "16.10";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.10","2026-07-14","ACHADO o ponto exato que TRAVAVA o anais de rodapé numerado (8º SNFPM) — e eram TRÊS peças: (1) BUG DE REGEX no leitor de rodapé: um número‑lixo da página («v. 9, n. 17…», ano, nº de página) casava o padrão «Nº … e‑mail» e ENGOLIA o texto até o e‑mail do rodapé verdadeiro — o cursor pulava pra depois dele e o rodapé certo nunca era lido (caso Karin Jelinek). Agora o cursor REBOBINA pra logo depois do número inválido. (2) NOTA DO TÍTULO desloca a numeração: quando o título tem a nota 1 («Esta Comunicação Oral apresenta…»), os autores começam no 2 — a sequência de autores agora pode começar em 1 OU 2. (3) E‑MAIL QUEBRADO por espaço sem rótulo («ana.vi tolo@sesisp…», «pereira. 173@gmail…») inflava o alvo com fragmentos e criava linhas sem nome — o reparador de extração agora junta (sem colar domínio: «unesp.br fulano@» fica separado). RESULTADO no 8º SNFPM: e‑mails pareados 201→214 de 229, linhas sem nome da rede 28→15, cobertura de NOME no gate 91%→95% — o PDF DESTRAVA. Quem ainda fica sem nome vai pra revisão (rodapés atípicos de verdade). Regressão nos 17 PDFs: zero mudança. OBS: o resultado que veio com 49%% sem nome era de VERSÃO ANTIGA em cache — Ctrl+Shift+R antes de rodar."],
   ["16.9","2026-07-13","Cortador de rodapé numerado REESCRITO com as DUAS REGRAS GERAIS da coleta (sugestão da Fernanda): (1) quando o e‑mail está em NOTA DE RODAPÉ, o autor termina com o Nº da nota — o vínculo é nº do nome ↔ nº do rodapé; (2) por ser nota de rodapé, TÍTULO + NOME + E‑MAIL estão na MESMA PÁGINA — então o corte é POR PÁGINA, e o rodapé não precisa mais de vocabulário (Doutor/Mestre…) nem de posição fixa do número. Detalhes que os testes exigiram: autores são a PRIMEIRA sequência ascendente a partir do nº 1 no topo da página (fragmentos de «Palavras‑chave» seguidos do nº da nota enganavam a versão anterior), e o nº do rodapé só vale se EXISTE nos autores da página. A GUARDA continua a da v16.8 (≥15 «Resumo:» + ≥10 rodapés com titulação/afiliação) — sem ela, a regra por página pegaria anais de outros modelos (testado: capturaria III Congresso, 892E etc.). No 8º SNFPM: 137 trabalhos, e‑mails únicos pareados subiram de 186 → 201 (os rodapés SEM titulação agora entram), nome 86% → 91%, e os poucos «não casa» conferidos são iniciais/matrículas corretas. Regressão nos 17 PDFs: zero mudança."],
   ["16.8","2026-07-13","NOVO MODELO «rodapé com titulação» (ex.: anais do 8º SNFPM — o PDF que veio com 6 de 13 páginas com erro). Formato: título em CAIXA ALTA → autores em Title‑Case com Nº sobrescrito → «Resumo:» → rodapés «N Doutor em…; Universidade…, Brasil. email» (SEM o rótulo E‑mail:). Nenhum cortador reconhecia e o PDF caía no genérico — daí nomes/títulos errados e a IA tentando adivinhar título. O cortador novo: liga autor↔e‑mail PELO NÚMERO do rodapé com janela POR TRABALHO (detalhe decisivo: o rodapé nº 1 do trabalho VIZINHO fica no mesmo trecho — sem a janela certa, o e‑mail ia pro autor errado, era a maior fonte de troca), entende número sobrescrito unicode (¹²³), titulações variadas (Doutorando, Licenciando, Aluna, Graduanda…) e rodapé só com afiliação; plenárias/palestras (têm «Resumo:» mas não são artigos) são puladas. Verificação por nome por cima do número. Resultado no 8º SNFPM: 138 trabalhos, 126 com título limpo, 300 autores nomeados, 261 pareados com e‑mail (3% de «não casa» — e conferi um a um: são iniciais tipo feolce=Fernando de Oliveira Cezar e matrículas, ou seja, CERTOS); os ~40 e‑mails de rodapés muito fora do padrão entram pela rede de segurança (revisão). Regressão nos 17 PDFs da bateria: zero mudança."],
   ["16.7","2026-07-13","REESCRITA do cortador «sumário + biografias» na RAIZ (pacote @.zip) + trava anti‑explicação da IA. (1) A extração por linhas‑Y funde o Nº DE PÁGINA dentro do título do sumário, em posição imprevisível («…LINGUÍSTICAS NAS 17 AULAS…», «…PROPOSTA 9 1» = página 91 partida) — a versão antiga achava título/autores PELA POSIÇÃO do número e quebrava a cada layout (1ª rodada: tudo no último título; 2ª: 15 sem título). Agora o número de página é REMOVIDO onde estiver (1–3 dígitos puros, inclusive partido; «6º» e «II» ficam) e a divisão título/autores é pela TRANSIÇÃO DE CAIXA (título = CAIXA ALTA, autores = Title Case) — vale nas duas ordens de sumário. (2) Casamento de nome TOLERANTE: exato → contém → distância ≤2 em nomes longos — cobre grafia divergente do próprio PDF («Castelione» no sumário × «CASTELIONI» na bio) sem cruzar pessoas diferentes. (3) Sobra de organizador NUNCA é descartada sozinha: vira ⚠ com a nota da seção de origem, o revisor decide. (4) BUG SEPARADO fechado: explicação da IA («Não identificado — trecho contém apenas dados biográficos…») vazava pra coluna de TÍTULO — agora TODO título vindo da IA só é aceito se EXISTIR no texto do PDF (comparação por letras, tolera texto fragmentado); senão fica em branco pra revisão. Guarda aplicada nos 5 pontos onde a IA escreve título. Profletras: 16 trabalhos (o PDF numera «11.» duas vezes — os dois entram), 18/18 e‑mails, 100%% nome, 2 sobras ⚠ (Alessandra e Andre). Regressão nos 17 PDFs: zero mudança."],
