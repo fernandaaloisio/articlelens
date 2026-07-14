@@ -2184,85 +2184,117 @@ function parseModeloNomeEmailParen(text){
   }
   return works;
 }
-/* Título de sumário é CAPS (≥55% maiúsculas) — mesmo critério usado dentro do cortador. */
-function _tituloCaps(t){
-  const L=((t||"").match(/\p{L}/gu)||[]).length, U=((t||"").match(/\p{Lu}/gu)||[]).length;
-  return L>=10 && U/L>=0.55;
-}
-/* MODELO "SUMÁRIO + BIOGRAFIAS" (ex.: Profletras): os E‑MAILS ficam TODOS numa seção final de bios
-   («NOME EM CAPS … E‑mail: x» — "Sobre os autores/Organizadores") e os artigos só têm NOMES. O casamento é:
-   SUMÁRIO numerado («N. TÍTULO <pág> Autor1; Autor2») dá título↔nomes, e a seção de bios dá nome↔e‑mail —
-   cruzando os dois sai a linha completa. Bio sem artigo vira registro com nome (título p/ revisão). Guardas:
-   ≥5 e‑mails com ≥70% no último quarto do doc + SUMÁRIO real + ≥5 bios. Devolve [] fora desse formato. */
+/* =========================================================================
+   parseModeloSumarioBio — v16.6 (REESCRITO NA RAIZ)
+   MODELO "SUMÁRIO + BIOGRAFIAS" (ex.: Profletras): e-mails TODOS numa seção
+   final de bios; os artigos só têm nomes. Cruza SUMÁRIO (título↔nomes) ×
+   BIOS (nome↔e-mail).
+   POR QUE REESCREVEU: a extração por linhas-Y funde o Nº DE PÁGINA dentro
+   do título (ex.: "…LINGUÍSTICAS NAS 17 / AULAS DE…"), em posição
+   imprevisível. A versão antiga localizava título/autores PELA POSIÇÃO do
+   número — quebrava sempre que o número caía no meio. Agora o número de
+   página é REMOVIDO onde quer que esteja (token de 1–3 dígitos puro; "6º"
+   e "II" ficam) e a divisão título/autores é pela TRANSIÇÃO DE CAIXA
+   (título = CAIXA ALTA; autores = Title Case) — que é o que define o
+   formato, não o layout.
+   Guardas: as MESMAS (≥5 e-mails, ≥70% no último quarto, sumário real,
+   ≥5 bios). Devolve [] fora desse formato.
+   ========================================================================= */
 function parseModeloSumarioBio(text){
   const EMAILG=/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
-  const nrm=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+  const nrm=s=>(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
   const semEspaco=s=>nrm(s).replace(/[^a-z]/g,"");
   const emails=[...text.matchAll(EMAILG)].map(m=>({e:m[0].toLowerCase().replace(/[.,;)]+$/,""),i:m.index}))
     .filter(x=>!(typeof _emailReal==="function") || _emailReal(x.e));
   if(emails.length<5) return [];
   const noFim=emails.filter(x=>x.i>text.length*0.75).length;
-  if(noFim < emails.length*0.7) return [];                        // e‑mails espalhados → não é este formato
-  // 1) BIOS: nome = último run TODO‑CAPS antes de cada e‑mail
+  if(noFim < emails.length*0.7) return [];                        // e-mails espalhados → não é este formato
+
+  // 1) BIOS: nome = último run TODO-CAPS antes de cada e-mail (igual à versão anterior)
+  const RE_ORG=/ORGANIZADOR(?:\s*[AE]S)?\b|COMISS[ÃA]O\s+(?:ORGANIZADORA|CIENT[ÍI]FICA)/i;
   const bio={};
   for(const {e,i} of emails){
     const seg=text.slice(Math.max(0,i-700), i);
     const runs=[...seg.matchAll(/(?:\b[A-ZÀ-Ý]{2,}[A-ZÀ-Ý']*\s+){1,7}\b[A-ZÀ-Ý]{2,}[A-ZÀ-Ý']*/g)];
     if(!runs.length) continue;
-    let nome=runs[runs.length-1][0].replace(/\s+/g," ").trim()
-      .replace(/^(?:ORGANIZADOR(?:AS|ES)?|E|SOBRE|OS|AS|AUTOR(?:ES|AS)?)\s+/g,"");
+    let nome=runs[runs.length-1][0].replace(/\s+/g," ").trim();
+    // strip de rótulo em LAÇO (v16.7): «ORGANIZADOR AS E ORGANIZADOR ALESSANDRA…» tem DOIS rótulos
+    // encadeados antes do nome — uma passada só deixava resíduo («E ORGANIZADOR …»).
+    let _prev; do{ _prev=nome;
+      nome=nome.replace(/^(?:ORGANIZADOR(?:\s*[AE]S)?(?:\s+E)?|E|SOBRE|OS|AS|AUTOR(?:ES|AS)?|DA|TURMA|COMISS[ÃA]O|ORGANIZADORA|CIENT[ÍI]FICA)\s+/,"");
+    }while(nome!==_prev);
     if(nome.split(/\s+/).length<2) continue;
     const k=semEspaco(nome);
-    if(k.length>=8 && !bio[k]) bio[k]={email:e, nome};
+    // marca se a bio está na seção de organizadores (p/ anotação de revisão do passo 3):
+    // compara a ÚLTIMA ocorrência real de cada cabeçalho antes do e-mail (loop /gi)
+    const antes=text.slice(0,i);
+    const _last=(re)=>{ let x,last=-1; re.lastIndex=0; while((x=re.exec(antes))) last=x.index; return last; };
+    const mOrg=_last(/ORGANIZADOR(?:\s*[AE]S)?\b|COMISS[ÃA]O\s+(?:ORGANIZADORA|CIENT[ÍI]FICA)/gi);
+    const mAut=_last(/\bAUTOR(?:ES|AS)\s+DA\s+TURMA\b|\bSOBRE\s+[OA]S\s+AUTOR(?:ES|AS)\b/gi);
+    const ehOrg = mOrg>=0 && mOrg>mAut;
+    if(k.length>=8 && !bio[k]) bio[k]={email:e, nome, org:ehOrg};
   }
   if(Object.keys(bio).length<5) return [];
-  // 2) SUMÁRIO: «N. TÍTULO <pág> Autor1; Autor2» (título CAPS; autores Title‑Case)
+
+  // casamento de nome tolerante: exato → contém → distância ≤2 (nomes longos; cobre grafia
+  // divergente do PRÓPRIO PDF, ex. "Castelione" no sumário × "CASTELIONI" na bio)
+  const _dist=(a,b)=>{ if(Math.abs(a.length-b.length)>2) return 99;
+    const dp=Array.from({length:a.length+1},(_,i)=>[i,...Array(b.length).fill(0)]);
+    for(let j=1;j<=b.length;j++) dp[0][j]=j;
+    for(let i=1;i<=a.length;i++) for(let j=1;j<=b.length;j++)
+      dp[i][j]=Math.min(dp[i-1][j]+1, dp[i][j-1]+1, dp[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
+    return dp[a.length][b.length]; };
+  const achaBio=k=>{
+    if(bio[k]) return bio[k];
+    for(const bk in bio){ if(bk.includes(k)||k.includes(bk)) return bio[bk]; }
+    if(k.length>=12){ for(const bk in bio){ if(bk.length>=12 && _dist(bk,k)<=2) return bio[bk]; } }
+    return null;
+  };
+
+  // 2) SUMÁRIO: entradas "N. TÍTULO … Autor1; Autor2" — o nº de página pode estar EM QUALQUER LUGAR
   const mSum=text.slice(0,Math.floor(text.length*0.35)).match(/S\s*U\s*M\s*[ÁA]\s*R\s*I\s*O/i);
   if(!mSum) return [];
-  const sum=text.slice(mSum.index, Math.floor(text.length*0.3)).replace(/=====\s*P\d+\s*=====/g," ");
+  let sum=text.slice(mSum.index, Math.floor(text.length*0.3)).replace(/=====\s*P\d+\s*=====/g," ");
+  // fim do sumário: cabeçalhos de seções finais (organizadores/autores/apresentação/programação do miolo)
+  const mFim=sum.search(/ORGANIZADOR(?:\s*[AE]S)?\b[^\n]*\n|AUTOR(?:ES|AS)\s+DA\s+TURMA|APRESENTA[ÇC][ÃA]O\s*\n/i);
+  if(mFim>200) sum=sum.slice(0,mFim);
   const entradas=[...sum.matchAll(/\b\d{1,2}\s*\.\s+(?=[A-ZÀ-Ý])/g)].map(m=>m.index);
   if(entradas.length<5) return [];
-  const CONN_NOME=/^(de|da|do|dos|das|e)$/;                       // junta fragmento de NOME quebrado pela extração
+  const CONN_NOME=/^(de|da|do|dos|das|e)$/;
   const juntaNome=s=>s
-    .replace(/\b([A-Za-zÀ-ÿ]{2,})\s+([a-zà-ÿ]{1,3})\b(?=\s|$)/g,(m,a,b)=> CONN_NOME.test(b)?m:a+b)
+    .replace(/\b([A-Za-zÀ-ÿ]{2,})\s+([a-zà-ÿ]{1,8})\b(?=\s|$)/g,(m,a,b)=> CONN_NOME.test(b)?m:a+b)
     .replace(/\b([A-ZÀ-Ý][a-zà-ÿ]?)\s+([a-zà-ÿ]{2,})\b/g,(m,a,b)=> CONN_NOME.test(a)||CONN_NOME.test(b)?m:a+b);
   const works=[];
   for(let i=0;i<entradas.length;i++){
-    const ini=entradas[i], fim=(i+1<entradas.length)?entradas[i+1]:Math.min(sum.length, ini+600);
-    const bloco=sum.slice(ini,fim).replace(/\s+/g," ").trim();
-    // Ordem A (original): «N. TÍTULO <pág> Autores»
-    let m=bloco.match(/^\d{1,2}\s*\.\s+([\s\S]+?)\s+\d[\d ]{0,3}\s+([A-ZÀ-Ý][a-zà-ÿ'][\s\S]*)$/);
-    // Ordem B (v16.6): «N. TÍTULO Autores <pág>» — página DEPOIS dos autores (Profletras real). Só entra
-    // quando a A não casa OU casa com "título" que não é CAPS (sinal de que a A engoliu os autores).
-    if(!m || !_tituloCaps(m[1]))
-      m=bloco.match(/^\d{1,2}\s*\.\s+([\s\S]+?)\s+([A-ZÀ-Ý][a-zà-ÿ'’][\s\S]*?)\s+\d[\d ]{0,3}\s*(?=$|\d{1,2}\s*\.|[A-ZÀ-Ý]{2,})/);
-    if(!m) continue;
-    const titulo=m[1].replace(/\s+/g," ").trim();                 // título fica como está no PDF (não colar CAPS)
-    const L=(titulo.match(/\p{L}/gu)||[]).length, U=(titulo.match(/\p{Lu}/gu)||[]).length;
-    if(L<10 || U/L<0.55) continue;                                // sumário é CAPS — mata lixo de ficha/expediente
-    const autores=m[2].split(/;/).map(s=>juntaNome(s.replace(/\s+/g," ").trim()))
-      .filter(s=>s.length>3 && s.length<60 && /^[A-ZÀ-Ý]/.test(s) && !/[()@:]|Ficha|Capa|Design/i.test(s));
-    if(!autores.length || autores.length>6) continue;
-    const authors=autores.map(nm=>{ const k=semEspaco(nm); let em="";
-      for(const bk in bio){ if(bk===k || bk.includes(k) || k.includes(bk)){ em=bio[bk].email; break; } }
-      return {name:nm, email:em}; });
-    works.push({title:titulo, authors, _raw:bloco});
+    const ini=entradas[i], fim=(i+1<entradas.length)?entradas[i+1]:Math.min(sum.length, ini+700);
+    let bloco=sum.slice(ini,fim).replace(/\f/g," ").replace(/\s+/g," ").trim();
+    bloco=bloco.replace(/^\d{1,2}\s*\.\s*/,"");                              // tira o "N."
+    // >>> RAIZ: remove Nº DE PÁGINA onde quer que tenha caído (token 1–3 dígitos puro,
+    //     inclusive partido: "9 1"). "6º"/"9º" (ordinal) e "II" (romano) NÃO são tocados.
+    bloco=bloco.replace(/(^|\s)\d{1,3}(?:\s+\d{1,2})?(?=\s|$)/g," ").replace(/\s+/g," ").trim();
+    // divisão TÍTULO(CAIXA ALTA) → AUTORES(Title Case): 1º token com maiúscula+minúsculas.
+    // Fragmentos de extração no título ("CO ESÃO","GÊNER O") continuam CAPS, não enganam a divisão.
+    const mDiv=bloco.match(/(?:^|\s)([A-ZÀ-Ý][a-zà-ÿ'’][\s\S]*)$/);
+    if(!mDiv) continue;
+    const titulo=bloco.slice(0, bloco.length-mDiv[1].length).replace(/\s+/g," ").trim();
+    const L=(titulo.match(/[A-Za-zÀ-ÿ]/g)||[]).length, U=(titulo.match(/[A-ZÀ-Ý]/g)||[]).length;
+    if(L<10 || U/L<0.55) continue;                                          // título de verdade é CAPS
+    const autores=juntaNome(mDiv[1]).split(/;/).map(s=>s.replace(/\s+/g," ").trim())
+      .filter(s=>s.length>3 && s.length<60 && /^[A-ZÀ-Ý]/.test(s)
+              && !/[()@:]/.test(s) && !RE_ORG.test(s) && !/Ficha|Capa|Design|Editora/i.test(s));
+    if(!autores.length || autores.length>8) continue;
+    const authors=autores.map(nm=>{ const b=achaBio(semEspaco(nm)); return {name:nm, email:b?b.email:""}; });
+    works.push({title:titulo, authors, _raw:bloco.slice(0,300)});
   }
-  if(!works.length) return [];
-  // 3) bio NÃO usada → registro p/ revisão (título vazio) — NUNCA descarte automático: organizador muitas
-  //    vezes É coautor e o casamento pode falhar por grafia divergente («Castelione» × «CASTELIONI»). Se a
-  //    bio está sob o cabeçalho de ORGANIZADORES, o aviso anota isso pro revisor decidir rápido (v16.6).
+  if(!works.some(w=>w.authors.some(a=>a.email))) return [];
+
+  // 3) bio NÃO usada → registro p/ revisão (título vazio); se é da seção de organizadores,
+  //    anota pro revisor decidir (organizador muitas vezes é coautor — nunca descarta sozinho)
   const usados=new Set(); works.forEach(w=>w.authors.forEach(a=>{if(a.email)usados.add(a.email);}));
-  const RE_ORG=/(ORGANIZADOR(?:A|ES|AS)?|COMISS[ÃA]O\s+(?:ORGANIZADORA|CIENT[ÍI]FICA))/g;
-  const orgIni=(()=>{ RE_ORG.lastIndex=0; const m2=RE_ORG.exec(text); return m2?m2.index:-1; })();
-  const orgFim=orgIni>=0 ? (()=>{ const re=/\bAUTOR(?:ES|AS)\b/g; re.lastIndex=orgIni+10;
-        const x=re.exec(text); return x?x.index:text.length; })() : -1;
   for(const bk in bio){ if(usados.has(bio[bk].email)) continue;
-    const pos=text.indexOf(bio[bk].email);
-    const ehOrg = orgIni>=0 && pos>orgIni && pos<orgFim;
     works.push({title:"", authors:[{name:bio[bk].nome, email:bio[bk].email}], _sobraBio:true,
-      _raw: ehOrg ? "(seção de ORGANIZADORES — confirmar se é coautor; se não for, excluir a linha)"
-                  : "(seção de autores — casamento com o sumário falhou; conferir grafia)"});
+      _raw: bio[bk].org ? "(seção de ORGANIZADORES — confirmar se é coautor; se não for, excluir a linha)"
+                        : "(seção de autores — casamento com o sumário falhou; conferir grafia)"});
   }
   return works;
 }
@@ -3199,6 +3231,21 @@ function _emailNoTexto(low, email){
   const esc = email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp("(?:^|[^a-z0-9._%+\\-])" + esc, "i").test(low);
 }
+/* TÍTULO vindo da IA só é aceito se EXISTE no texto do PDF (v16.7): a IA às vezes EXPLICA em vez de
+   responder («Não identificado — trecho contém apenas dados biográficos de autores») e isso vazava pra
+   coluna de título. Compara por LETRAS (sem espaço/pontuação) pra não rejeitar título legítimo de PDF
+   com texto fragmentado («CO ESÃO» no PDF × «COESÃO» da IA). Sem prova → em branco (revisão). */
+let _loteNormCache = { ref:null, txt:"" };
+function _tituloIAValido(t, raw){
+  if(!t) return false;
+  if(/n[aã]o (identificad|encontrad|h[aá]|cont[eé]m|foi poss)|trecho cont[eé]m|dados biogr|apenas dados|sem t[ií]tulo|n[aã]o se aplica|imposs[ií]vel/i.test(t)) return false;
+  const so=s=>(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/[^a-z0-9]/g,"");
+  const probe=so(t).slice(0,60);
+  if(probe.length<12) return false;                       // curto demais p/ provar → revisão decide
+  if(raw && so(raw).includes(probe)) return true;
+  if(_loteNormCache.ref!==_runTextos){ _loteNormCache={ ref:_runTextos, txt: so((_runTextos||[]).map(x=>x.text).join("\n")) }; }
+  return _loteNormCache.txt.includes(probe);
+}
 async function aiColetarAnais(text, fileName){
   // pica por PÁGINA (\f) acumulando ~7000 chars (trabalho raramente quebra; o dedup junta se quebrar)
   const pages=(text||"").split("\f"); const chunks=[]; let buf="";
@@ -3253,7 +3300,8 @@ async function aiColetarAnais(text, fileName){
       // ANTI-INVENÇÃO: se o nome foi MONTADO do e-mail (ex.: vhictor.hr → "Vhictor Hr") e NÃO aparece
       // no texto fora do e-mail → deixa VAZIO (melhor sem nome do que nome fabricado). Nome real fica.
       authors.forEach(a=>{ if(a.name && _nomeDoEmail(a.name, a.email, lowSemEmail)){ a.name=""; inventados++; } });
-      if(authors.length) works.push({ title:(w.title||"").trim(), authors, _aiOk:true, _aiColetado:true, source_file:fileName });
+      if(authors.length){ const _t=(w.title||"").trim();
+        works.push({ title:_tituloIAValido(_t, text)?_t:"", authors, _aiOk:true, _aiColetado:true, source_file:fileName }); }   // IA explicou em vez de responder → título em branco (v16.7)
     }
   }
   _aiAnaisInfo = { blocos:chunks.length, trabalhosBrutos:brutos, trabalhos:works.length, falhas,
@@ -4041,7 +4089,7 @@ async function processBatch(){
           if(f){
            if(AI.conferirTudo || r._anais){
             // ANAIS (sempre) ou 🧪 "IA faz TUDO": a IA leu o TEXTO CRU e é AUTORIDADE TOTAL — refaz título e autores do zero.
-            if(f.title && f.title.length>8 && f.title!==r.title){ r.title=_limparTituloAnais(f.title); nTit++; }
+            if(f.title && f.title.length>8 && f.title!==r.title && _tituloIAValido(f.title, r._raw)){ r.title=_limparTituloAnais(f.title); nTit++; }
             const _origNome={}; (r.authors||[]).forEach(a=>{ if(a.email) _origNome[a.email.toLowerCase().trim()]=a.name||""; });
             if(Array.isArray(f.authors)){
               const novos = f.authors
@@ -4063,7 +4111,7 @@ async function processBatch(){
               }
             }
            } else {
-            if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)){ r.title=f.title; nTit++; }
+            if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title) && _tituloIAValido(f.title, r._raw)){ r.title=f.title; nTit++; }
             // (A) É um caso ⚠ (nome quebrado / nome≠e-mail / sem e-mail / órfão): a IA leu o TEXTO CRU
             //     e é a AUTORIDADE. Substitui a lista de autores pela dela (cada um marcado _aiOk =
             //     conferido pela IA → some o ⚠). TRAVA: nunca REDUZ os e-mails já coletados.
@@ -4955,10 +5003,10 @@ async function _aiAplicarGrupo(grupo, modo, contador){
     if(modo==="recupera"){
       const novos = limpaAutores(f.authors).filter(a=>a.email);    // só serve se vier com e-mail do texto
       if(novos.length){ r.authors=novos;
-        if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)) r.title=f.title;
+        if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title) && _tituloIAValido(f.title, r._raw)) r.title=f.title;
         allResults.push(r); aprender(r); contador.rec++; }
     } else {
-      if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title)){ r.title=f.title; contador.tit++; }
+      if(f.title && f.title.length>11 && tituloSuspeito(r.title) && !tituloSuspeito(f.title) && _tituloIAValido(f.title, r._raw)){ r.title=f.title; contador.tit++; }
       if(temNomeQuebrado(r) && Array.isArray(f.authors) && f.authors.length){
         const novos=limpaAutores(f.authors); if(novos.length){ r.authors=novos; contador.nome++; } }
       (r.authors||[]).forEach(a=>delete a._guess); aprender(r);
@@ -5444,9 +5492,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.6";
+const VERSION = "16.7";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.7","2026-07-13","REESCRITA do cortador «sumário + biografias» na RAIZ (pacote @.zip) + trava anti‑explicação da IA. (1) A extração por linhas‑Y funde o Nº DE PÁGINA dentro do título do sumário, em posição imprevisível («…LINGUÍSTICAS NAS 17 AULAS…», «…PROPOSTA 9 1» = página 91 partida) — a versão antiga achava título/autores PELA POSIÇÃO do número e quebrava a cada layout (1ª rodada: tudo no último título; 2ª: 15 sem título). Agora o número de página é REMOVIDO onde estiver (1–3 dígitos puros, inclusive partido; «6º» e «II» ficam) e a divisão título/autores é pela TRANSIÇÃO DE CAIXA (título = CAIXA ALTA, autores = Title Case) — vale nas duas ordens de sumário. (2) Casamento de nome TOLERANTE: exato → contém → distância ≤2 em nomes longos — cobre grafia divergente do próprio PDF («Castelione» no sumário × «CASTELIONI» na bio) sem cruzar pessoas diferentes. (3) Sobra de organizador NUNCA é descartada sozinha: vira ⚠ com a nota da seção de origem, o revisor decide. (4) BUG SEPARADO fechado: explicação da IA («Não identificado — trecho contém apenas dados biográficos…») vazava pra coluna de TÍTULO — agora TODO título vindo da IA só é aceito se EXISTIR no texto do PDF (comparação por letras, tolera texto fragmentado); senão fica em branco pra revisão. Guarda aplicada nos 5 pontos onde a IA escreve título. Profletras: 16 trabalhos (o PDF numera «11.» duas vezes — os dois entram), 18/18 e‑mails, 100%% nome, 2 sobras ⚠ (Alessandra e Andre). Regressão nos 17 PDFs: zero mudança."],
   ["16.6","2026-07-13","Cortador «sumário + biografias» aceita as DUAS ordens de sumário (patch v16.6). No Profletras real o sumário vem «N. TÍTULO → Autores → página» (página DEPOIS dos autores) e a regra antiga só aceitava «TÍTULO → página → Autores» — 14 das 15 entradas não casavam e os e-mails caíam no último título. Agora a ordem B entra quando a A não casa (ou casa com título que não é CAIXA ALTA), com proteção pra última entrada do sumário e pra título com número («…DO 6º ANO…»). REGRA nova de sobra: organizador sem trabalho casado NUNCA é descartado sozinho — vira linha ⚠ pra revisão com a nota «(seção de ORGANIZADORES — confirmar se é coautor; se não for, excluir a linha)»; casamento que falha por grafia divergente («Castelione» × «CASTELIONI») ganha a nota de conferir grafia. A decisão é humana: coautor com grafia errada não some, e organizador puro não polui o Excel. Testado nas duas ordens + regressão nos 17 PDFs: zero mudança."],
   ["16.5","2026-07-13","FIM da TRAVA FALSA (⛔ «nome») no Profletras. O que acontecia: a v16.4 junta nome fragmentado pela extração («Amand a»→«Amanda»), mas o verificador de honestidade não achava «Amanda» no texto (que tem «Amand a») e APAGAVA o nome consertado como se fosse inventado — 6 nomes apagados → cobertura de nome 80% → PDF travado. Agora a conferência «o nome está no PDF?» aceita nome FRAGMENTADO por espaço, exigindo que o fragmento comece em FRONTEIRA de palavra — isso mantém TODAS as defesas: a letra‑lixo («I Milena» ← «…LEI Milena», o I está no MEIO de «lei») continua sendo reprovada e corrigida, e o nome derivado de e‑mail («Lantmann Med») continua barrado (a conferência tira os e‑mails do texto antes — o mesmo reparo aplicado também no «verbatim» da recuperação, onde o fallback novo chegou a reabrir essa brecha durante o teste e foi fechado). Verificado: os 5 casos do MOD seguem corrigidos (5/5), Profletras destravado (e‑mail 100% · nome 100%), regressão nos 17 PDFs da bateria: zero mudança."],
   ["16.4","2026-07-13","NOVO MODELO «sumário + biografias» (ex.: Profletras). Nesse formato os E‑MAILS ficam TODOS numa seção final («Sobre os autores/Organizadores»: NOME EM CAPS + currículo + E‑mail: x) e os artigos só têm os NOMES. O app agora CASA os dados: lê o SUMÁRIO numerado («N. TÍTULO pág Autor1; Autor2») pra ligar título↔nomes, lê as BIOS pra ligar nome↔e‑mail, e cruza os dois — sai a linha completa Título·Nome·E‑mail. Bio sem artigo no sumário vira registro com nome (título vazio → revisão). Também: (1) conserto na EXTRAÇÃO — e‑mail com o começo quebrado por espaço depois do rótulo «E‑mail:» («amanda_simoes souza@…») agora é juntado (antes virava e‑mail ERRADO «souza@…»); (2) nomes com fragmento de extração são juntados («Amand a»→«Amanda», «Fl ávia»→«Flávia») preservando «de/da/dos»; título NÃO é colado (juntar CAIXA ALTA sem dicionário inventa palavra). No Profletras: 14 artigos + 4 organizadores, 18/18 e‑mails, 100% com nome. Guardas apertadas (e‑mails ≥70% no fim + sumário + ≥5 bios); teste de regressão nos 16 PDFs da bateria: tudo igual ou melhor, nenhum modelo mudou."],
