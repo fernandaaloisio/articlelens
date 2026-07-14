@@ -2184,6 +2184,11 @@ function parseModeloNomeEmailParen(text){
   }
   return works;
 }
+/* Título de sumário é CAPS (≥55% maiúsculas) — mesmo critério usado dentro do cortador. */
+function _tituloCaps(t){
+  const L=((t||"").match(/\p{L}/gu)||[]).length, U=((t||"").match(/\p{Lu}/gu)||[]).length;
+  return L>=10 && U/L>=0.55;
+}
 /* MODELO "SUMÁRIO + BIOGRAFIAS" (ex.: Profletras): os E‑MAILS ficam TODOS numa seção final de bios
    («NOME EM CAPS … E‑mail: x» — "Sobre os autores/Organizadores") e os artigos só têm NOMES. O casamento é:
    SUMÁRIO numerado («N. TÍTULO <pág> Autor1; Autor2») dá título↔nomes, e a seção de bios dá nome↔e‑mail —
@@ -2225,7 +2230,12 @@ function parseModeloSumarioBio(text){
   for(let i=0;i<entradas.length;i++){
     const ini=entradas[i], fim=(i+1<entradas.length)?entradas[i+1]:Math.min(sum.length, ini+600);
     const bloco=sum.slice(ini,fim).replace(/\s+/g," ").trim();
-    const m=bloco.match(/^\d{1,2}\s*\.\s+([\s\S]+?)\s+\d[\d ]{0,3}\s+([A-ZÀ-Ý][a-zà-ÿ'][\s\S]*)$/);
+    // Ordem A (original): «N. TÍTULO <pág> Autores»
+    let m=bloco.match(/^\d{1,2}\s*\.\s+([\s\S]+?)\s+\d[\d ]{0,3}\s+([A-ZÀ-Ý][a-zà-ÿ'][\s\S]*)$/);
+    // Ordem B (v16.6): «N. TÍTULO Autores <pág>» — página DEPOIS dos autores (Profletras real). Só entra
+    // quando a A não casa OU casa com "título" que não é CAPS (sinal de que a A engoliu os autores).
+    if(!m || !_tituloCaps(m[1]))
+      m=bloco.match(/^\d{1,2}\s*\.\s+([\s\S]+?)\s+([A-ZÀ-Ý][a-zà-ÿ'’][\s\S]*?)\s+\d[\d ]{0,3}\s*(?=$|\d{1,2}\s*\.|[A-ZÀ-Ý]{2,})/);
     if(!m) continue;
     const titulo=m[1].replace(/\s+/g," ").trim();                 // título fica como está no PDF (não colar CAPS)
     const L=(titulo.match(/\p{L}/gu)||[]).length, U=(titulo.match(/\p{Lu}/gu)||[]).length;
@@ -2239,10 +2249,21 @@ function parseModeloSumarioBio(text){
     works.push({title:titulo, authors, _raw:bloco});
   }
   if(!works.length) return [];
-  // 3) bio NÃO usada vira registro com NOME (título vazio → revisão/IA) — melhor que rede sem nome
+  // 3) bio NÃO usada → registro p/ revisão (título vazio) — NUNCA descarte automático: organizador muitas
+  //    vezes É coautor e o casamento pode falhar por grafia divergente («Castelione» × «CASTELIONI»). Se a
+  //    bio está sob o cabeçalho de ORGANIZADORES, o aviso anota isso pro revisor decidir rápido (v16.6).
   const usados=new Set(); works.forEach(w=>w.authors.forEach(a=>{if(a.email)usados.add(a.email);}));
-  for(const bk in bio){ if(!usados.has(bio[bk].email))
-    works.push({title:"", authors:[{name:bio[bk].nome, email:bio[bk].email}], _sobraBio:true, _raw:"(seção de autores/organizadores)"}); }
+  const RE_ORG=/(ORGANIZADOR(?:A|ES|AS)?|COMISS[ÃA]O\s+(?:ORGANIZADORA|CIENT[ÍI]FICA))/g;
+  const orgIni=(()=>{ RE_ORG.lastIndex=0; const m2=RE_ORG.exec(text); return m2?m2.index:-1; })();
+  const orgFim=orgIni>=0 ? (()=>{ const re=/\bAUTOR(?:ES|AS)\b/g; re.lastIndex=orgIni+10;
+        const x=re.exec(text); return x?x.index:text.length; })() : -1;
+  for(const bk in bio){ if(usados.has(bio[bk].email)) continue;
+    const pos=text.indexOf(bio[bk].email);
+    const ehOrg = orgIni>=0 && pos>orgIni && pos<orgFim;
+    works.push({title:"", authors:[{name:bio[bk].nome, email:bio[bk].email}], _sobraBio:true,
+      _raw: ehOrg ? "(seção de ORGANIZADORES — confirmar se é coautor; se não for, excluir a linha)"
+                  : "(seção de autores — casamento com o sumário falhou; conferir grafia)"});
+  }
   return works;
 }
 /* ÚLTIMO RECURSO p/ anais SEM rótulos (ex.: "Jornada Odontológica"): formato "número → TÍTULO (Title Case) →
@@ -5423,9 +5444,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.5";
+const VERSION = "16.6";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.6","2026-07-13","Cortador «sumário + biografias» aceita as DUAS ordens de sumário (patch v16.6). No Profletras real o sumário vem «N. TÍTULO → Autores → página» (página DEPOIS dos autores) e a regra antiga só aceitava «TÍTULO → página → Autores» — 14 das 15 entradas não casavam e os e-mails caíam no último título. Agora a ordem B entra quando a A não casa (ou casa com título que não é CAIXA ALTA), com proteção pra última entrada do sumário e pra título com número («…DO 6º ANO…»). REGRA nova de sobra: organizador sem trabalho casado NUNCA é descartado sozinho — vira linha ⚠ pra revisão com a nota «(seção de ORGANIZADORES — confirmar se é coautor; se não for, excluir a linha)»; casamento que falha por grafia divergente («Castelione» × «CASTELIONI») ganha a nota de conferir grafia. A decisão é humana: coautor com grafia errada não some, e organizador puro não polui o Excel. Testado nas duas ordens + regressão nos 17 PDFs: zero mudança."],
   ["16.5","2026-07-13","FIM da TRAVA FALSA (⛔ «nome») no Profletras. O que acontecia: a v16.4 junta nome fragmentado pela extração («Amand a»→«Amanda»), mas o verificador de honestidade não achava «Amanda» no texto (que tem «Amand a») e APAGAVA o nome consertado como se fosse inventado — 6 nomes apagados → cobertura de nome 80% → PDF travado. Agora a conferência «o nome está no PDF?» aceita nome FRAGMENTADO por espaço, exigindo que o fragmento comece em FRONTEIRA de palavra — isso mantém TODAS as defesas: a letra‑lixo («I Milena» ← «…LEI Milena», o I está no MEIO de «lei») continua sendo reprovada e corrigida, e o nome derivado de e‑mail («Lantmann Med») continua barrado (a conferência tira os e‑mails do texto antes — o mesmo reparo aplicado também no «verbatim» da recuperação, onde o fallback novo chegou a reabrir essa brecha durante o teste e foi fechado). Verificado: os 5 casos do MOD seguem corrigidos (5/5), Profletras destravado (e‑mail 100% · nome 100%), regressão nos 17 PDFs da bateria: zero mudança."],
   ["16.4","2026-07-13","NOVO MODELO «sumário + biografias» (ex.: Profletras). Nesse formato os E‑MAILS ficam TODOS numa seção final («Sobre os autores/Organizadores»: NOME EM CAPS + currículo + E‑mail: x) e os artigos só têm os NOMES. O app agora CASA os dados: lê o SUMÁRIO numerado («N. TÍTULO pág Autor1; Autor2») pra ligar título↔nomes, lê as BIOS pra ligar nome↔e‑mail, e cruza os dois — sai a linha completa Título·Nome·E‑mail. Bio sem artigo no sumário vira registro com nome (título vazio → revisão). Também: (1) conserto na EXTRAÇÃO — e‑mail com o começo quebrado por espaço depois do rótulo «E‑mail:» («amanda_simoes souza@…») agora é juntado (antes virava e‑mail ERRADO «souza@…»); (2) nomes com fragmento de extração são juntados («Amand a»→«Amanda», «Fl ávia»→«Flávia») preservando «de/da/dos»; título NÃO é colado (juntar CAIXA ALTA sem dicionário inventa palavra). No Profletras: 14 artigos + 4 organizadores, 18/18 e‑mails, 100% com nome. Guardas apertadas (e‑mails ≥70% no fim + sumário + ≥5 bios); teste de regressão nos 16 PDFs da bateria: tudo igual ou melhor, nenhum modelo mudou."],
   ["16.3","2026-07-13","Consistência da COBERTURA com o detector de placeholder (achado no teste de regressão de 16 PDFs). O descarte de placeholder julga com o NOME do autor (toto@ da Elizabeth = lixo), mas o denominador da cobertura julgava SEM o nome — então o lixo descartado ainda contava como «e‑mail perdido» e a cobertura caía (100%→99% no Conciam e no ANAIS 2019; num PDF pequeno com vários lixos poderia até TRAVAR ⛔ de mentira). Agora a trava por PDF passa o nome que a coleta já conhece pro julgamento do alvo, e a meta geral do lote também filtra placeholder óbvio (t@, eee@, 535@). Teste de regressão v15.8→v16.3 nos 16 PDFs reais da pasta: cobertura 100% em todos, nenhum modelo mudou, nome MELHOROU em 4 (UNIFESP 82→87%, 65‑1‑PB 75→76%, XXXVII 6→7%, Conciam mantido 99%), nenhuma linha perdida além dos placeholders descartados (que estão listados no relatório ④)."],
