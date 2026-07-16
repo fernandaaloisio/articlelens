@@ -5355,21 +5355,8 @@ function _exp(fn){
   // sugeria o flattenRows, mas só o CSV passa por lá; o _exp cobre 100% dos caminhos. Idempotente.
   try{ recuperarNomesColados(allResults, _runTextos); }catch(e){ console.warn("recuperarNomes(exp):", e); }
   try{ descartarPlaceholders(allResults); }catch(e){ console.warn("descartarPlaceholders:", e); }   // t@, eee@ → descartes, não CSV (v16.1)
-  // TRAVA RÍGIDA: se algum PDF ficou travado (⛔ cobertura abaixo da meta), NÃO libera o arquivo p/ usuário comum.
-  // A coleta desse PDF não passou na conferência automática e precisa de revisão do administrador antes de sair.
-  if(!_ehAdmin() && _pdfsBloqueados && _pdfsBloqueados.length){
-    const nm = _pdfsBloqueados.map(p=>p.file).filter(Boolean);
-    toast("⛔ Exportação bloqueada: "+_pdfsBloqueados.length+" PDF(s) não passaram na conferência de cobertura"
-      +(nm.length?(" ("+nm.slice(0,3).join(", ")+(nm.length>3?"…":"")+")"):"")
-      +". <b>Entre em contato com o administrador</b> para revisar e liberar antes de baixar.","err");
-    return;
-  }
-  // bloqueia se houver ⚠ pendentes — SÓ para login não‑admin (admin baixa direto)
-  const pend = _ehAdmin() ? 0 : _pendentesCount();
-  if(pend>0){
-    toast("⚠️ "+pend+" linha"+(pend>1?"s":"")+" ainda não verificada"+(pend>1?"s":"")+". Confirme todas com OK antes de exportar.","warn");
-    return;
-  }
+  // v16.12: exportação LIVRE — sem trava por PDF travado (⛔) nem por linhas não verificadas (⚠).
+  // A conferência (📊 Cobertura) e os avisos ⚠ na tabela continuam mostrando o que revisar, mas não impedem o download.
   try{ pipeStep(5,"done"); fn(allResults); }
   catch(e){ console.warn("export:",e); toast("Erro ao exportar: "+e.message,"err"); }
 }
@@ -5615,9 +5602,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.11";
+const VERSION = "16.12";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.12","2026-07-14","A pedido: REMOVIDAS as duas travas de exportação. Antes, o usuário comum não conseguia baixar o Excel/CSV/JSON quando (⛔) algum PDF não passava na conferência de cobertura (pedia contato com o administrador) OU quando (⚠) havia linhas ainda não confirmadas com OK. Agora qualquer usuário baixa o arquivo sempre. A conferência (📊 Cobertura), os avisos ⚠ na tabela e o Relatório de descartes CONTINUAM aparecendo pra orientar a revisão — só não impedem mais o download."],
   ["16.11","2026-07-14","Conserta o TÍTULO em papers de congresso que puxavam o NOME DO EVENTO (ex.: Imunoendocrino/ENMC). A 1ª linha do PDF é «XXVIII ENMC, XVI ECTM» (números romanos + siglas) e vinha COLADA na frente do título de verdade («A SIMPLIFIED COMPUTATIONAL MODEL…»). O extrator de título agora reconhece essa linha como CABEÇALHO DE EVENTO (linha inteira feita de «ROMANO SIGLA») e a descarta — números romanos são restritivos (só I,V,X,L,C,D,M), então não pega título comum em CAIXA ALTA. De quebra, novo parser para autores no formato «Nome Completo[nº] ‑ email» (e‑mail colado no nome com traço, comum nesses papers): pareamento DIRETO nome↔e‑mail (0 troca), aceitando inicial de uma letra no meio do nome («Barbara de M Quintela»). Nesse PDF: título certo + 4/4 autores com e‑mail (antes as afiliações entravam como nome e 1 autor ficava sem nome, derrubando a cobertura). Regressão nos 18 PDFs de anais: zero — o parser novo só atua em ARTIGO ÚNICO."],
   ["16.10","2026-07-14","ACHADO o ponto exato que TRAVAVA o anais de rodapé numerado (8º SNFPM) — e eram TRÊS peças: (1) BUG DE REGEX no leitor de rodapé: um número‑lixo da página («v. 9, n. 17…», ano, nº de página) casava o padrão «Nº … e‑mail» e ENGOLIA o texto até o e‑mail do rodapé verdadeiro — o cursor pulava pra depois dele e o rodapé certo nunca era lido (caso Karin Jelinek). Agora o cursor REBOBINA pra logo depois do número inválido. (2) NOTA DO TÍTULO desloca a numeração: quando o título tem a nota 1 («Esta Comunicação Oral apresenta…»), os autores começam no 2 — a sequência de autores agora pode começar em 1 OU 2. (3) E‑MAIL QUEBRADO por espaço sem rótulo («ana.vi tolo@sesisp…», «pereira. 173@gmail…») inflava o alvo com fragmentos e criava linhas sem nome — o reparador de extração agora junta (sem colar domínio: «unesp.br fulano@» fica separado). RESULTADO no 8º SNFPM: e‑mails pareados 201→214 de 229, linhas sem nome da rede 28→15, cobertura de NOME no gate 91%→95% — o PDF DESTRAVA. Quem ainda fica sem nome vai pra revisão (rodapés atípicos de verdade). Regressão nos 17 PDFs: zero mudança. OBS: o resultado que veio com 49%% sem nome era de VERSÃO ANTIGA em cache — Ctrl+Shift+R antes de rodar."],
   ["16.9","2026-07-13","Cortador de rodapé numerado REESCRITO com as DUAS REGRAS GERAIS da coleta (sugestão da Fernanda): (1) quando o e‑mail está em NOTA DE RODAPÉ, o autor termina com o Nº da nota — o vínculo é nº do nome ↔ nº do rodapé; (2) por ser nota de rodapé, TÍTULO + NOME + E‑MAIL estão na MESMA PÁGINA — então o corte é POR PÁGINA, e o rodapé não precisa mais de vocabulário (Doutor/Mestre…) nem de posição fixa do número. Detalhes que os testes exigiram: autores são a PRIMEIRA sequência ascendente a partir do nº 1 no topo da página (fragmentos de «Palavras‑chave» seguidos do nº da nota enganavam a versão anterior), e o nº do rodapé só vale se EXISTE nos autores da página. A GUARDA continua a da v16.8 (≥15 «Resumo:» + ≥10 rodapés com titulação/afiliação) — sem ela, a regra por página pegaria anais de outros modelos (testado: capturaria III Congresso, 892E etc.). No 8º SNFPM: 137 trabalhos, e‑mails únicos pareados subiram de 186 → 201 (os rodapés SEM titulação agora entram), nome 86% → 91%, e os poucos «não casa» conferidos são iniciais/matrículas corretas. Regressão nos 17 PDFs: zero mudança."],
