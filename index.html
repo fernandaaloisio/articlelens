@@ -718,6 +718,13 @@ function _repararEmailEspacos(s){
   // todos minúsculos (não engole nome próprio da frase).
   s = s.replace(/(E\s*-?\s*mail\s*:?\s*)([a-z0-9._%+\-]{2,}(?:\s+[a-z0-9._%+\-]{2,}){1,2})\s*@/gi,
                 (m,rot,loc)=> rot + loc.replace(/\s+/g,"") + "@");
+  // E-MAIL COM ACENTO no PDF (v16.14): «nina.simão@unesp.br» — o extrator não aceita acento e pegava só
+  // o fragmento «o@unesp.br». Normaliza o local-part (ã→a) direto no texto.
+  s = s.replace(/([a-z0-9._%+\-]*[à-öø-ÿ][a-z0-9._%+\-à-öø-ÿ]*)(@[a-z0-9.\-]+\.[a-z]{2,})/gi,
+                (m,loc,dom)=>loc.normalize("NFD").replace(/[̀-ͯ]/g,"")+dom);
+  // HÍFEN do local quebrado por espaço (v16.14): «karine.g.perez - vieira@ufsm.br» → junta
+  // (só quando o fragmento tem ponto interno = estrutura de local-part).
+  s = s.replace(/([a-z0-9]+(?:\.[a-z0-9]+)+)\s*-\s*([a-z0-9._%+\-]*[a-z0-9]@)/gi, "$1-$2");
   // LOCAL quebrado por espaço SEM rótulo (v16.10): «ana.vi tolo@sesisp…» → junta. Só quando o fragmento
   // tem PONTO INTERNO (estrutura de local-part) e não termina em domínio (.br/.com… não cola: «unesp.br fulano@»).
   s = s.replace(/([a-z0-9]{2,}\.(?!br\b|com\b|org\b|net\b|edu\b|gov\b)[a-z0-9][a-z0-9.]*)\s+([a-z0-9]{2,}@)/gi, "$1$2");
@@ -2402,6 +2409,83 @@ function _extrairRodapePorPagina(text){
   if(!works.some(w=>w.authors.some(a=>a.email))) return [];
   return works;
 }
+/* MODELO "AUTOR NUMERADO + NOTA-BIO" (Even3/ANPAP, ex.: 559116): cabeçalho «TÍTULO CAPS → [Nº]
+   Nome → Instituição → Associado/a/e ANPAP:» imediatamente acima do RESUMO; e-mails em NOTAS-BIO numeradas
+   (com o MESMO nº do autor) espalhadas no artigo — nem toda nota tem e-mail (Lattes/ORCID só). Aceita nº
+   isolado, «Nome Sobrenome1» (grudado), «[1]», «1)»; nº de página solto NÃO quebra a bio. GUARDA do template:
+   ≥10 «Associado/a/e ANPAP» — não dispara em nenhum outro anais. (v16.14) */
+function parseModeloAutorNotaEven3(text){
+  const SUP="¹²³⁴⁵⁶⁷⁸⁹"; text=text.replace(/[¹²³⁴⁵⁶⁷⁸⁹]/g,c=>String(SUP.indexOf(c)+1)).replace(/⁰/g,"0");
+  if((text.match(/Associado\/a\/e\s+ANPAP/gi)||[]).length<10) return [];   // guarda do template
+  const EMAILG="[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}";
+  const L=text.split(/\n/);
+  // âncoras de artigo: linha "RESUMO" (ou "RESUMO." / "RESUMO:") isolada
+  const anchors=[];
+  for(let i=0;i<L.length;i++){ if(/^\s*R\s?E\s?S\s?U\s?M\s?O\s*[:.]?\s*$/i.test(L[i])) anchors.push(i); }
+  if(anchors.length<8) return [];
+  const works=[];
+  for(let k=0;k<anchors.length;k++){
+    const iR=anchors[k], iEnd=(k+1<anchors.length)?anchors[k+1]:L.length;
+    // ---- cabeçalho fica IMEDIATAMENTE acima do RESUMO: janela curta (18 linhas), dois padrões:
+    //   (a) linha-nº isolada + nome na linha de baixo   (b) "Nome Sobrenome1" / "Nome Sobrenome 1"
+    const autores=[]; let primeiroNumIdx=-1;
+    const topo=Math.max(0,iR-18);
+    const ehNomePessoa=s=>/^[A-ZÀ-Ý][A-Za-zà-ÿ'’. ]{4,60}$/.test(s) && s.trim().split(/\s+/).length>=2
+                        && !/ANPAP|Indique|RESUMO|Universidade|Instituto|Faculdade|Escola|Centro|^Notas?\b/i.test(s);
+    for(let j=topo;j<iR;j++){
+      const s=(L[j]||"").trim(); if(!s) continue;
+      const mNum=s.match(/^[\[\(]?(\d{1,2})[\]\)]?$/);
+      if(mNum){                                        // (a) nº isolado → nome logo abaixo
+        for(let t=j+1;t<Math.min(iR,j+3);t++){ const s2=(L[t]||"").trim(); if(!s2) continue;
+          if(ehNomePessoa(s2)){ autores.push({n:+mNum[1], nome:s2.replace(/\s+/g," ").trim(), lin:j}); if(primeiroNumIdx<0) primeiroNumIdx=j; }
+          break; }
+        continue;
+      }
+      const mv=s.match(/^([A-ZÀ-Ý][A-Za-zà-ÿ'’. ]{4,60}?)\s*[\[\(]?(\d{1,2})[\]\)]?$/);   // (b) nome+nº (grudado ou não)
+      if(mv && /[a-zà-ÿ]$/.test(mv[1].trim()) && ehNomePessoa(mv[1].trim())){
+        autores.push({n:+mv[2], nome:mv[1].replace(/\s+/g," ").trim(), lin:j}); if(primeiroNumIdx<0) primeiroNumIdx=j;
+      }
+    }
+    if(!autores.length) continue;
+    // ---- título: linhas CAPS acima do primeiro nº (junta PT; corta a versão EN)
+    const titL=[];
+    for(let j=primeiroNumIdx-1;j>=Math.max(0,primeiroNumIdx-8);j--){
+      const s=(L[j]||"").trim(); if(!s) continue;
+      const let_=(s.match(/[A-Za-zÀ-ÿ]/g)||[]).length, up=(s.match(/[A-ZÀ-Ý]/g)||[]).length;
+      if(let_>=6 && up/let_>=0.6) titL.unshift(s); else break;
+    }
+    let titulo=titL.join(" ").replace(/\s+/g," ").trim();
+    // separa PT da tradução EN: corta na 1ª palavra tipicamente inglesa
+    const mEn=titulo.match(/\s(?:THE|OF|AND|FROM|FOR|WITH|TO|IN|DISCONFIGURATION|A)\s[A-Z]/);
+    // heurística simples: se há um "." ou " . " no meio, corta ali (PT termina com ponto)
+    const dot=titulo.indexOf(". ");
+    if(dot>15) titulo=titulo.slice(0,dot+1).trim();
+    if(titulo.length>240) titulo="";
+    // ---- notas-bio (depois do RESUMO, dentro do artigo): "Nº" isolado + bio nas linhas seguintes até próximo nº; e-mail opcional
+    const numEmail={};
+    for(let j=iR;j<iEnd;j++){
+      // nota com nº ISOLADO ("1" numa linha) OU nº na MESMA linha ("[1] Docente no Curso…")
+      let n=-1, bio0="";
+      let mNum=L[j].match(/^\s*[\[\(]?(\d{1,2})[\]\)]?\s*$/);
+      if(mNum){ n=+mNum[1]; }
+      else { mNum=L[j].match(/^\s*[\[\(]?(\d{1,2})[\]\)]?\s+(\S.{8,})/); if(mNum && !/^\d/.test(mNum[2])){ n=+mNum[1]; bio0=mNum[2]; } }
+      if(n<0) continue;
+      if(!autores.some(a=>a.n===n) || numEmail[n]!==undefined) continue;
+      // bio = a própria linha (se inline) + próximas ~30 até OUTRA NOTA; nº de PÁGINA solto no meio
+      // ("15") NÃO quebra a bio — só nº plausível de nota (≤12). Bios desse formato são longas.
+      const ehNota=t=>{ const m2=(L[t]||"").match(/^\s*[\[\(]?(\d{1,2})[\]\)]?\s*$/); return m2 && +m2[1]<=12; };
+      let bio=bio0; for(let t=j+1;t<Math.min(iEnd,j+30);t++){ if(ehNota(t)) break; bio+=" "+L[t]; }
+      const mE=bio.match(new RegExp("E\\s*-?\\s*mail\\s*:?\\s*("+EMAILG+")","i")) || bio.match(new RegExp("("+EMAILG+")"));
+      if(mE){ const em=mE[1].toLowerCase().replace(/[.,;)]+$/,"");
+        if(!(typeof _emailReal==="function") || _emailReal(em)) numEmail[n]=em; }
+    }
+    const authors=autores.map(a=>({name:a.nome, email:numEmail[a.n]||""}));
+    if(!titulo && !authors.some(a=>a.email)) continue;
+    works.push({title:titulo, authors, _raw: L.slice(Math.max(0,primeiroNumIdx-8), Math.min(iR+3,L.length)).join("\n").slice(0,1800)});
+  }
+  if(!works.some(w=>w.authors.some(a=>a.email))) return [];
+  return works;
+}
 /* ÚLTIMO RECURSO p/ anais SEM rótulos (ex.: "Jornada Odontológica"): formato "número → TÍTULO (Title Case) →
    AUTORES + afiliação → e‑mail PELADO (1 por trabalho) → Objetivo/Palavras‑chave". Sem RESUMO/Introdução/sumário
    e título NÃO é CAIXA ALTA, então os outros cortadores não pegam. Aqui o e‑mail é a ÂNCORA: o trabalho é o bloco
@@ -3870,7 +3954,8 @@ async function collectFromPDF(file, mode){
     const viaNep = parseModeloNomeEmailParen(text); // MODELO "Nome (email)" (Even3/Conciam, ex.: 523357) ([] se não for esse formato)
     const viaSB = parseModeloSumarioBio(text);      // MODELO "sumário + biografias" (e‑mails só na seção de autores, ex.: Profletras) ([] se não for esse formato)
     const viaRT = parseModeloRodapeTitulacao(text); // MODELO "rodapé com titulação" (autor Nº ↔ rodapé "N Doutor…; afiliação. email", ex.: 8º SNFPM) ([] se não for esse formato)
-    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eAut = comEmail(viaAut), eEsc = comEmail(viaEsc), ePC = comEmail(viaPC), eEmail = comEmail(viaEmail), eUni = comEmail(viaUni), eOrc = comEmail(viaOrc), eNep = comEmail(viaNep), eSB = comEmail(viaSB), eRT = comEmail(viaRT);
+    const viaAN = parseModeloAutorNotaEven3(text);  // MODELO "autor numerado + nota-bio" (Even3/ANPAP, ex.: 559116) ([] se não for esse formato)
+    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eAut = comEmail(viaAut), eEsc = comEmail(viaEsc), ePC = comEmail(viaPC), eEmail = comEmail(viaEmail), eUni = comEmail(viaUni), eOrc = comEmail(viaOrc), eNep = comEmail(viaNep), eSB = comEmail(viaSB), eRT = comEmail(viaRT), eAN = comEmail(viaAN);
     // Prefere o SUMÁRIO (títulos oficiais, limpos). Só troca pro método antigo quando ele pega
     // MUITO mais e-mail (≥25% e +5) — aí o ganho compensa títulos um pouco menos limpos.
     let works;
@@ -3891,6 +3976,12 @@ async function collectFromPDF(file, mode){
       // nome → pareamento DIRETO (0 troca), título limpo (tira "RESUMO - CATEGORIA"), 1 trabalho por artigo.
       works = viaNep;
       modelosUsados["Anais · Nome (e‑mail) [Even3]"] = (modelosUsados["Anais · Nome (e‑mail) [Even3]"]||0) + 1;
+      lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
+    } else if(eAN>0){
+      // MODELO AUTOR NUMERADO + NOTA-BIO (Even3/ANPAP): guarda «Associado/a/e ANPAP» é do template — sem
+      // risco de sequestro. Sem ele, o rodapé-titulação disparava e pegava só 16 de ~118 e-mails (559116).
+      works = viaAN;
+      modelosUsados["Anais · autor numerado + nota-bio (ANPAP)"] = (modelosUsados["Anais · autor numerado + nota-bio (ANPAP)"]||0) + 1;
       lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
     } else if(eSB>0){
       // MODELO SUMÁRIO+BIOGRAFIAS (Profletras): e‑mails só na seção final de autores; o casamento vem do
@@ -5609,9 +5700,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.13";
+const VERSION = "16.14";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.14","2026-08-19","NOVO MODELO «autor numerado + nota-bio» (Even3/ANPAP, ex.: 559116 — 34º Encontro da ANPAP, 4.081 páginas). Formato: cabeçalho «TÍTULO → [Nº] Nome → Instituição → Associado/a/e ANPAP:» logo acima do RESUMO, e os e-mails em NOTAS-BIO numeradas com o mesmo nº do autor, espalhadas pelo artigo (nem toda nota tem e-mail — muitas só têm Lattes/ORCID). Nenhum cortador reconhecia; o de rodapé-titulação disparava e pegava só 16 de 118 e-mails — o resto caía sem nome. O cortador novo entende as variantes do template: nº isolado acima do nome, nº GRUDADO no nome («…Freitas1»), «[1]», «1)», nota com bio longa atravessando página (nº de página solto no meio NÃO quebra a leitura). GUARDA do template (≥10 «Associado/a/e ANPAP») — não dispara em nenhum outro anais. De quebra, DOIS reparos GERAIS de e-mail na extração: (1) e-mail com ACENTO no PDF («nina.simão@…» virava o fragmento «o@…») agora é normalizado; (2) HÍFEN do local quebrado por espaço («karine.g.perez - vieira@…» virava «vieira@…») agora é juntado. Resultado no 559116: 178 trabalhos · 118/118 e-mails (100%%) · 172 com título · 96%% dos nomes pareados corretos; e-mails de corpo de texto e cabeçalhos atípicos vão pra revisão, como devem. Regressão nos 19 PDFs: zero mudança."],
   ["16.13","2026-08-18","CONSERTA os nomes sumindo no anais Even3 do CIC/Itaperuna (701655) — o cortador pegava TODOS os 1.347 nomes, mas uma DEFESA apagava 618 deles no meio da esteira. Causa: o trecho‑prova (_raw) de cada trabalho guardava o FIM do bloco; em eventos SEM rótulo «Introdução:» o fim é só corpo do resumo (sem os autores), então a conferência «o nome está no PDF?» não achava o nome ali e o apagava como se fosse inventado. Agora o _raw guarda o COMEÇO do bloco (título+autores). E uma correção GERAL de ordem: a rede final de recuperação de nomes rodava só na EXPORTAÇÃO — a TABELA mostrava «(sem nome)» que o Excel depois consertava (confuso pra equipe). Agora ela roda também no fim da esteira: a tela, a trava de nome e a memória já veem o resultado restaurado. Verificado no 701655 pela esteira completa: 382 trabalhos · 1.351 linhas · 736 e‑mails (100%%) · 100%% com nome · 380 com título. Regressão nos 18 PDFs da bateria: zero mudança."],
   ["16.12","2026-07-14","A pedido: REMOVIDAS as duas travas de exportação. Antes, o usuário comum não conseguia baixar o Excel/CSV/JSON quando (⛔) algum PDF não passava na conferência de cobertura (pedia contato com o administrador) OU quando (⚠) havia linhas ainda não confirmadas com OK. Agora qualquer usuário baixa o arquivo sempre. A conferência (📊 Cobertura), os avisos ⚠ na tabela e o Relatório de descartes CONTINUAM aparecendo pra orientar a revisão — só não impedem mais o download."],
   ["16.11","2026-07-14","Conserta o TÍTULO em papers de congresso que puxavam o NOME DO EVENTO (ex.: Imunoendocrino/ENMC). A 1ª linha do PDF é «XXVIII ENMC, XVI ECTM» (números romanos + siglas) e vinha COLADA na frente do título de verdade («A SIMPLIFIED COMPUTATIONAL MODEL…»). O extrator de título agora reconhece essa linha como CABEÇALHO DE EVENTO (linha inteira feita de «ROMANO SIGLA») e a descarta — números romanos são restritivos (só I,V,X,L,C,D,M), então não pega título comum em CAIXA ALTA. De quebra, novo parser para autores no formato «Nome Completo[nº] ‑ email» (e‑mail colado no nome com traço, comum nesses papers): pareamento DIRETO nome↔e‑mail (0 troca), aceitando inicial de uma letra no meio do nome («Barbara de M Quintela»). Nesse PDF: título certo + 4/4 autores com e‑mail (antes as afiliações entravam como nome e 1 autor ficava sem nome, derrubando a cobertura). Regressão nos 18 PDFs de anais: zero — o parser novo só atua em ARTIGO ÚNICO."],
