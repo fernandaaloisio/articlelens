@@ -2188,7 +2188,10 @@ function parseModeloNomeEmailParen(text){
     let t2=cab.replace(reCat,"");
     if(t2===cab) t2=cab.replace(/^[\s\S]*?RESUMO\s*[-–]\s*/i,"");           // categoria desconhecida: tira só "RESUMO -"
     let titulo=t2.replace(/\s+/g," ").trim(); if(titulo.length>240) titulo="";
-    works.push({title:titulo, authors, _raw:head.slice(-1600)});
+    // _raw = COMEÇO do bloco (título+autores). Era o FIM (slice(-1600)) — e em eventos SEM rótulo
+    // «Introdução:» o fim é só corpo do resumo, sem os autores → o _blanquear não achava os nomes
+    // no _raw e APAGAVA centenas de nomes legítimos (701655: 618 apagados). (v16.13)
+    works.push({title:titulo, authors, _raw:head.slice(0,1800)});
   }
   return works;
 }
@@ -4309,6 +4312,10 @@ async function processBatch(){
   try{ _recuperarNomeAbrev(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("recuperarNomeAbrev:",e); }   // puxa nome ABREVIADO do "AUTORIA:" (honesto, não inventa)
   try{ _recuperarNomes(allResults, (_runTextos||[]).map(t=>t.text).join("\n")); }catch(e){ console.warn("recuperarNomes:",e); }   // puxa nome do RODAPÉ (número/nome) p/ e-mails sem nome
   try{ _corrigirEmailTrocado(allResults); }catch(e){ console.warn("corrigirEmailTrocado:",e); }   // e-mail no autor errado → passa pro autor que o local-part comprova (ANTES de excluir/aprender)
+  // REDE FINAL também AQUI (v16.13): as defesas acima podem apagar nome legítimo (falso "inventado");
+  // antes só a EXPORTAÇÃO restaurava — a TABELA mostrava "(sem nome)" que o Excel depois consertava.
+  // Agora a tela, o gate de nome e a memória já veem o resultado restaurado.
+  try{ recuperarNomesColados(allResults, _runTextos); }catch(e){ console.warn("recuperarNomes(fim):",e); }
   try{ _parearNomesComEmails(allResults); }catch(e){ console.warn("parear:",e); }   // pareia nome↔e-mail solto ANTES de excluir/aprender
   try{ _aprenderMemoria(allResults); }catch(e){ console.warn("aprenderMemoria:",e); }
   // BLINDAGEM: cada passo final em try/catch — se um falhar, os DADOS continuam prontos
@@ -5602,9 +5609,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.12";
+const VERSION = "16.13";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.13","2026-08-18","CONSERTA os nomes sumindo no anais Even3 do CIC/Itaperuna (701655) — o cortador pegava TODOS os 1.347 nomes, mas uma DEFESA apagava 618 deles no meio da esteira. Causa: o trecho‑prova (_raw) de cada trabalho guardava o FIM do bloco; em eventos SEM rótulo «Introdução:» o fim é só corpo do resumo (sem os autores), então a conferência «o nome está no PDF?» não achava o nome ali e o apagava como se fosse inventado. Agora o _raw guarda o COMEÇO do bloco (título+autores). E uma correção GERAL de ordem: a rede final de recuperação de nomes rodava só na EXPORTAÇÃO — a TABELA mostrava «(sem nome)» que o Excel depois consertava (confuso pra equipe). Agora ela roda também no fim da esteira: a tela, a trava de nome e a memória já veem o resultado restaurado. Verificado no 701655 pela esteira completa: 382 trabalhos · 1.351 linhas · 736 e‑mails (100%%) · 100%% com nome · 380 com título. Regressão nos 18 PDFs da bateria: zero mudança."],
   ["16.12","2026-07-14","A pedido: REMOVIDAS as duas travas de exportação. Antes, o usuário comum não conseguia baixar o Excel/CSV/JSON quando (⛔) algum PDF não passava na conferência de cobertura (pedia contato com o administrador) OU quando (⚠) havia linhas ainda não confirmadas com OK. Agora qualquer usuário baixa o arquivo sempre. A conferência (📊 Cobertura), os avisos ⚠ na tabela e o Relatório de descartes CONTINUAM aparecendo pra orientar a revisão — só não impedem mais o download."],
   ["16.11","2026-07-14","Conserta o TÍTULO em papers de congresso que puxavam o NOME DO EVENTO (ex.: Imunoendocrino/ENMC). A 1ª linha do PDF é «XXVIII ENMC, XVI ECTM» (números romanos + siglas) e vinha COLADA na frente do título de verdade («A SIMPLIFIED COMPUTATIONAL MODEL…»). O extrator de título agora reconhece essa linha como CABEÇALHO DE EVENTO (linha inteira feita de «ROMANO SIGLA») e a descarta — números romanos são restritivos (só I,V,X,L,C,D,M), então não pega título comum em CAIXA ALTA. De quebra, novo parser para autores no formato «Nome Completo[nº] ‑ email» (e‑mail colado no nome com traço, comum nesses papers): pareamento DIRETO nome↔e‑mail (0 troca), aceitando inicial de uma letra no meio do nome («Barbara de M Quintela»). Nesse PDF: título certo + 4/4 autores com e‑mail (antes as afiliações entravam como nome e 1 autor ficava sem nome, derrubando a cobertura). Regressão nos 18 PDFs de anais: zero — o parser novo só atua em ARTIGO ÚNICO."],
   ["16.10","2026-07-14","ACHADO o ponto exato que TRAVAVA o anais de rodapé numerado (8º SNFPM) — e eram TRÊS peças: (1) BUG DE REGEX no leitor de rodapé: um número‑lixo da página («v. 9, n. 17…», ano, nº de página) casava o padrão «Nº … e‑mail» e ENGOLIA o texto até o e‑mail do rodapé verdadeiro — o cursor pulava pra depois dele e o rodapé certo nunca era lido (caso Karin Jelinek). Agora o cursor REBOBINA pra logo depois do número inválido. (2) NOTA DO TÍTULO desloca a numeração: quando o título tem a nota 1 («Esta Comunicação Oral apresenta…»), os autores começam no 2 — a sequência de autores agora pode começar em 1 OU 2. (3) E‑MAIL QUEBRADO por espaço sem rótulo («ana.vi tolo@sesisp…», «pereira. 173@gmail…») inflava o alvo com fragmentos e criava linhas sem nome — o reparador de extração agora junta (sem colar domínio: «unesp.br fulano@» fica separado). RESULTADO no 8º SNFPM: e‑mails pareados 201→214 de 229, linhas sem nome da rede 28→15, cobertura de NOME no gate 91%→95% — o PDF DESTRAVA. Quem ainda fica sem nome vai pra revisão (rodapés atípicos de verdade). Regressão nos 17 PDFs: zero mudança. OBS: o resultado que veio com 49%% sem nome era de VERSÃO ANTIGA em cache — Ctrl+Shift+R antes de rodar."],
