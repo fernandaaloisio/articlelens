@@ -940,7 +940,7 @@ function titleFromText(text){
   // Filtra ruído de cabeçalho/rodapé da revista (PDF.js às vezes entrega antes do título):
   // nome da revista, cidade, ISSN, "v.X n.Y", "p.1-14", DOI, URLs, datas, Lattes, ORCID, nº de página.
   // v16.15: ISSN espaçado ("IS S N: 2 17 8…"), "(CC BY", "Eixo:", "Área Temática:", "Artigos Completos".
-  const noise = /^\s*(revista\b|são josé dos pinhais|iss?n|i\s*s\s*s?\s*n|v\.?\s*\d+\s*,?\s*n\.?\s*\d+|p\.?\s*\d+\s*-\s*\d+|doi\b|https?:\/\/|data de (submiss|public)|submitted on|publication date|lattes\b|orcid|©|\(cc by|eixo\s*:|[áa]rea\s+tem[áa]tica\s*:|artigos?\s+completos?\b|\d{1,4})\b/i;
+  const noise = /^\s*(revista\b|são josé dos pinhais|iss?n|i\s*s\s*s?\s*n|v\.?\s*\d+\s*,?\s*n\.?\s*\d+|p\.?\s*\d+\s*-\s*\d+|doi\b|https?:\/\/|data de (submiss|public)|submitted on|publication date|lattes\b|orcid|©|\(cc by|eixo\b|[áa]rea\s+tem[áa]tica\s*:|artigos?\s+completos?\b|\d{1,4})\b/i;
   // Cabeçalho de evento com ORDINAL ROMANO ("VI CONGRESSO INTERNACIONAL…", "VII SEMINÁRIO NACIONAL…") (v16.15)
   const eventoRomano = /^[IVXLC]{1,6}\s+(congresso|semin[áa]rio|simp[óo]sio|encontro|jornada|col[óo]quio|f[óo]rum|mostra|confer[êe]ncia)\b/i;
   // Cabeçalho de EVENTO (anais/congresso/simpósio) NÃO é título — remover essas linhas.
@@ -982,7 +982,37 @@ function titleFromText(text){
     for(; i<l.length && cont<_pref.length; i++){ if(!/\s/.test(l[i])) cont++; }
     return l.slice(i).trim();
   };
-  const lines = text.split("\n").map(s=>tiraPrefixo(s.trim())).filter(s=>s.length>0 && !noise.test(s) && !evento.test(s) && !eventoSigla.test(s) && !eventoRomano.test(s) && !categoria.test(s) && !cabecalhoCorrente(s));
+  // filtro com ESTADO (v16.24): linha de evento terminando em ":" arrasta a continuação em CAPS
+  // ("VI CONGRESSO … SOCIAL:" → "DESAFIOS CONTEMPORÂNEOS"); "Eixo:" sem ponto final arrasta a
+  // continuação que começa em minúscula ("Eixo: … povos indígenas, comunidades" → "tradicionais e …").
+  // Linha SÓ EM CAPS com palavra de evento (sem exigir romano no começo): "VI CONGRESSO DE DIREITO
+  // À CIDADE E JUSTIÇA AMBIENTAL" quebrada em qualquer ponto ainda é cabeçalho. (v16.24)
+  const eventoCaps = s => !/[a-zà-ÿ]/.test(s) && /\b(CONGRESSO|SEMIN[ÁA]RIO|SIMP[ÓO]SIO|ENCONTRO|JORNADA|COL[ÓO]QUIO|F[ÓO]RUM|CONFER[ÊE]NCIA|WORKSHOP)\b/.test(s);
+  const lines = [];
+  { let contCaps=false, contEixo=0, contParen=false;
+    for(const s0 of text.split("\n")){
+      let s = tiraPrefixo(s0.trim());
+      if(!s) continue;
+      // rótulo "(Eixo …" que abre parêntese numa linha e fecha na outra: pula até o ")"
+      if(contParen){ const j=s.indexOf(")"); if(j<0) continue; s=s.slice(j+1).trim(); contParen=false; if(!s) continue; }
+      if(/^\([^()]{12,}$/.test(s)){ contParen=true; continue; }
+      // continuação de cabeçalho de evento: fragmento CAPS curto (≤45) logo após linha de evento
+      // removida ("SOCIAL: DESAFIOS CONTEMPORÂNEOS", "SOCIAIS") — encadeia até achar conteúdo normal
+      if(contCaps){ if(!/[a-zà-ÿ]/.test(s) && /[A-ZÀ-Ý]/.test(s) && s.length<=45 && !eventoCaps(s)) continue; if(!eventoCaps(s)) contCaps=false; }
+      if(contEixo>0){ if(/^[a-zà-ÿ]/.test(s)){ contEixo--; continue; } contEixo=0; }
+      if(/^\([^()]{3,90}\)$/.test(s)){ continue; }           // linha inteira entre parênteses = rótulo de eixo/categoria
+      // rótulo "(Eixo …)" LONGO colado no começo da linha do título → tira o prefixo; ≥12 chars
+      // preserva títulos legítimos tipo "(Des)proteção social…" / "(Re)pensando…"
+      s = s.replace(/^\([^()]{12,120}\)\s*/,"").trim();
+      if(!s) continue;
+      if(noise.test(s) || evento.test(s) || eventoSigla.test(s) || eventoRomano.test(s) || eventoCaps(s) || categoria.test(s) || cabecalhoCorrente(s)){
+        if(eventoRomano.test(s) || eventoCaps(s) || (evento.test(s) && /:\s*$/.test(s))) contCaps=true;
+        if(/^eixo\b/i.test(s) && !/[.!?]\s*$/.test(s)) contEixo=2;
+        continue;
+      }
+      lines.push(s);
+    }
+  }
   // Para no início do corpo (abstract/resumo/autores com e-mail)
   const stop = /^(abstract|resumo|keywords|palavras[- ]?chave|introdu|1[\.\)]\s)/i;
   const head = [];
@@ -996,7 +1026,9 @@ function titleFromText(text){
   const outraLingua = /\b(the|of|and|for|with|from|applied|stage|wheat|tillering|selectivity|effect|evaluation|study|del|la|el|en|durante|etapa|ahijamiento|aplicado durante)\b/i;
   // Título PRINCIPAL em inglês (BJD/BJHR etc.): continuação em inglês NÃO é tradução — junta.
   // Nesse caso a parada passa a ser quando começa a versão PT/ES (acento latino ou palavra funcional PT/ES).
-  const _ehIngles = s => /\b(the|of|and|for|with|from|in|on|a|an)\b/i.test(s||"") && !/[à-ÿÀ-Ý]/.test(s||"");
+  const _ehIngles = s => (((s||"").match(/\b(the|of|and|for|with|from|in|on|an|to|by)\b/gi)||[]).length>=2
+                          && !/[à-ÿÀ-Ý]/.test(s||"")
+                          && !/\b(d[aeo]s?|n[ao]s?|e|uma?|em|para|com|que|sobre)\b/i.test(s||""));
   const linguaPTES = /[à-ÿÀ-Ý]|\b(uma?|umas?|d[aeo]s?|n[ao]s?|em|para|com|el|del|los|las|una)\b/i;
   // TRADUÇÃO em inglês que o outraLingua não pega ("An intelligent approach to … based on"):
   // palavras funcionais EN ampliadas E nenhuma marca de português (acento, de/da/em/com…) —
@@ -1006,14 +1038,33 @@ function titleFromText(text){
   // LINHA DE AUTORES (não é continuação do título): "Nome Sobrenome1; Nome2…" ou "Nome Sobrenome¹;"
   const ehAutores = s => (/;/.test(s) && /[A-ZÀ-Ý][a-zà-ÿ]+\s+[A-ZÀ-Ý]/.test(s))
                       || /^[A-ZÀ-Ý][a-zà-ÿ]+(?:\s+(?:[A-ZÀ-Ý][a-zà-ÿ.]+|d[aeo]s?|e|von|van))+\s*[\d¹²³⁴⁵⁶⁷⁸⁹]\s*[;,]?/.test(s);
+  // LINHA que é SÓ nome de gente (v16.24) — para o título antes de colar o autor:
+  //   • nome pleno: 3–6 tokens TitleCase/conectivo, sem vírgula, sem dígito ("Vanessa Carolina Prates")
+  //   • lista SBC "Nome , Nome , Nome" (sobrescritos viraram linha separada): TODOS os grupos são nome
+  const _nomePleno = s => { s=s.trim();
+    if(/[,;:@\d¹²³⁴⁵⁶⁷⁸⁹()]/.test(s)) return false;
+    const tk=s.split(/\s+/); if(tk.length<3||tk.length>6) return false;
+    if(!/[a-zà-ÿ]/.test(s)) return false;                      // ALL CAPS = provável título
+    return tk.every(t=>/^(d[aeo]s?|e|von|van|de|la|del)$/.test(t) || /^[A-ZÀ-Ý][\p{L}'’.\-]*$/u.test(t)); };
+  const _listaNomes = s => { const gs=s.replace(/^\s*,+|,+\s*$/g,"").split(/\s*,\s*/).filter(Boolean);
+    if(gs.length<2) return false;
+    return gs.every(g=>{ g=g.trim(); const tk=g.split(/\s+/);
+      return tk.length>=2 && tk.length<=6 && /[a-zà-ÿ]/.test(g) && !/[@\d:()]/.test(g)
+        && tk.every(t=>/^(d[aeo]s?|e|von|van|de|la|del)$/.test(t) || /^[A-ZÀ-Ý][\p{L}'’.\-]*$/u.test(t)); }); };
+  // "Nome Completo (SIGLA – UF) 1" — autor com afiliação curta entre parênteses (v16.24)
+  const _nomeAfil = s => /^[A-ZÀ-Ý][\p{L}'’.\- ]{4,60}\(\s*[^()]{2,40}\)\s*[\d¹²³⁴⁵⁶⁷⁸⁹]{0,2}\s*$/u.test(s.trim())
+    && s.trim().split("(")[0].trim().split(/\s+/).every(t=>/^(d[aeo]s?|e|von|van|de|la|del|Profa?\.?|Dra?\.?|Me\.?|Esp\.?)$/i.test(t) || /^[A-ZÀ-Ý][\p{L}'’.\-]*$/u.test(t));
   const parts=[pool[idx]];
   const emIngles = _ehIngles(pool[idx]);          // título principal já é inglês → não parar em "the/of/and"
   for(let i=idx+1;i<pool.length;i++){ const s=pool[i];
     if(!/[A-Za-zÀ-ÿ]/.test(s) || /@/.test(s) || stop.test(s)) break;
     if(ehAutores(s)) break;                       // chegou na lista de autores → para (não cola no título)
-    // título até aqui termina em preposição/conjunção solta ("…Rurais de") → a próxima linha é
-    // CONTINUAÇÃO na certa (tradução nunca começa depois de preposição pendurada)
-    const pendente = /[ ](d[aeo]s?|e|em|para|com|n[ao]s?|à|aos?|às|and|of|the|in|for|with|to|y|del|la|los|las|en)$/i.test(parts[parts.length-1]);
+    // título até aqui termina em preposição/artigo solto ("…Rurais de", "…: a") → a próxima linha é
+    // CONTINUAÇÃO na certa (nem tradução nem autor começam depois de preposição pendurada)
+    const pendente = /[ :]([ao]|d[aeo]s?|e|em|para|com|n[ao]s?|à|aos?|às|uma?|an?|and|of|the|in|for|with|to|y|del|la|el|los|las|en|una?)$/i.test(parts[parts.length-1]);
+    if(!pendente && parts.join(" ").length>=20
+       && (typeof _INST_RE==="undefined" || !_INST_RE.test(s))          // "Escola de Governo de Ibiporã" é lugar, não gente
+       && (_nomePleno(s) || _listaNomes(s) || _nomeAfil(s))) break;     // linha só-nome(s) → autores (v16.24)
     if(!pendente && (emIngles ? linguaPTES.test(s) : (outraLingua.test(s) || ehTraducaoEN(s)))) break;   // começou a TRADUÇÃO → para
     if(/[.;]\s*$/.test(parts[parts.length-1])) break;  // título raramente termina com . ou ;
     parts.push(s);
@@ -5991,9 +6042,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.23";
+const VERSION = "16.24";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.24","2026-08-26","Títulos SOL/SBC e de congressos com eixo temático (a pedido, VI Política Social): (1) linha que é SÓ nomes de pessoas — «Nome , Nome , Nome» do SBC (sobrescritos em linha separada) ou nome pleno/nome (SIGLA) — encerra o título em vez de colar nele; (2) cabeçalho de evento em CAPS quebrado em QUALQUER ponto agora cai por inteiro (encadeia fragmentos curtos tipo «DESAFIOS CONTEMPORÂNEOS»); (3) rótulo de eixo em toda forma — «Eixo:», «Eixo Fundamentos…», «(Eixo …)» na mesma linha ou abrindo parêntese numa linha e fechando na outra — é removido; (4) título terminando em artigo solto («…: a») sempre puxa a linha seguinte, e linha com cara de instituição não é confundida com autor. SOL: 0 títulos com autor colado; Política Social: 0 resíduos de cabeçalho/eixo. BJD/BJHR/CCSS/Contemporânea/South Florida re-verificados idênticos; bateria dos 20 anais idêntica."],
   ["16.23","2026-08-26","Título PT não cola mais o COMEÇO da tradução inglesa («…aprendizado de máquina An intelligent approach to…»): o detector de tradução conhecia só the/of/and — agora tem um detector EN reforçado (an, to, on, based, using, study, approach…) que exige AUSÊNCIA de qualquer marca de português (acento, de/da/em/com), então título PT com «in vitro»/«in loco» continua juntando normal. BJD reconferido: 0 títulos com tradução colada; BJHR/South Florida/Contribuciones idênticos; bateria dos 20 anais idêntica."],
   ["16.22","2026-08-26","Título multilinha não corta mais em revistas com título PRINCIPAL EM INGLÊS (BJD/BJHR/South Florida): a parada de «começou a tradução» via a continuação inglesa (the/of/and) e cortava o título no meio. Agora o sistema detecta o idioma do título: se já é inglês, junta a continuação em inglês e para quando começa o português/espanhol. E título terminando em preposição solta («…Escolas Rurais de») SEMPRE puxa a linha seguinte — tradução nunca começa depois de preposição pendurada (corrige o falso-espanhol de «durante»). BJD/BJHR/South Florida: 0 títulos cortados. Bateria dos 20 anais idêntica."],
   ["16.21","2026-08-26","Bloco de autores de periódico agora entende ESPANHOL e INGLÊS: o modelo Nome/cargo/Instituição/E-mail só reconhecia «Instituição:» em português — revistas como a Contribuciones a las Ciencias Sociales («Institución:» + «Correo electrónico:») e artigos em inglês («Institution:» + «E-mail:») caíam no pareamento genérico e perdiam nomes fáceis. Agora: rótulos Institución/Institution/Dirección/Address/Correo reconhecidos e cargos em es/en (Estudiante de Medicina, PhD in Nursing…) não viram nome. Contribuciones: 110→141 nomes (100%%); OLEL: 28→39 (100%%); Brazilian J: 115→133; Contemporânea: 146→151. Bateria dos 20 anais idêntica."],
