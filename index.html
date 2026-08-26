@@ -929,9 +929,20 @@ function titleFromText(text){
       if(t.length>=12) return t;
     }
   }
+  // CABEÇALHO CORRENTE (v16.15): linha que se REPETE em ≥3 páginas é cabeçalho da revista/do evento
+  // ("Contemporary Journal Vol…", "Research, Society and Development, v…", "Anais XVI Seminário…",
+  // "I Seminário Nacional Infância…") — NUNCA é título. Detecção por frequência: geral, sem lista.
+  const _freq = {};
+  for(const l of text.split("\n")){ const k=l.replace(/\d+/g,"#").replace(/\s+/g," ").trim().toLowerCase();
+    if(k.length>=12) _freq[k]=(_freq[k]||0)+1; }
+  const cabecalhoCorrente = l => { const k=l.replace(/\d+/g,"#").replace(/\s+/g," ").trim().toLowerCase();
+    return k.length>=12 && _freq[k]>=3; };
   // Filtra ruído de cabeçalho/rodapé da revista (PDF.js às vezes entrega antes do título):
   // nome da revista, cidade, ISSN, "v.X n.Y", "p.1-14", DOI, URLs, datas, Lattes, ORCID, nº de página.
-  const noise = /^\s*(revista\b|são josé dos pinhais|iss?n|v\.?\s*\d+\s*,?\s*n\.?\s*\d+|p\.?\s*\d+\s*-\s*\d+|doi\b|https?:\/\/|data de (submiss|public)|submitted on|publication date|lattes\b|orcid|©|\d{1,4})\b/i;
+  // v16.15: ISSN espaçado ("IS S N: 2 17 8…"), "(CC BY", "Eixo:", "Área Temática:", "Artigos Completos".
+  const noise = /^\s*(revista\b|são josé dos pinhais|iss?n|i\s*s\s*s?\s*n|v\.?\s*\d+\s*,?\s*n\.?\s*\d+|p\.?\s*\d+\s*-\s*\d+|doi\b|https?:\/\/|data de (submiss|public)|submitted on|publication date|lattes\b|orcid|©|\(cc by|eixo\s*:|[áa]rea\s+tem[áa]tica\s*:|artigos?\s+completos?\b|\d{1,4})\b/i;
+  // Cabeçalho de evento com ORDINAL ROMANO ("VI CONGRESSO INTERNACIONAL…", "VII SEMINÁRIO NACIONAL…") (v16.15)
+  const eventoRomano = /^[IVXLC]{1,6}\s+(congresso|semin[áa]rio|simp[óo]sio|encontro|jornada|col[óo]quio|f[óo]rum|mostra|confer[êe]ncia)\b/i;
   // Cabeçalho de EVENTO (anais/congresso/simpósio) NÃO é título — remover essas linhas.
   const evento = /(anais d|congresso brasileiro|simp[óo]sio brasileiro|\(cbie|\(sbie|cbie \d|sbie \d|mostra de pesquisa|semana de ci[êe]ncia|brazilian symposium|proceedings of|workshop de inform)/i;
   // Cabeçalho de evento por SIGLA: linha inteira feita de "ROMANO SIGLA" (ex.: "XXVIII ENMC, XVI ECTM").
@@ -939,7 +950,39 @@ function titleFromText(text){
   const eventoSigla = /^(?:[IVXLCDM]{2,}\.?\s+[A-ZÀ-Ý&]{2,8}[,;.]?\s*){1,5}$/;
   // Rótulo de categoria do Even3 ("RESUMO EXPANDIDO - ÁREA", "ARTIGO - ÁREA", "PÔSTER - …") NÃO é título.
   const categoria = /^(resumo expandido|resumo simples|artigo|p[ôo]ster(\s+digital)?|comunica[çc][ãa]o oral|apresenta[çc][ãa]o oral|trabalho completo|minicurso|relato de experi[êe]ncia)\s*[-–—]/i;
-  const lines = text.split("\n").map(s=>s.trim()).filter(s=>s.length>0 && !noise.test(s) && !evento.test(s) && !eventoSigla.test(s) && !categoria.test(s));
+  // PREFIXO COMUM ENTRE PÁGINAS (v16.15): quando o cabeçalho vem COLADO na mesma linha física do título
+  // ("Contemporary Journal Vol. 6… Artigo VELOCIDADE…", "Educação na Era Digital… A INCLUSÃO…"), a linha
+  // inteira difere por artigo e a frequência não pega. Mas o INÍCIO das primeiras linhas de cada página é
+  // igual → é cabeçalho. Detecta o prefixo comum (normalizado sem espaço) e o remove da linha.
+  const _sp = s => s.toLowerCase().replace(/\s+/g,"");
+  let _pref = "";
+  try{
+    // usa as TRÊS primeiras linhas de cada página (o cabeçalho quebra em 2–3, com quebras DIFERENTES
+    // por página: "Educação na Era Digital: / Políticas, Formação e Práticas / Educativas em Debate")
+    const tops = text.split("\f").map(p=>p.split("\n").map(x=>x.trim()).filter(Boolean).slice(0,3).join(" "))
+                     .filter(x=>x.replace(/\s+/g,"").length>=15);
+    if(tops.length>=2){
+      const n0=_sp(tops[0]); let melhor=0;
+      for(let t=1;t<Math.min(tops.length,6);t++){ const nt=_sp(tops[t]);
+        let c=0; const M=Math.min(n0.length, nt.length, 200);
+        while(c<M && n0[c]===nt[c]) c++;                       // maior prefixo comum caractere a caractere
+        if(c>melhor) melhor=c;
+      }
+      if(melhor>=22) _pref=n0.slice(0,melhor);
+    }
+  }catch(_){}
+  const tiraPrefixo = l => {
+    if(!_pref) return l;
+    const alvoN=_sp(l);
+    // linha INTEIRA é pedaço do cabeçalho ("Educação na Era Digital:", "Políticas, Formação e Práticas") → some
+    if(alvoN.length>=8 && _pref.includes(alvoN)) return "";
+    if(!alvoN.startsWith(_pref)) return l;
+    // cabeçalho COLADO no começo da linha → corta o trecho equivalente ao prefixo normalizado
+    let cont=0, i=0;
+    for(; i<l.length && cont<_pref.length; i++){ if(!/\s/.test(l[i])) cont++; }
+    return l.slice(i).trim();
+  };
+  const lines = text.split("\n").map(s=>tiraPrefixo(s.trim())).filter(s=>s.length>0 && !noise.test(s) && !evento.test(s) && !eventoSigla.test(s) && !eventoRomano.test(s) && !categoria.test(s) && !cabecalhoCorrente(s));
   // Para no início do corpo (abstract/resumo/autores com e-mail)
   const stop = /^(abstract|resumo|keywords|palavras[- ]?chave|introdu|1[\.\)]\s)/i;
   const head = [];
@@ -963,7 +1006,15 @@ function titleFromText(text){
     parts.push(s);
     if(parts.join(" ").length>200) break;
   }
-  return parts.join(" ").replace(/\s+/g," ").trim() || null;
+  return parts.join(" ").replace(/\s+/g," ")
+    // masthead de revista COLADO no título ("Contemporary Journal Vol. 6 N°. 6 : p. 01-11, 2026 Artigo …") (v16.15)
+    .replace(/^.{0,60}?vol\.?\s*\d+\s*n\s*°?\s*\.?\s*\d+\s*:?\s*p\.?\s*[\d\s\-–]+,?\s*[\d\s]{2,6}\s*/i,"")
+    .replace(/^Artigo\s+(?=[A-ZÀ-Ý])/,"")                                  // rótulo "Artigo" solto antes do título (Contemporânea)
+    // cabeçalho de congresso temático colado: tudo até "Eixo: <Tema Em Title-Case>" cai; o título CAPS fica (v16.15)
+    .replace(/^[\s\S]{0,220}?\bEixo\s*:\s*(?:[A-ZÀ-Ý][a-zà-ÿ]+[\s,]*|e\s+|à\s+|d[aeo]s?\s+)+(?=[A-ZÀ-Ý]{2,})/,"")
+    .replace(/\s*[ÁA]rea\s+Tem[áa]tica\s*:.*$/i,"")                        // sufixo "Área Temática: …" (SENPEX)
+    .replace(/\s*(?:nd\s+|st\s+|rd\s+|th\s+)?(?:Received|Accepted|Recebido|Aceito)\s+(?:on|em)\s*:.*$/i,"")   // sufixo "Received on:/Aceito em:" (SFJD) (v16.15)
+    .trim() || null;
 }
 
 /* =========================================================================
@@ -979,7 +1030,7 @@ function extractEmails(text){
   text = text.replace(/[​‌‍﻿]/g,"");
   const found = [];
   // 1) e-mails em CHAVE (estilo SBC): {a,b}@dom -> a@dom, b@dom
-  let m, brace = /\{([^}]+)\}@([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;
+  let m, brace = /\{([^}]+)\}\s*@\s*([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;   // aceita "} @furg.br" com espaço (SBC/SOL) (v16.15)
   while((m = brace.exec(text))){
     const dom = m[2];
     m[1].split(",").forEach(loc=>{
@@ -988,7 +1039,7 @@ function extractEmails(text){
     });
   }
   // 2) e-mails normais (ignorando os que estavam em chave)
-  const plain = text.replace(/\{[^}]+\}@[a-zA-Z0-9.\-]+/g," ");
+  const plain = text.replace(/\{[^}]+\}\s*@\s*[a-zA-Z0-9.\-]+/g," ");
   (plain.match(EMAIL_RE)||[]).forEach(e=>found.push(e.toLowerCase().replace(/[.,;)]+$/,"")));
   return [...new Set(found)].filter(_emailReal);
 }
@@ -5700,9 +5751,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.14";
+const VERSION = "16.15";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.15","2026-08-19","LOTE «Links com problemas» (Word da equipe): diagnóstico em massa de 13 fontes e conserto GERAL de TÍTULO em artigo único. A raiz comum: o CABEÇALHO da revista/do evento contaminava o título. Três defesas novas no extrator: (1) linha que se REPETE em ≥3 páginas é cabeçalho corrente, nunca título (Research Society, Brazilian J, SFJD, Anais SENPEX/Unibave, I Seminário Infância — que saía com o nome do evento como título de TODOS os trabalhos); (2) PREFIXO COMUM entre as primeiras linhas das páginas é cabeçalho mesmo quando vem COLADO na mesma linha do título e quebrado diferente em cada página (Even3 profeiuern «Educação na Era Digital…», Contemporary Journal); (3) cabeçalho com ordinal ROMANO («VI CONGRESSO INTERNACIONAL…») e masthead «Vol. N N°. N: p. NN-NN, ano» cortados. Mais: ISSN espaçado («IS S N: 2 17 8…» — GESEC) filtrado; «Área Temática:» (SENPEX) e «Received/Accepted on:» (SFJD) cortados do título; «Eixo:» tratado; e‑mails SBC em CHAVES com espaço («{ a, b } @furg.br» — anais da SOL/SBC) agora expandem. Validado nas 13 pastas do lote (títulos limpos em ~34 de 39 amostras; resíduos vão pra revisão) + Imunoendocrino/ENMC intacto + regressão nos 20 PDFs de anais: zero mudança."],
   ["16.14","2026-08-19","NOVO MODELO «autor numerado + nota-bio» (Even3/ANPAP, ex.: 559116 — 34º Encontro da ANPAP, 4.081 páginas). Formato: cabeçalho «TÍTULO → [Nº] Nome → Instituição → Associado/a/e ANPAP:» logo acima do RESUMO, e os e-mails em NOTAS-BIO numeradas com o mesmo nº do autor, espalhadas pelo artigo (nem toda nota tem e-mail — muitas só têm Lattes/ORCID). Nenhum cortador reconhecia; o de rodapé-titulação disparava e pegava só 16 de 118 e-mails — o resto caía sem nome. O cortador novo entende as variantes do template: nº isolado acima do nome, nº GRUDADO no nome («…Freitas1»), «[1]», «1)», nota com bio longa atravessando página (nº de página solto no meio NÃO quebra a leitura). GUARDA do template (≥10 «Associado/a/e ANPAP») — não dispara em nenhum outro anais. De quebra, DOIS reparos GERAIS de e-mail na extração: (1) e-mail com ACENTO no PDF («nina.simão@…» virava o fragmento «o@…») agora é normalizado; (2) HÍFEN do local quebrado por espaço («karine.g.perez - vieira@…» virava «vieira@…») agora é juntado. Resultado no 559116: 178 trabalhos · 118/118 e-mails (100%%) · 172 com título · 96%% dos nomes pareados corretos; e-mails de corpo de texto e cabeçalhos atípicos vão pra revisão, como devem. Regressão nos 19 PDFs: zero mudança."],
   ["16.13","2026-08-18","CONSERTA os nomes sumindo no anais Even3 do CIC/Itaperuna (701655) — o cortador pegava TODOS os 1.347 nomes, mas uma DEFESA apagava 618 deles no meio da esteira. Causa: o trecho‑prova (_raw) de cada trabalho guardava o FIM do bloco; em eventos SEM rótulo «Introdução:» o fim é só corpo do resumo (sem os autores), então a conferência «o nome está no PDF?» não achava o nome ali e o apagava como se fosse inventado. Agora o _raw guarda o COMEÇO do bloco (título+autores). E uma correção GERAL de ordem: a rede final de recuperação de nomes rodava só na EXPORTAÇÃO — a TABELA mostrava «(sem nome)» que o Excel depois consertava (confuso pra equipe). Agora ela roda também no fim da esteira: a tela, a trava de nome e a memória já veem o resultado restaurado. Verificado no 701655 pela esteira completa: 382 trabalhos · 1.351 linhas · 736 e‑mails (100%%) · 100%% com nome · 380 com título. Regressão nos 18 PDFs da bateria: zero mudança."],
   ["16.12","2026-07-14","A pedido: REMOVIDAS as duas travas de exportação. Antes, o usuário comum não conseguia baixar o Excel/CSV/JSON quando (⛔) algum PDF não passava na conferência de cobertura (pedia contato com o administrador) OU quando (⚠) havia linhas ainda não confirmadas com OK. Agora qualquer usuário baixa o arquivo sempre. A conferência (📊 Cobertura), os avisos ⚠ na tabela e o Relatório de descartes CONTINUAM aparecendo pra orientar a revisão — só não impedem mais o download."],
