@@ -994,14 +994,22 @@ function titleFromText(text){
   const idx = pool.findIndex(s => s.length>=20 && /[A-Za-zÀ-ÿ]/.test(s));
   if(idx<0) return null;
   const outraLingua = /\b(the|of|and|for|with|from|applied|stage|wheat|tillering|selectivity|effect|evaluation|study|del|la|el|en|durante|etapa|ahijamiento|aplicado durante)\b/i;
+  // Título PRINCIPAL em inglês (BJD/BJHR etc.): continuação em inglês NÃO é tradução — junta.
+  // Nesse caso a parada passa a ser quando começa a versão PT/ES (acento latino ou palavra funcional PT/ES).
+  const _ehIngles = s => /\b(the|of|and|for|with|from|in|on|a|an)\b/i.test(s||"") && !/[à-ÿÀ-Ý]/.test(s||"");
+  const linguaPTES = /[à-ÿÀ-Ý]|\b(uma?|umas?|d[aeo]s?|n[ao]s?|em|para|com|el|del|los|las|una)\b/i;
   // LINHA DE AUTORES (não é continuação do título): "Nome Sobrenome1; Nome2…" ou "Nome Sobrenome¹;"
   const ehAutores = s => (/;/.test(s) && /[A-ZÀ-Ý][a-zà-ÿ]+\s+[A-ZÀ-Ý]/.test(s))
                       || /^[A-ZÀ-Ý][a-zà-ÿ]+(?:\s+(?:[A-ZÀ-Ý][a-zà-ÿ.]+|d[aeo]s?|e|von|van))+\s*[\d¹²³⁴⁵⁶⁷⁸⁹]\s*[;,]?/.test(s);
   const parts=[pool[idx]];
+  const emIngles = _ehIngles(pool[idx]);          // título principal já é inglês → não parar em "the/of/and"
   for(let i=idx+1;i<pool.length;i++){ const s=pool[i];
     if(!/[A-Za-zÀ-ÿ]/.test(s) || /@/.test(s) || stop.test(s)) break;
     if(ehAutores(s)) break;                       // chegou na lista de autores → para (não cola no título)
-    if(outraLingua.test(s)) break;               // começou a tradução (EN/ES) → para
+    // título até aqui termina em preposição/conjunção solta ("…Rurais de") → a próxima linha é
+    // CONTINUAÇÃO na certa (tradução nunca começa depois de preposição pendurada)
+    const pendente = /[ ](d[aeo]s?|e|em|para|com|n[ao]s?|à|aos?|às|and|of|the|in|for|with|to|y|del|la|los|las|en)$/i.test(parts[parts.length-1]);
+    if(!pendente && (emIngles ? linguaPTES.test(s) : outraLingua.test(s))) break;   // começou a TRADUÇÃO → para
     if(/[.;]\s*$/.test(parts[parts.length-1])) break;  // título raramente termina com . ou ;
     parts.push(s);
     if(parts.join(" ").length>200) break;
@@ -5978,9 +5986,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.21";
+const VERSION = "16.22";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.22","2026-08-26","Título multilinha não corta mais em revistas com título PRINCIPAL EM INGLÊS (BJD/BJHR/South Florida): a parada de «começou a tradução» via a continuação inglesa (the/of/and) e cortava o título no meio. Agora o sistema detecta o idioma do título: se já é inglês, junta a continuação em inglês e para quando começa o português/espanhol. E título terminando em preposição solta («…Escolas Rurais de») SEMPRE puxa a linha seguinte — tradução nunca começa depois de preposição pendurada (corrige o falso-espanhol de «durante»). BJD/BJHR/South Florida: 0 títulos cortados. Bateria dos 20 anais idêntica."],
   ["16.21","2026-08-26","Bloco de autores de periódico agora entende ESPANHOL e INGLÊS: o modelo Nome/cargo/Instituição/E-mail só reconhecia «Instituição:» em português — revistas como a Contribuciones a las Ciencias Sociales («Institución:» + «Correo electrónico:») e artigos em inglês («Institution:» + «E-mail:») caíam no pareamento genérico e perdiam nomes fáceis. Agora: rótulos Institución/Institution/Dirección/Address/Correo reconhecidos e cargos em es/en (Estudiante de Medicina, PhD in Nursing…) não viram nome. Contribuciones: 110→141 nomes (100%%); OLEL: 28→39 (100%%); Brazilian J: 115→133; Contemporânea: 146→151. Bateria dos 20 anais idêntica."],
   ["16.20","2026-08-26","NOVO cortador de artigo único «rótulo E-mails:» (padrão EVEN/SIMPIF): quando o cabeçalho tem TÍTULO, depois a lista Nome (Instituição), Nome (Instituição)… e uma linha E-mails: com os e-mails NA MESMA ORDEM, o sistema agora corta o título limpo (sem a lista de autores grudada) e pareia cada nome com seu e-mail pela ordem. Trata até parêntese não fechado no PDF. No 6º SIMPIF IFPB: títulos limpos foram de ~10%% para 100%% e nomes de 71%% para 96%%. Zero efeito nas demais fontes (testado em 48 amostras + bateria de 20 anais)."],
   ["16.19","2026-08-26","Coluna «Arquivo» também na TABELA DA TELA (etapa Conferir), não só no Excel/CSV — mesma regra: aparece quando o lote tem mais de um arquivo, some quando é um PDF só. A busca 🔍 agora também encontra pelo nome do arquivo."],
