@@ -479,7 +479,7 @@
 
     <div class="table-wrap">
       <table>
-        <thead><tr><th>#</th><th>Título do Trabalho</th><th>Nome Completo</th><th>E-mail (editável)</th><th>Status</th></tr></thead>
+        <thead><tr><th>#</th><th>Título do Trabalho</th><th>Nome Completo</th><th>E-mail (editável)</th><th id="thArquivo" style="display:none">Arquivo</th><th>Status</th></tr></thead>
         <tbody id="resultBody"></tbody>
       </table>
       <div class="pager">
@@ -5168,7 +5168,7 @@ function renderResults(){
   const onlyProb = !!(document.getElementById("resOnlyProb")||{}).checked;
   const ehProblema = x => x.inv || x.rev || x.mismatch || x._orphan || tituloSuspeito(x.title) || nomeQuebrado(x.name, x.email)
                           || /\b(de|da|do|e|em|para|com|no|na)$/i.test((x.title||"").trim());  // título cortado no fim
-  if(q) flat = flat.filter(x=>_norm(x.title+" "+x.name+" "+x.email).includes(q));
+  if(q) flat = flat.filter(x=>_norm(x.title+" "+x.name+" "+x.email+" "+(x.src||"")).includes(q));
   if(onlyProb) flat = flat.filter(ehProblema);
   const cnt=document.getElementById("resCount");
   if(cnt) cnt.textContent = (q||onlyProb) ? (flat.length+" de "+totalFlat+" linhas") : (totalFlat+" linhas");
@@ -5192,6 +5192,10 @@ function renderResults(){
 
   const body = document.getElementById("resultBody");
   body.innerHTML = "";
+  // coluna «Arquivo» na tela — mesma regra do Excel/CSV: só quando o lote tem mais de um arquivo
+  const multiArq = (typeof _multiArquivo==="function") && _multiArquivo(allResults);
+  const thArq = document.getElementById("thArquivo");
+  if(thArq) thArq.style.display = multiArq ? "" : "none";
   slice.forEach((r,i)=>{
     const isOrphan = !!r._orphan;
     const isPend   = pendente(r);
@@ -5221,6 +5225,7 @@ function renderResults(){
         ? '<td'+ed+di+' data-field="name">'+escapeHtml(r.name||"")+'</td>'+
           '<td class="'+cls+'"'+ed+di+' data-field="email">'+escapeHtml(r.email)+'</td>'
         : '<td>—</td><td>—</td>')+
+      (multiArq ? '<td style="font-size:12px;color:#777;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escapeHtml(r.src||"")+'">'+escapeHtml(r.src||"")+'</td>' : '')+
       '<td>'+badge+okBtn+delBtn+'</td>';
     body.appendChild(tr);
   });
@@ -5881,9 +5886,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.18";
+const VERSION = "16.19";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.19","2026-08-26","Coluna «Arquivo» também na TABELA DA TELA (etapa Conferir), não só no Excel/CSV — mesma regra: aparece quando o lote tem mais de um arquivo, some quando é um PDF só. A busca 🔍 agora também encontra pelo nome do arquivo."],
   ["16.18","2026-08-26","A pedido (conferência do lote): quando a coleta tem MAIS DE UM ARQUIVO, o Excel e o CSV ganham a coluna «Arquivo» dizendo de QUAL PDF saiu cada linha (título·nome·e-mail) — pra conferir direto na origem. Coleta de um PDF só continua com as 3 colunas limpas de sempre. O JSON já trazia o campo. Vale tanto pro lote de vários PDFs quanto pro anais gigante (todas as linhas apontam o arquivo)."],
   ["16.17","2026-08-26","Fecha o lote «Links com problemas»: Intercom, Contribuciones e Observatorio (OLEL). As duas revistas OJS que faltavam JÁ SAÍRAM LIMPAS com o conserto geral da v16.15 (verificado em amostras: títulos e autores certos). No INTERCOM, a queixa principal — «Intercom – Sociedade Brasileira de Estudos Interdisciplinares da Comunicação» aparecendo em TODOS os títulos — também já morreu com o filtro de cabeçalho repetido; o que restava eram FALSOS AUTORES vindos do cabeçalho («Sociedade Brasileira de Estudos In…», «Congresso de Ciências da Comunicaç…», «Região Norte») poluindo a tela — a defesa de nome agora reconhece entidade de evento (sociedade brasileira/congresso/associação/região/simpósio/seminário) como NÃO-pessoa e manda pra revisão vazio. Nome real com «de/da» continua intacto (testado: João Victor Holanda de Souza, Reginaldo de Camargo ✓). Regressão nos 20 PDFs: zero mudança."],
   ["16.16","2026-08-26","NOVO MODELO «cartão nome↑e-mail» pros 3 LIVROS DA EDITORA IFPB (1º/2º/3º SIMPIF — os links que «não pegavam certo por serem bem diferentes»). Os trabalhos vêm em CARTÕES com o NOME na linha imediatamente acima do E-MAIL, em três variantes que o cortador entende: (a) sidebar entrelaçado com o corpo, nome terminando em «:» — o título é remontado dos PREFIXOS em CAIXA ALTA das linhas do topo («OS NÚMEROS COMO / CAUSA ÚLTIMA / …» → título inteiro); (b) duas colunas fundidas pela extração — o título é remontado dos FRAGMENTOS que sobram depois do nome e do e-mail em cada linha; (c) cartão limpo — título = linhas acima do 1º nome, com normalização do «O estilizado» («dO SpOtify» → «do Spotify»). Cartão que atravessa página é fundido. Resultados: livro-1 379 trabalhos (97%% com título, 770 e-mails), livro-2 315 trabalhos (842 e-mails, 95%% — títulos parciais vão pra revisão/IA, limite da diagramação), livro-3 262 trabalhos (99,6%% com título, 719 e-mails). GUARDA de densidade + pares «confiáveis» (fragmento com «Sobrenome1,» = lista de autores de outro formato → rejeita): testado que NÃO captura a Jornada Odontológica nem nenhum dos 20 PDFs da bateria (cadeia intacta, zero mudança)."],
