@@ -3691,8 +3691,8 @@ async function aiPairAuthorsEmails(names, emails, title){
 /* PRECISÃO MÁXIMA p/ PDFs de periódico: cada autor vem num bloco
    "Nome  <titulação>  Instituição: ...  E-mail: x@y  Orcid: ...".
    Como nome e e-mail estão NO MESMO bloco, o pareamento é exato (sem IA). */
-const _DEGREE = /\b(doutor\w*|doutorand[oa]|p[óo]s[\- ]?doutor\w*|mestr[aeio]\w*|mestrand[oa]|especialista|p[óo]s[\- ]?graduand[oa]|graduand[oa]|graduad[oa]|bacharel\w*|licenciad[oa]|disc[ei]\w*|docente|professor\w*|acad[êe]mic[oa]|enfermeir[oa]|m[ée]dic[oa]|advogad[oa]|engenheir[oa]|eng\.?\s*agr\w*|agr[ôo]nom\w*|t[ée]cnic[oa]|zootecnist\w*|psic[óo]log[oa]|biom[ée]dic[oa]|farmac[êe]utic[oa]|nutricionista|fisioterapeuta|odont[óo]log[oa]|cirurgi[ãa]o)\b/i;
-const _META_LINE = /institui[çc]|e-?mail|orcid|lattes|^\s*data\b|submiss|publica|^https?:|doi|^\s*resumo|^\s*abstract/i;
+const _DEGREE = /\b(doutor\w*|doutorand[oa]|p[óo]s[\- ]?doutor\w*|mestr[aeio]\w*|mestrand[oa]|especialista|p[óo]s[\- ]?graduand[oa]|graduand[oa]|graduad[oa]|bacharel\w*|licenciad[oa]|disc[ei]\w*|docente|professor\w*|acad[êe]mic[oa]|enfermeir[oa]|m[ée]dic[oa]|advogad[oa]|engenheir[oa]|eng\.?\s*agr\w*|agr[ôo]nom\w*|t[ée]cnic[oa]|zootecnist\w*|psic[óo]log[oa]|biom[ée]dic[oa]|farmac[êe]utic[oa]|nutricionista|fisioterapeuta|odont[óo]log[oa]|cirurgi[ãa]o|estudante|estudiante|student|ph\.?\s?d\.?|d\.?sc|m\.?sc|b\.?sc|master|bachelor|researcher|lecturer|nurs\w*|physician|specialist|lawyer|engineer)\b/i;
+const _META_LINE = /institui[çc]|instituci|institution|e-?mail|correo|orcid|lattes|^\s*data\b|submiss|publica|^https?:|doi|^\s*resumo|^\s*abstract|direcci[óo]n\s*:|address\s*:|endere[çc]o\s*:/i;
 function parseAuthorBlocks(text){
   const lines = text.replace(/\r/g,"").split("\n").map(l=>l.trim());
   // limita ao CABEÇALHO do artigo (antes do Resumo/Abstract) — evita e-mails das REFERÊNCIAS
@@ -3700,7 +3700,7 @@ function parseAuthorBlocks(text){
   if(endHdr<5) endHdr = Math.min(lines.length, 70);
   const out = [];
   for(let i=0;i<endHdr;i++){
-    if(!/institui[çc][ãa]o\s*:/i.test(lines[i])) continue;   // linha "Instituição:" delimita o bloco
+    if(!/(institui[çc][ãa]o|instituci[óo]n|institution)\s*:/i.test(lines[i])) continue;   // "Instituição/Institución/Institution:" delimita o bloco
     // e-mail nas próximas linhas (Orcid pode quebrar o bloco)
     const ctx = [lines[i], lines[i+1]||"", lines[i+2]||"", lines[i+3]||""].join(" ");
     const email = ((ctx.match(EMAIL_RE)||[])[0] || "").toLowerCase().replace(/[.,;)]+$/,"");
@@ -5978,9 +5978,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.20";
+const VERSION = "16.21";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.21","2026-08-26","Bloco de autores de periódico agora entende ESPANHOL e INGLÊS: o modelo Nome/cargo/Instituição/E-mail só reconhecia «Instituição:» em português — revistas como a Contribuciones a las Ciencias Sociales («Institución:» + «Correo electrónico:») e artigos em inglês («Institution:» + «E-mail:») caíam no pareamento genérico e perdiam nomes fáceis. Agora: rótulos Institución/Institution/Dirección/Address/Correo reconhecidos e cargos em es/en (Estudiante de Medicina, PhD in Nursing…) não viram nome. Contribuciones: 110→141 nomes (100%%); OLEL: 28→39 (100%%); Brazilian J: 115→133; Contemporânea: 146→151. Bateria dos 20 anais idêntica."],
   ["16.20","2026-08-26","NOVO cortador de artigo único «rótulo E-mails:» (padrão EVEN/SIMPIF): quando o cabeçalho tem TÍTULO, depois a lista Nome (Instituição), Nome (Instituição)… e uma linha E-mails: com os e-mails NA MESMA ORDEM, o sistema agora corta o título limpo (sem a lista de autores grudada) e pareia cada nome com seu e-mail pela ordem. Trata até parêntese não fechado no PDF. No 6º SIMPIF IFPB: títulos limpos foram de ~10%% para 100%% e nomes de 71%% para 96%%. Zero efeito nas demais fontes (testado em 48 amostras + bateria de 20 anais)."],
   ["16.19","2026-08-26","Coluna «Arquivo» também na TABELA DA TELA (etapa Conferir), não só no Excel/CSV — mesma regra: aparece quando o lote tem mais de um arquivo, some quando é um PDF só. A busca 🔍 agora também encontra pelo nome do arquivo."],
   ["16.18","2026-08-26","A pedido (conferência do lote): quando a coleta tem MAIS DE UM ARQUIVO, o Excel e o CSV ganham a coluna «Arquivo» dizendo de QUAL PDF saiu cada linha (título·nome·e-mail) — pra conferir direto na origem. Coleta de um PDF só continua com as 3 colunas limpas de sempre. O JSON já trazia o campo. Vale tanto pro lote de vários PDFs quanto pro anais gigante (todas as linhas apontam o arquivo)."],
