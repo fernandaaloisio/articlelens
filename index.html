@@ -2537,6 +2537,121 @@ function parseModeloAutorNotaEven3(text){
   if(!works.some(w=>w.authors.some(a=>a.email))) return [];
   return works;
 }
+/* MODELO "CARTÃO nome↑e-mail" (livros da editora IFPB — 1º/2º/3º SIMPIF): trabalhos em CARTÕES com o
+   NOME na linha imediatamente ACIMA do e-mail. Três variantes: (a) sidebar entrelaçado com nome terminando
+   em ":" — título = prefixos CAPS das linhas do topo; (b) 2 colunas fundidas — título = fragmentos após o
+   nome/e-mail, na ordem; (c) cartão limpo — título = linhas acima do 1º nome (com O estilizado normalizado).
+   Cards que atravessam página são fundidos pelo conjunto de e-mails. GUARDA: ≥15 pares nome↑email E ≥50%
+   dos e-mails do doc pareados assim. Devolve [] fora do formato. (v16.16) */
+function parseModeloCartaoNomeEmail(text){
+  const EMAIL_RX=/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/;
+  const ehNome=s=>{ s=s.trim().replace(/[:;,]$/,"");
+    return /^[A-ZÀ-Ý][A-Za-zà-ÿ'’.]+(?:\s+(?:d[aeio]s?|e|[A-ZÀ-Ý][A-Za-zà-ÿ'’.]*\.?)){1,6}$/.test(s)
+      && !/Campus|IFPB|Institut|Universidade|Curso|Licenciatura|RESUMO|Palavras|Orientador\b/i.test(s); };
+  // nome no COMEÇO da linha (com resto depois) — p/ colunas entrelaçadas (modo b/a)
+  const nomePrefixo=s=>{ const m=s.match(/^([A-ZÀ-Ý][A-Za-zà-ÿ'’.]+(?:\s+(?:d[aeio]s?|e|[A-ZÀ-Ý][A-Za-zà-ÿ'’.]+)){1,5})\s*(:)?\s+(\S.*)$/);
+    if(!m) return null; if(!ehNome(m[1])) return null; return {nome:m[1], doisPontos:!!m[2], resto:m[3]}; };
+  const pages=text.split("\f");
+  if(pages.length<8) return [];
+  const works=[]; let paresTot=0, confTot=0;
+  for(const pg of pages){
+    const L=pg.split("\n").map(x=>x.trim()).filter(Boolean);
+    if(!L.length) continue;
+    const pares=[]; const fragTitulo=[]; const usados=new Set();
+    for(let i=0;i<L.length;i++){
+      const li=L[i];
+      // modo c: nome puro + e-mail puro logo abaixo
+      if(ehNome(li) && i+1<L.length){
+        const mE=(L[i+1]||"").match(EMAIL_RX);
+        if(mE && L[i+1].replace(EMAIL_RX,"").trim().length<24){
+          pares.push({nome:li.replace(/[:;,]$/,"").trim(), email:mE[0].toLowerCase(), lin:i, modo:"c", conf:true});
+          usados.add(i); usados.add(i+1); i++; continue;
+        }
+      }
+      // modo a/b: nome no começo da linha (resto = fragmento); e-mail nas próximas 1–3 linhas
+      const np=nomePrefixo(li);
+      if(np){
+        for(let t=i+1;t<Math.min(L.length,i+4);t++){
+          const mE=(L[t]||"").match(EMAIL_RX);
+          if(mE){
+            const antes=L[t].slice(0,L[t].indexOf(mE[0]));
+            const resto=L[t].slice(L[t].indexOf(mE[0])+mE[0].length).trim();
+            // fragmento "limpo" = texto de título; LETRA+dígito colado ("Andrade1,") ou 2+ vírgulas = lista
+            // de autores de OUTRO formato (ex.: Jornada) — par NÃO confiável (v16.16)
+            const _fOK=f=>!( /[A-Za-zÀ-ÿ]\d/.test(f||"") || ((f||"").match(/,/g)||[]).length>=2 );
+            pares.push({nome:np.nome, email:mE[0].toLowerCase(), lin:i, modo:"ab", dp:np.doisPontos,
+                        conf: np.doisPontos || (_fOK(np.resto) && _fOK(resto)), fragN:np.resto, fragE:resto});
+            usados.add(i); usados.add(t);
+            break;
+          }
+          if(ehNome(L[t])||nomePrefixo(L[t])) break;
+        }
+      }
+    }
+    if(!pares.length) continue;
+    paresTot+=pares.length; confTot+=pares.filter(p=>p.conf).length;
+    // TÍTULO da página:
+    let titulo="";
+    const primeiro=Math.min(...pares.map(p=>p.lin));
+    const parsAB=pares.filter(p=>p.modo==="ab");
+    if(parsAB.length && !pares.some(p=>p.modo==="c")){
+      const comDP=parsAB.filter(p=>p.dp).length;
+      if(comDP>=parsAB.length/2){
+        // modo (a): nome com ":" → título = prefixos CAPS das linhas do topo (sidebar entrelaçado)
+        const caps=[];
+        for(let j=0;j<primeiro;j++){
+          const l=L[j]; if(/^RESUMO/i.test(l)) continue;
+          if(/SIMP[ÓO]SIO|IFPB\b|INICIA[ÇC][ÃA]O CIENT|P[ÓO]S-GRADUA|PESQUISA\s*$|INOVA[ÇC][ÃA]O/i.test(l) && !/[a-zà-ÿ]/.test(l)) continue;
+          const toks=l.split(/\s+/); const run=[];
+          for(const t of toks){ const let_=(t.match(/[A-Za-zÀ-ÿ]/g)||[]).length, up=(t.match(/[A-ZÀ-Ý]/g)||[]).length;
+            if(let_>0 && up/let_>=0.7) run.push(t); else break; }
+          if(run.length && run.join(" ").replace(/[^A-Za-zÀ-ÿ]/g,"").length>=2) caps.push(run.join(" "));
+        }
+        titulo=caps.join(" ").replace(/\s+/g," ").trim();
+      } else {
+        // modo (b): sem ":" → título = fragmentos (resto da linha do nome + resto da linha do e-mail, na ordem)
+        const frags=[]; parsAB.forEach(p=>{ if(p.fragN)frags.push(p.fragN); if(p.fragE)frags.push(p.fragE); });
+        titulo=frags.join(" ").replace(/\s+/g," ").trim();
+      }
+    } else {
+      // (c) linhas acima do 1º nome, após marcador de seção (">", ÁREA CAPS, nº)
+      const titL=[];
+      for(let j=primeiro-1;j>=Math.max(0,primeiro-8);j--){
+        const l=L[j];
+        if(/^>|^\d+$|^[A-ZÀ-Ý\s|>]+$/.test(l) && !/[a-zà-ÿ]/.test(l)) break;   // seção/área/nº
+        titL.unshift(l);
+      }
+      titulo=titL.join(" ").replace(/\s+/g," ").trim();
+      // normaliza o "O estilizado" no meio de palavra minúscula (dO SpOtify → do Spotify)
+      titulo=titulo.replace(/([a-zà-ÿ])O(?=[a-zà-ÿ]|\s|$)/g,"$1o");
+    }
+    if(titulo.length>240) titulo=titulo.slice(0,240);
+    const authors=pares.map(p=>({name:p.nome,email:p.email}));
+    works.push({title:titulo, authors, _raw:L.slice(0,Math.min(L.length,26)).join("\n").slice(0,1600)});
+  }
+  if(paresTot<15 || confTot < Math.max(15, paresTot*0.6)) return [];   // maioria dos pares tem que ser confiável (v16.16)
+  // FUNDE works consecutivos com o MESMO conjunto de e-mails (card atravessou a quebra de página:
+  // os fragmentos do título ficam metade em cada página)
+  const fundidos=[];
+  for(const w of works){
+    const key=w.authors.map(a=>a.email).sort().join("|");
+    const ant=fundidos[fundidos.length-1];
+    if(ant && ant._key===key){
+      const t1=(ant.title||"").trim(), t2=(w.title||"").trim();
+      ant.title=(t1 && t2 && t1!==t2)?(t1+" "+t2):(t1||t2);
+      ant._raw=(ant._raw||"")+"\n"+(w._raw||"");
+      continue;
+    }
+    w._key=key; fundidos.push(w);
+  }
+  fundidos.forEach(w=>delete w._key);
+  works.length=0; works.push(...fundidos);
+  // guarda: pares devem cobrir ≥50% dos e-mails do doc
+  const alvo=new Set((text.match(/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g)||[]).map(e=>e.toLowerCase()));
+  const cap=new Set(); works.forEach(w=>w.authors.forEach(a=>cap.add(a.email)));
+  if(cap.size < alvo.size*0.5) return [];
+  return works;
+}
 /* ÚLTIMO RECURSO p/ anais SEM rótulos (ex.: "Jornada Odontológica"): formato "número → TÍTULO (Title Case) →
    AUTORES + afiliação → e‑mail PELADO (1 por trabalho) → Objetivo/Palavras‑chave". Sem RESUMO/Introdução/sumário
    e título NÃO é CAIXA ALTA, então os outros cortadores não pegam. Aqui o e‑mail é a ÂNCORA: o trabalho é o bloco
@@ -4006,7 +4121,8 @@ async function collectFromPDF(file, mode){
     const viaSB = parseModeloSumarioBio(text);      // MODELO "sumário + biografias" (e‑mails só na seção de autores, ex.: Profletras) ([] se não for esse formato)
     const viaRT = parseModeloRodapeTitulacao(text); // MODELO "rodapé com titulação" (autor Nº ↔ rodapé "N Doutor…; afiliação. email", ex.: 8º SNFPM) ([] se não for esse formato)
     const viaAN = parseModeloAutorNotaEven3(text);  // MODELO "autor numerado + nota-bio" (Even3/ANPAP, ex.: 559116) ([] se não for esse formato)
-    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eAut = comEmail(viaAut), eEsc = comEmail(viaEsc), ePC = comEmail(viaPC), eEmail = comEmail(viaEmail), eUni = comEmail(viaUni), eOrc = comEmail(viaOrc), eNep = comEmail(viaNep), eSB = comEmail(viaSB), eRT = comEmail(viaRT), eAN = comEmail(viaAN);
+    const viaCN = parseModeloCartaoNomeEmail(text); // MODELO "cartão nome↑e-mail" (livros editora IFPB/SIMPIF) ([] se não for esse formato)
+    const eS = comEmail(viaSum), eP = comEmail(viaSep), eM = comEmail(viaMod), ePal = comEmail(viaPal), eI = comEmail(viaIntro), eRod = comEmail(viaRod), eAut = comEmail(viaAut), eEsc = comEmail(viaEsc), ePC = comEmail(viaPC), eEmail = comEmail(viaEmail), eUni = comEmail(viaUni), eOrc = comEmail(viaOrc), eNep = comEmail(viaNep), eSB = comEmail(viaSB), eRT = comEmail(viaRT), eAN = comEmail(viaAN), eCN = comEmail(viaCN);
     // Prefere o SUMÁRIO (títulos oficiais, limpos). Só troca pro método antigo quando ele pega
     // MUITO mais e-mail (≥25% e +5) — aí o ganho compensa títulos um pouco menos limpos.
     let works;
@@ -4084,6 +4200,11 @@ async function collectFromPDF(file, mode){
     } else if(viaSum && viaSum.length && !(eP > eS*1.25 && eP > eS+5)){
       works = viaSum;
       lastIndice = {total: viaSum._sumario.total, fixed: viaSum._sumario.localizados, viaSumario:true, naoLoc: viaSum._sumario.naoLoc};
+    } else if(eCN>0){
+      // MODELO CARTÃO nome↑e-mail (editora IFPB): guarda de densidade (≥50%% dos e-mails pareados por adjacência).
+      works = viaCN;
+      modelosUsados["Anais · cartão nome↑e-mail (IFPB)"] = (modelosUsados["Anais · cartão nome↑e-mail (IFPB)"]||0) + 1;
+      lastIndice = { total: works.length, fixed: works.filter(w=>w.title).length, viaSumario:false };
     } else if(eEmail>0 && eEmail>=eS && eEmail>=eP && eEmail>=eM && eEmail>=ePal && eEmail>=eI && eEmail>=eRod){
       // ÚLTIMO RECURSO: anais sem rótulos, e‑mail pelado (Jornada Odontológica) — os outros não pegaram
       works = viaEmail;
@@ -5751,9 +5872,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.15";
+const VERSION = "16.16";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.16","2026-08-26","NOVO MODELO «cartão nome↑e-mail» pros 3 LIVROS DA EDITORA IFPB (1º/2º/3º SIMPIF — os links que «não pegavam certo por serem bem diferentes»). Os trabalhos vêm em CARTÕES com o NOME na linha imediatamente acima do E-MAIL, em três variantes que o cortador entende: (a) sidebar entrelaçado com o corpo, nome terminando em «:» — o título é remontado dos PREFIXOS em CAIXA ALTA das linhas do topo («OS NÚMEROS COMO / CAUSA ÚLTIMA / …» → título inteiro); (b) duas colunas fundidas pela extração — o título é remontado dos FRAGMENTOS que sobram depois do nome e do e-mail em cada linha; (c) cartão limpo — título = linhas acima do 1º nome, com normalização do «O estilizado» («dO SpOtify» → «do Spotify»). Cartão que atravessa página é fundido. Resultados: livro-1 379 trabalhos (97%% com título, 770 e-mails), livro-2 315 trabalhos (842 e-mails, 95%% — títulos parciais vão pra revisão/IA, limite da diagramação), livro-3 262 trabalhos (99,6%% com título, 719 e-mails). GUARDA de densidade + pares «confiáveis» (fragmento com «Sobrenome1,» = lista de autores de outro formato → rejeita): testado que NÃO captura a Jornada Odontológica nem nenhum dos 20 PDFs da bateria (cadeia intacta, zero mudança)."],
   ["16.15","2026-08-19","LOTE «Links com problemas» (Word da equipe): diagnóstico em massa de 13 fontes e conserto GERAL de TÍTULO em artigo único. A raiz comum: o CABEÇALHO da revista/do evento contaminava o título. Três defesas novas no extrator: (1) linha que se REPETE em ≥3 páginas é cabeçalho corrente, nunca título (Research Society, Brazilian J, SFJD, Anais SENPEX/Unibave, I Seminário Infância — que saía com o nome do evento como título de TODOS os trabalhos); (2) PREFIXO COMUM entre as primeiras linhas das páginas é cabeçalho mesmo quando vem COLADO na mesma linha do título e quebrado diferente em cada página (Even3 profeiuern «Educação na Era Digital…», Contemporary Journal); (3) cabeçalho com ordinal ROMANO («VI CONGRESSO INTERNACIONAL…») e masthead «Vol. N N°. N: p. NN-NN, ano» cortados. Mais: ISSN espaçado («IS S N: 2 17 8…» — GESEC) filtrado; «Área Temática:» (SENPEX) e «Received/Accepted on:» (SFJD) cortados do título; «Eixo:» tratado; e‑mails SBC em CHAVES com espaço («{ a, b } @furg.br» — anais da SOL/SBC) agora expandem. Validado nas 13 pastas do lote (títulos limpos em ~34 de 39 amostras; resíduos vão pra revisão) + Imunoendocrino/ENMC intacto + regressão nos 20 PDFs de anais: zero mudança."],
   ["16.14","2026-08-19","NOVO MODELO «autor numerado + nota-bio» (Even3/ANPAP, ex.: 559116 — 34º Encontro da ANPAP, 4.081 páginas). Formato: cabeçalho «TÍTULO → [Nº] Nome → Instituição → Associado/a/e ANPAP:» logo acima do RESUMO, e os e-mails em NOTAS-BIO numeradas com o mesmo nº do autor, espalhadas pelo artigo (nem toda nota tem e-mail — muitas só têm Lattes/ORCID). Nenhum cortador reconhecia; o de rodapé-titulação disparava e pegava só 16 de 118 e-mails — o resto caía sem nome. O cortador novo entende as variantes do template: nº isolado acima do nome, nº GRUDADO no nome («…Freitas1»), «[1]», «1)», nota com bio longa atravessando página (nº de página solto no meio NÃO quebra a leitura). GUARDA do template (≥10 «Associado/a/e ANPAP») — não dispara em nenhum outro anais. De quebra, DOIS reparos GERAIS de e-mail na extração: (1) e-mail com ACENTO no PDF («nina.simão@…» virava o fragmento «o@…») agora é normalizado; (2) HÍFEN do local quebrado por espaço («karine.g.perez - vieira@…» virava «vieira@…») agora é juntado. Resultado no 559116: 178 trabalhos · 118/118 e-mails (100%%) · 172 com título · 96%% dos nomes pareados corretos; e-mails de corpo de texto e cabeçalhos atípicos vão pra revisão, como devem. Regressão nos 19 PDFs: zero mudança."],
   ["16.13","2026-08-18","CONSERTA os nomes sumindo no anais Even3 do CIC/Itaperuna (701655) — o cortador pegava TODOS os 1.347 nomes, mas uma DEFESA apagava 618 deles no meio da esteira. Causa: o trecho‑prova (_raw) de cada trabalho guardava o FIM do bloco; em eventos SEM rótulo «Introdução:» o fim é só corpo do resumo (sem os autores), então a conferência «o nome está no PDF?» não achava o nome ali e o apagava como se fosse inventado. Agora o _raw guarda o COMEÇO do bloco (título+autores). E uma correção GERAL de ordem: a rede final de recuperação de nomes rodava só na EXPORTAÇÃO — a TABELA mostrava «(sem nome)» que o Excel depois consertava (confuso pra equipe). Agora ela roda também no fim da esteira: a tela, a trava de nome e a memória já veem o resultado restaurado. Verificado no 701655 pela esteira completa: 382 trabalhos · 1.351 linhas · 736 e‑mails (100%%) · 100%% com nome · 380 com título. Regressão nos 18 PDFs da bateria: zero mudança."],
