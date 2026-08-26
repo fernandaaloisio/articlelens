@@ -3831,31 +3831,40 @@ function flattenRows(records){
   return rows;
 }
 
+/* Lote com MAIS DE UM arquivo → planilha ganha a coluna "Arquivo" (de qual PDF saiu a linha),
+   pra conferência na origem. Coleta de 1 PDF só continua com 3 colunas limpas. (v16.18) */
+function _multiArquivo(records){
+  return new Set((records||[]).map(r=>r.source_file||"").filter(Boolean)).size > 1;
+}
 function exportCSV(records){
   const esc = v => '"' + String(v).replace(/\r?\n/g," ").replace(/"/g,'""') + '"';
-  const header = ['Titulo','Nome do Autor','E-mail'].map(esc).join(",");
-  const lines = flattenRows(records).map(r=>r.slice(0,3).map(esc).join(","));
+  const multi = _multiArquivo(records);
+  const header = (multi?['Titulo','Nome do Autor','E-mail','Arquivo']:['Titulo','Nome do Autor','E-mail']).map(esc).join(",");
+  const lines = flattenRows(records).map(r=>r.slice(0, multi?4:3).map(esc).join(","));
   const csv = "﻿" + header + "\r\n" + lines.join("\r\n");   // BOM + CRLF
   download(new Blob([csv],{type:"text/csv;charset=utf-8;"}), "publicacoes.csv");
-  toast("CSV exportado ("+lines.length+" linhas).");
+  toast("CSV exportado ("+lines.length+" linhas"+(multi?", com coluna Arquivo":"")+").");
 }
 
 function exportXLSX(records){
   if(!window.XLSX){ toast("Biblioteca Excel não carregou (offline?).", "err"); return; }
-  // Excel LIMPO de 3 colunas: Título do Trabalho · Nome Completo · E-mail (1 linha por autor)
-  const aoa = [['Título do Trabalho','Nome Completo','E-mail']];
+  // Excel LIMPO: Título · Nome · E-mail (+ coluna "Arquivo" quando o lote tem MAIS DE UM PDF — v16.18)
+  const multi = _multiArquivo(records);
+  const aoa = [ multi ? ['Título do Trabalho','Nome Completo','E-mail','Arquivo'] : ['Título do Trabalho','Nome Completo','E-mail'] ];
   for(const r of records){
     for(const a of (r.authors||[])){               // SÓ autores COM e-mail (nunca exporta linha sem e-mail)
       if(a._del) continue;                          // linha excluída manualmente
       if(!(a.email && a.email.trim())) continue;
-      aoa.push([r.title||"(sem título)", a.name||"", a.email.trim()]);
+      const row=[r.title||"(sem título)", a.name||"", a.email.trim()];
+      if(multi) row.push(r.source_file||"");
+      aoa.push(row);
     }
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{wch:58},{wch:32},{wch:32}];
-  ['A1','B1','C1'].forEach(c=>{ if(ws[c]) ws[c].s = {
+  ws['!cols'] = multi ? [{wch:58},{wch:32},{wch:32},{wch:28}] : [{wch:58},{wch:32},{wch:32}];
+  (multi?['A1','B1','C1','D1']:['A1','B1','C1']).forEach(c=>{ if(ws[c]) ws[c].s = {
     font:{bold:true,color:{rgb:"FFFFFF"}}, fill:{fgColor:{rgb:"1A56A4"}}, alignment:{horizontal:"left"} }; });
-  ws['!autofilter'] = {ref:"A1:C"+aoa.length};
+  ws['!autofilter'] = {ref:"A1:"+(multi?"D":"C")+aoa.length};
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Coleta");
   XLSX.writeFile(wb, "coleta_articlelens.xlsx");
@@ -5872,9 +5881,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.17";
+const VERSION = "16.18";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.18","2026-08-26","A pedido (conferência do lote): quando a coleta tem MAIS DE UM ARQUIVO, o Excel e o CSV ganham a coluna «Arquivo» dizendo de QUAL PDF saiu cada linha (título·nome·e-mail) — pra conferir direto na origem. Coleta de um PDF só continua com as 3 colunas limpas de sempre. O JSON já trazia o campo. Vale tanto pro lote de vários PDFs quanto pro anais gigante (todas as linhas apontam o arquivo)."],
   ["16.17","2026-08-26","Fecha o lote «Links com problemas»: Intercom, Contribuciones e Observatorio (OLEL). As duas revistas OJS que faltavam JÁ SAÍRAM LIMPAS com o conserto geral da v16.15 (verificado em amostras: títulos e autores certos). No INTERCOM, a queixa principal — «Intercom – Sociedade Brasileira de Estudos Interdisciplinares da Comunicação» aparecendo em TODOS os títulos — também já morreu com o filtro de cabeçalho repetido; o que restava eram FALSOS AUTORES vindos do cabeçalho («Sociedade Brasileira de Estudos In…», «Congresso de Ciências da Comunicaç…», «Região Norte») poluindo a tela — a defesa de nome agora reconhece entidade de evento (sociedade brasileira/congresso/associação/região/simpósio/seminário) como NÃO-pessoa e manda pra revisão vazio. Nome real com «de/da» continua intacto (testado: João Victor Holanda de Souza, Reginaldo de Camargo ✓). Regressão nos 20 PDFs: zero mudança."],
   ["16.16","2026-08-26","NOVO MODELO «cartão nome↑e-mail» pros 3 LIVROS DA EDITORA IFPB (1º/2º/3º SIMPIF — os links que «não pegavam certo por serem bem diferentes»). Os trabalhos vêm em CARTÕES com o NOME na linha imediatamente acima do E-MAIL, em três variantes que o cortador entende: (a) sidebar entrelaçado com o corpo, nome terminando em «:» — o título é remontado dos PREFIXOS em CAIXA ALTA das linhas do topo («OS NÚMEROS COMO / CAUSA ÚLTIMA / …» → título inteiro); (b) duas colunas fundidas pela extração — o título é remontado dos FRAGMENTOS que sobram depois do nome e do e-mail em cada linha; (c) cartão limpo — título = linhas acima do 1º nome, com normalização do «O estilizado» («dO SpOtify» → «do Spotify»). Cartão que atravessa página é fundido. Resultados: livro-1 379 trabalhos (97%% com título, 770 e-mails), livro-2 315 trabalhos (842 e-mails, 95%% — títulos parciais vão pra revisão/IA, limite da diagramação), livro-3 262 trabalhos (99,6%% com título, 719 e-mails). GUARDA de densidade + pares «confiáveis» (fragmento com «Sobrenome1,» = lista de autores de outro formato → rejeita): testado que NÃO captura a Jornada Odontológica nem nenhum dos 20 PDFs da bateria (cadeia intacta, zero mudança)."],
   ["16.15","2026-08-19","LOTE «Links com problemas» (Word da equipe): diagnóstico em massa de 13 fontes e conserto GERAL de TÍTULO em artigo único. A raiz comum: o CABEÇALHO da revista/do evento contaminava o título. Três defesas novas no extrator: (1) linha que se REPETE em ≥3 páginas é cabeçalho corrente, nunca título (Research Society, Brazilian J, SFJD, Anais SENPEX/Unibave, I Seminário Infância — que saía com o nome do evento como título de TODOS os trabalhos); (2) PREFIXO COMUM entre as primeiras linhas das páginas é cabeçalho mesmo quando vem COLADO na mesma linha do título e quebrado diferente em cada página (Even3 profeiuern «Educação na Era Digital…», Contemporary Journal); (3) cabeçalho com ordinal ROMANO («VI CONGRESSO INTERNACIONAL…») e masthead «Vol. N N°. N: p. NN-NN, ano» cortados. Mais: ISSN espaçado («IS S N: 2 17 8…» — GESEC) filtrado; «Área Temática:» (SENPEX) e «Received/Accepted on:» (SFJD) cortados do título; «Eixo:» tratado; e‑mails SBC em CHAVES com espaço («{ a, b } @furg.br» — anais da SOL/SBC) agora expandem. Validado nas 13 pastas do lote (títulos limpos em ~34 de 39 amostras; resíduos vão pra revisão) + Imunoendocrino/ENMC intacto + regressão nos 20 PDFs de anais: zero mudança."],
