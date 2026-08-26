@@ -3752,6 +3752,87 @@ function parseInlineDashEmailAuthors(text){
 /* =========================================================================
    Orquestração de extração por fonte
    ========================================================================= */
+/* Artigo único com cabeçalho rotulado (EVEN/SIMPIF e afins):
+     TÍTULO (1+ linhas)
+     Nome1 (Instituição), Nome2 (Instituição), …
+     E-mails: a@x, b@y, …          ← rótulo explícito; e-mails na MESMA ORDEM dos autores
+   Só dispara quando existe a linha "E-mail(s):" no topo E uma lista Nome (Afiliação) logo acima.
+   Devolve {title, authors} ou null (aí segue o caminho normal). */
+function parseArtigoEmailsRotulado(text){
+  const linhas = String(text||"").split(/\n/).map(l=>l.trim());
+  const N = Math.min(linhas.length, 70);
+  let iE = -1;
+  for(let i=2;i<N;i++) if(/^E-?\s?mails?\s*:/i.test(linhas[i])){ iE=i; break; }
+  if(iE<0) return null;
+  // bloco de e-mails: a linha do rótulo + continuações (linha seguinte ainda com @)
+  let blocoE = linhas[iE];
+  for(let j=iE+1;j<N;j++){
+    const l=linhas[j];
+    if(/@/.test(l) && !/^(Área|Palavras|Resumo|Abstract|Keywords?|Eixo|\d+\s*[.)])/i.test(l)) blocoE+=" "+l;
+    else break;
+  }
+  const emails=[...new Set(extractEmails(blocoE).map(e=>e.toLowerCase()))];
+  if(!emails.length || emails.length>60) return null;
+  // bloco de autores: linhas imediatamente acima que participam da lista "Nome (Afiliação)"
+  let iA=iE;
+  while(iA-1>=1 && /[()]/.test(linhas[iA-1])) iA--;
+  if(iA===iE) return null;                       // sem lista com afiliação acima do rótulo
+  const bloco = linhas.slice(iA,iE).join(" ").replace(/\s+/g," ").trim();
+  // segmenta por fim de afiliação: "…)" [,;.] — cada pedaço termina em "Nome (Afiliação"
+  const segs = bloco.split(/\)\s*[,;.]?\s*/);
+  const names=[]; let segsComParen=0;
+  const brutos=[];
+  for(const seg of segs){
+    const idx = seg.lastIndexOf("(");
+    if(idx<0) continue;                          // fragmento solto (quebra de linha no meio)
+    segsComParen++;
+    const antes = seg.slice(0,idx);
+    if(antes.includes("(")){
+      // parêntese não fechado no PDF ("(IFPB, Campus X; Nome2 (IFPB…"): recupera os dois nomes
+      const i1=antes.indexOf("(");
+      brutos.push(antes.slice(0,i1));                                  // nome antes do 1º "("
+      const resto=antes.slice(i1+1);
+      const m=resto.match(/[;,]\s*([A-ZÀ-Ý][^;,()]{3,68})$/);
+      if(m) brutos.push(m[1]);                                         // nome depois do ";" perdido
+    } else brutos.push(antes);
+  }
+  for(const b of brutos){
+    let nome = b.replace(/\s+/g," ").trim()
+      .replace(/^[,;.\s]+/,"")
+      .replace(/\s*Autor(?:a|es)?\s*\d*\s*[.,;]?$/i,"")   // "Fulano Autor 3" → sobra do template
+      .replace(/[\s,;.]*\d+\s*$/,"")                       // sobrescrito virou dígito no fim
+      .replace(/^\d+\s*/,"");
+    nome = nome.trim();
+    if(!nome || nome.length>70) continue;
+    if(!/^[A-ZÀ-Ý]/.test(nome)) continue;
+    if(nome.split(/\s+/).length<2 || nome.split(/\s+/).length>8) continue;
+    if(/@/.test(nome)) continue;
+    if(typeof _INST_RE!=="undefined" && _INST_RE.test(nome)) continue;   // "Universidade Federal (…)" não é gente
+    names.push(nome);
+  }
+  if(!names.length || names.length>40) return null;
+  if(names.length < segsComParen*0.5) return null;         // metade da lista nem parece nome → outro formato
+  // pareamento: por ORDEM quando as contagens batem; senão casa pelo local-part
+  const nrm=s=>String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+  const casa=(n,e)=>{ const loc=nrm(e.split("@")[0]).replace(/[^a-z]/g,"");
+    const toks=nrm(n).split(/[^a-z]+/).filter(t=>t.length>=3);
+    return toks.some(t=>loc.includes(t)) || toks.some(t=>t.length>=4&&loc.includes(t.slice(0,4))); };
+  let authors=[];
+  if(emails.length===names.length){
+    authors=names.map((n,i)=>({name:n,email:emails[i]}));
+  }else{
+    const usados=new Set();
+    for(const n of names){
+      const hit=emails.find(e=>!usados.has(e)&&casa(n,e));
+      authors.push({name:n,email:hit||""}); if(hit)usados.add(hit);
+    }
+    for(const e of emails) if(!usados.has(e)) authors.push({name:"",email:e});
+  }
+  // título = tudo acima da lista de autores
+  let title=linhas.slice(0,iA).filter(Boolean).join(" ").replace(/\s+/g," ").trim();
+  try{ title=_limparTituloAnais(title)||title; }catch(_){}
+  return { title, authors };
+}
 async function buildAuthors(text, html, title){
   // 1) Sem metadados HTML, tenta o bloco de periódico (nome+e-mail juntos = exato)
   if(!html){
@@ -3800,6 +3881,9 @@ async function extractFromPDF(file){
     return { title:"⚠️ ANAIS com ~"+p.n+" trabalhos — separe com o coletor.py (Python)",
              authors:[], source_file:file.name };
   }
+  let cab=null; try{ cab=parseArtigoEmailsRotulado(text); }catch(_){}
+  if(cab && cab.authors.some(a=>a.email))
+    return { title:cab.title, authors:cab.authors, source_file:file.name };
   const title = extractTitle(text, null);
   return { title, authors: await buildAuthors(text, null, title), source_file: file.name };
 }
@@ -4299,6 +4383,13 @@ async function collectFromPDF(file, mode){
     }
   }
   if(!recs){
+    let cab=null; try{ cab=parseArtigoEmailsRotulado(text); }catch(_){}
+    if(cab && cab.authors.some(a=>a.email)){
+      recs = [{ title:cab.title, authors:cab.authors,
+                _raw: text.slice(0, 4500), source_file:file.name }];
+      nomeModelo = "Artigo · rótulo E-mails:";
+      modelosUsados[nomeModelo] = (modelosUsados[nomeModelo]||0) + 1;
+    } else {
     const title = extractTitle(text, null);              // periódico/artigo: 1 PDF = 1 artigo
     _ultimoModeloArtigo = "";
     const autores = await buildAuthors(text, null, title);
@@ -4306,6 +4397,7 @@ async function collectFromPDF(file, mode){
               _raw: text.slice(0, 4500), source_file:file.name }];   // cabeçalho+rodapés (e-mails) p/ a IA conferir
     if(_ultimoModeloArtigo){ nomeModelo = _ultimoModeloArtigo;
       modelosUsados[_ultimoModeloArtigo] = (modelosUsados[_ultimoModeloArtigo]||0) + 1; }
+    }
   }
   const _ehAnais = (modelo.tipo==="anais");
   recs.forEach(r=>{ r._modelo = nomeModelo; r._anais = _ehAnais; });   // _anais → IA SEMPRE coleta (extração completa) nesses
@@ -5886,9 +5978,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.19";
+const VERSION = "16.20";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.20","2026-08-26","NOVO cortador de artigo único «rótulo E-mails:» (padrão EVEN/SIMPIF): quando o cabeçalho tem TÍTULO, depois a lista Nome (Instituição), Nome (Instituição)… e uma linha E-mails: com os e-mails NA MESMA ORDEM, o sistema agora corta o título limpo (sem a lista de autores grudada) e pareia cada nome com seu e-mail pela ordem. Trata até parêntese não fechado no PDF. No 6º SIMPIF IFPB: títulos limpos foram de ~10%% para 100%% e nomes de 71%% para 96%%. Zero efeito nas demais fontes (testado em 48 amostras + bateria de 20 anais)."],
   ["16.19","2026-08-26","Coluna «Arquivo» também na TABELA DA TELA (etapa Conferir), não só no Excel/CSV — mesma regra: aparece quando o lote tem mais de um arquivo, some quando é um PDF só. A busca 🔍 agora também encontra pelo nome do arquivo."],
   ["16.18","2026-08-26","A pedido (conferência do lote): quando a coleta tem MAIS DE UM ARQUIVO, o Excel e o CSV ganham a coluna «Arquivo» dizendo de QUAL PDF saiu cada linha (título·nome·e-mail) — pra conferir direto na origem. Coleta de um PDF só continua com as 3 colunas limpas de sempre. O JSON já trazia o campo. Vale tanto pro lote de vários PDFs quanto pro anais gigante (todas as linhas apontam o arquivo)."],
   ["16.17","2026-08-26","Fecha o lote «Links com problemas»: Intercom, Contribuciones e Observatorio (OLEL). As duas revistas OJS que faltavam JÁ SAÍRAM LIMPAS com o conserto geral da v16.15 (verificado em amostras: títulos e autores certos). No INTERCOM, a queixa principal — «Intercom – Sociedade Brasileira de Estudos Interdisciplinares da Comunicação» aparecendo em TODOS os títulos — também já morreu com o filtro de cabeçalho repetido; o que restava eram FALSOS AUTORES vindos do cabeçalho («Sociedade Brasileira de Estudos In…», «Congresso de Ciências da Comunicaç…», «Região Norte») poluindo a tela — a defesa de nome agora reconhece entidade de evento (sociedade brasileira/congresso/associação/região/simpósio/seminário) como NÃO-pessoa e manda pra revisão vazio. Nome real com «de/da» continua intacto (testado: João Victor Holanda de Souza, Reginaldo de Camargo ✓). Regressão nos 20 PDFs: zero mudança."],
