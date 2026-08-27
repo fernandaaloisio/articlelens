@@ -4009,8 +4009,10 @@ function parseArtigoRodapeNumUnico(text){
       return tk.every(t=>/^(d[aeo]s?|e|von|van|de|la|del|d[’'][A-ZÀ-Ý][\p{L}'’.\-]*)$/u.test(t)||/^[A-ZÀ-Ý][\p{L}'’.\-]*$/u.test(t)
         || (/^[a-zà-ÿ][\p{L}'’.\-]{2,}$/u.test(t) && !/^(em|para|com|sobre|entre|como|qual|uma?|pel[ao]s?|aos?|nas?|nos?|das?|dos?|durante)$/.test(t) && ++baixo<=1));
     }
-    // nome TODO em CAIXA ALTA (JULIANA LIRA DE OLIVEIRA) — mais restrito: ≤5 tokens
-    return tk.length<=5 && tk.every(t=>/^(D[AEO]S?|E|DE|LA|DEL)$/.test(t)||/^[A-ZÀ-Ý][A-ZÀ-Ý'’.\-]+$/u.test(t)); };
+    // nome TODO em CAIXA ALTA (JULIANA LIRA DE OLIVEIRA) — mais restrito: ≤5 tokens e não pode ser
+    // pedaço de título ("DEMOCRÁTICA NA EDUCAÇÃO PÚBLICA…" → _nomeRuim pega « NA » e «EDUCAÇÃO»)
+    return tk.length<=5 && !(typeof _nomeRuim==="function" && _nomeRuim(g))
+      && tk.every(t=>/^(D[AEO]S?|E|DE|LA|DEL)$/.test(t)||/^[A-ZÀ-Ý][A-ZÀ-Ý'’.\-]+$/u.test(t)); };
   const supN=s=>String(s).split("").map(c=>{ const k="¹²³⁴⁵⁶⁷⁸⁹".indexOf(c); return k>=0?String(k+1):c; }).join("");
   const pares=[];
   for(let i=1;i<N;i++){
@@ -4061,7 +4063,7 @@ function parseArtigoRodapeNumUnico(text){
   }
   if(!pares.length || pares.length>20) return null;
   // rodapés "N bio … email" (o bloco pode quebrar em 2–3 linhas)
-  const rod={};
+  const rod={}, rodBloco={};
   const tit=/assistente|professor|doutor|mestr|gradua|estudante|docente|bolsista|pesquis|servidor|bacharel|especialista|e-?mail/i;
   const all=String(text||"").split(/\n/);
   const supN2=s=>String(s).split("").map(c=>{ const k="¹²³⁴⁵⁶⁷⁸⁹".indexOf(c); return k>=0?String(k+1):c; }).join("");
@@ -4076,7 +4078,7 @@ function parseArtigoRodapeNumUnico(text){
     for(let j=ini+1;j<Math.min(all.length,ini+6);j++){ if(/^\s*[\d¹²³⁴⁵⁶⁷⁸⁹]{1,2}\s*[A-Za-zÀ-ÿ]/.test(all[j])||/^\s*[\d¹²³⁴⁵⁶⁷⁸⁹]{1,2}\s*$/.test(all[j])||!all[j].trim()) break; bloco+=" "+all[j]; }
     if(!tit.test(bloco) && !/@/.test(bloco)) continue;   // titulação OU e-mail ("1UNIBAVE. fulano@x") valida o rodapé
     const es=extractEmails(bloco);
-    if(es.length && !rod[m[1]]) rod[m[1]]=es[0].toLowerCase();
+    if(es.length && !rod[m[1]]){ rod[m[1]]=es[0].toLowerCase(); rodBloco[m[1]]=bloco; }
   }
   if(!Object.keys(rod).length) return null;
   const authors=[]; const usados=new Set();
@@ -4101,7 +4103,24 @@ function parseArtigoRodapeNumUnico(text){
       if(hit){ a.email=hit; usados.add(hit); alvoDoc.splice(alvoDoc.indexOf(hit),1); }
     }
   }catch(_){}
-  for(const n in rod) if(!usados.has(rod[n])) authors.push({name:"",email:rod[n]});
+  for(const n in rod) if(!usados.has(rod[n])){
+    // rodapé sem dono no cabeçalho (ex.: orientadora citada só na nota do título): tenta o NOME
+    // escrito no PRÓPRIO bloco — só entra se o local-part do e-mail COMPROVAR (nunca por chute)
+    let nome="";
+    try{
+      const bl=rodBloco[n]||"";
+      const corte=bl.toLowerCase().indexOf(rod[n].split("@")[0]);
+      const antes=corte>0?bl.slice(0,corte):bl;
+      const cands=antes.match(/[A-ZÀ-Ý][a-zà-ÿ'’.\-]+(?:\s+(?:d[aeo]s?|e|de|la|del|[A-ZÀ-Ý][a-zà-ÿ'’.\-]+)){2,6}/g)||[];
+      for(let k=cands.length-1;k>=0;k--){
+        const c=limpaTit(cands[k].trim());
+        if(!ehNomeStr(c)) continue;
+        const toks=nrmR(c).split(/[^a-z]+/).filter(t=>t.length>=4);
+        if(toks.some(t=>nrmR(rod[n].split("@")[0]).includes(t))){ nome=c; break; }
+      }
+    }catch(_){}
+    authors.push({name:nome,email:rod[n]});
+  }
   return { authors };
 }
 /* E-mail de RODAPÉ CORRENTE (v16.28): aparece em ≥3 páginas E ≥60% das páginas do PDF — é o
@@ -6289,9 +6308,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.30";
+const VERSION = "16.31";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.31","2026-08-27","ProfEI UERN 100%% (88/88). O último caso tinha DOIS defeitos num PDF só: o título em CAPS quebrado pelo sobrescrito («…GESTÃO ¹ DEMOCRÁTICA NA EDUCAÇÃO…») passava como «autor» e levava o e-mail da nota 1 — que era da ORIENTADORA, citada só no rodapé. Consertos gerais: (1) candidato a nome em CAIXA ALTA agora passa pelo detector de frase (_nomeRuim) — « NA » e «EDUCAÇÃO» condenam; (2) rodapé numerado sem dono no cabeçalho ganha o NOME escrito no próprio bloco, mas SÓ quando o local-part do e-mail comprova (arilenemaria.medeiros ↔ Arilene Maria Soares de Medeiros) — nunca por chute. As 8 outras fontes idênticas; bateria dos 20 anais idêntica."],
   ["16.30","2026-08-27","SENPEX 133→199 de 201 (os 2 que faltam são erros do próprio PDF). Caça em camadas: (1) «Vinicius DURANTE Bagio» era apagado porque a regra de «preposição no meio do nome» tratava Durante como preposição — agora só condena preposição MINÚSCULA (frase) ou em texto todo CAPS; sobrenome capitalizado é gente. (2) A lista numerada aceita: nº que quebrou de linha («…Souza ↵ 3; Maria…»), separador com ponto final («Pacheco4.»), «;» faltando («Zanini3 José»), nº deslocado («Esser; 6 Jhonny»), nome que quebrou na linha anterior («…Diandra Fernandes de ↵ Macedo1»), sobrenome minúsculo no PDF («Baldo volpato2») e lista com UM só autor numerado. (3) Quando a lista+ordem e o autor nº+rodapé disparam juntos, vence quem COMPROVA mais pares — a lista via só metade dos autores e roubava a vez. De brinde: Política Social fechou 84/84 (100%%). Todas as demais fontes idênticas; bateria dos 20 anais idêntica."],
   ["16.29","2026-08-26","Últimos 3 sem título do Infância + SENPEX de brinde. (1) TIMBRE institucional em CAPS no topo (UNIVERSIDADE FEDERAL FLUMINENSE – UFF / ESCOLA DE…) não vira mais título — regra ancorada no COMEÇO da linha, então título CAPS que cita escola no meio continua intacto. Infância: 78/78 nomes E títulos. (2) O modelo «autor nº + rodapé» ganhou a variante SENPEX: lista inline «Nome1; Nome2; …» com o número COLADO no nome (quebrada em várias linhas) + rodapé «1UNIBAVE. fulano@x» (validado pelo e-mail, sem exigir palavra de titulação). SENPEX: nomes 125→133 de 201, todos completos (Nacim Miguel Francisco Junior ↔ junior@unibave). As 9 outras fontes idênticas; bateria dos 20 anais idêntica."],
   ["16.28","2026-08-26","I Seminário Infância 100%%: os 35 «sem nome» eram TODOS o mesmo e-mail — nudiss.ssn.ess@id.uff.br, o contato do evento impresso no rodapé de TODA página de TODO PDF. Não é autor: é a mesma família do callcenter@/secretaria@. Duas defesas GERAIS novas: (1) e-mail presente em ≥85%% das páginas do PDF (mín. 2) = rodapé corrente institucional, fora da coleta; (2) no LOTE, e-mail SEM NOME repetido em ≥4 arquivos (≥30%% do lote) e que nunca aparece com dono = contato do evento, fora também (quem tem nome em algum artigo continua — orientador que assina vários é gente). Infância: 78 linhas, 78 nomes (100%%). As 10 outras fontes reprocessadas idênticas; bateria dos 20 anais idêntica."],
