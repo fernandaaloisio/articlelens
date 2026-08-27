@@ -1013,6 +1013,9 @@ function titleFromText(text){
   // Linha SÓ EM CAPS com palavra de evento (sem exigir romano no começo): "VI CONGRESSO DE DIREITO
   // À CIDADE E JUSTIÇA AMBIENTAL" quebrada em qualquer ponto ainda é cabeçalho. (v16.24)
   const eventoCaps = s => !/[a-zà-ÿ]/.test(s) && /\b(CONGRESSO|SEMIN[ÁA]RIO|SIMP[ÓO]SIO|ENCONTRO|JORNADA|COL[ÓO]QUIO|F[ÓO]RUM|CONFER[ÊE]NCIA|WORKSHOP)\b/.test(s);
+  // TIMBRE institucional em CAPS no topo ("UNIVERSIDADE FEDERAL FLUMINENSE – UFF") — ancorado no
+  // COMEÇO da linha, pra não comer título CAPS que cita escola no meio ("…NA ESCOLA MUNICIPAL…") (v16.29)
+  const instCaps = s => !/[a-zà-ÿ]/.test(s) && /^(UNIVERSIDADE|INSTITUTO|FACULDADE|ESCOLA|CENTRO UNIVERSIT|FUNDA[ÇC][ÃA]O|COL[ÉE]GIO|CURSO DE|PROGRAMA DE|DEPARTAMENTO|SECRETARIA|PR[ÓO]-?REITORIA)\b/.test(s);
   const lines = [];
   { let contCaps=false, contEixo=0, contParen=false;
     for(const s0 of text.split("\n")){
@@ -1031,8 +1034,8 @@ function titleFromText(text){
       // preserva títulos legítimos tipo "(Des)proteção social…" / "(Re)pensando…"
       s = s.replace(/^\([^()]{12,120}\)\s*/,"").trim();
       if(!s) continue;
-      if(noise.test(s) || evento.test(s) || eventoSigla.test(s) || eventoRomano.test(s) || eventoCaps(s) || categoria.test(s) || cabecalhoCorrente(s)){
-        if(eventoRomano.test(s) || eventoCaps(s) || (evento.test(s) && /:\s*$/.test(s))) contCaps=true;
+      if(noise.test(s) || evento.test(s) || eventoSigla.test(s) || eventoRomano.test(s) || eventoCaps(s) || instCaps(s) || categoria.test(s) || cabecalhoCorrente(s)){
+        if(eventoRomano.test(s) || eventoCaps(s) || instCaps(s) || (evento.test(s) && /:\s*$/.test(s))) contCaps=true;
         if(/^eixo\b/i.test(s) && !/[.!?]\s*$/.test(s)) contEixo=2;
         continue;
       }
@@ -4020,6 +4023,25 @@ function parseArtigoRodapeNumUnico(text){
       if(ehNomeStr(antes) && !pares.some(p=>p.nome===antes)) pares.push({nome:antes, n:supN(l)});
     }
   }
+  if(!pares.length){
+    // variante SENPEX: lista inline "Nome1; Nome2; …" com o nº COLADO no nome, quebrada em 2–4 linhas
+    for(let i=1;i<N;i++){
+      if(!/[A-Za-zÀ-ÿ]\d{1,2}\s*;/.test(linhas[i])) continue;
+      let bloco=linhas[i];
+      for(let j=i+1;j<Math.min(N,i+5);j++){
+        const lj=linhas[j];
+        if(!lj || /^(resumo|abstract|palavras|keywords|[áa]rea|eixo)\b/i.test(lj) || /@/.test(lj) || /^\d/.test(lj)) break;
+        bloco+=" "+lj;
+      }
+      let m2; const re2=/([A-ZÀ-Ý][^;]{4,60}?)\s*(\d{1,2})\s*(?:;|$)/g;
+      while((m2=re2.exec(bloco))){
+        const nome=limpaTit(m2[1].replace(/\s+/g," ").trim());
+        if(ehNomeStr(nome)) pares.push({nome, n:m2[2]});
+      }
+      if(pares.length>=2) break;
+      pares.length=0;
+    }
+  }
   if(!pares.length || pares.length>20) return null;
   // rodapés "N bio … email" (o bloco pode quebrar em 2–3 linhas)
   const rod={};
@@ -4035,7 +4057,7 @@ function parseArtigoRodapeNumUnico(text){
     m[1]=supN2(m[1]);
     let bloco=m[2];
     for(let j=ini+1;j<Math.min(all.length,ini+6);j++){ if(/^\s*[\d¹²³⁴⁵⁶⁷⁸⁹]{1,2}\s*[A-Za-zÀ-ÿ]/.test(all[j])||/^\s*[\d¹²³⁴⁵⁶⁷⁸⁹]{1,2}\s*$/.test(all[j])||!all[j].trim()) break; bloco+=" "+all[j]; }
-    if(!tit.test(bloco)) continue;
+    if(!tit.test(bloco) && !/@/.test(bloco)) continue;   // titulação OU e-mail ("1UNIBAVE. fulano@x") valida o rodapé
     const es=extractEmails(bloco);
     if(es.length && !rod[m[1]]) rod[m[1]]=es[0].toLowerCase();
   }
@@ -6245,9 +6267,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.28";
+const VERSION = "16.29";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.29","2026-08-26","Últimos 3 sem título do Infância + SENPEX de brinde. (1) TIMBRE institucional em CAPS no topo (UNIVERSIDADE FEDERAL FLUMINENSE – UFF / ESCOLA DE…) não vira mais título — regra ancorada no COMEÇO da linha, então título CAPS que cita escola no meio continua intacto. Infância: 78/78 nomes E títulos. (2) O modelo «autor nº + rodapé» ganhou a variante SENPEX: lista inline «Nome1; Nome2; …» com o número COLADO no nome (quebrada em várias linhas) + rodapé «1UNIBAVE. fulano@x» (validado pelo e-mail, sem exigir palavra de titulação). SENPEX: nomes 125→133 de 201, todos completos (Nacim Miguel Francisco Junior ↔ junior@unibave). As 9 outras fontes idênticas; bateria dos 20 anais idêntica."],
   ["16.28","2026-08-26","I Seminário Infância 100%%: os 35 «sem nome» eram TODOS o mesmo e-mail — nudiss.ssn.ess@id.uff.br, o contato do evento impresso no rodapé de TODA página de TODO PDF. Não é autor: é a mesma família do callcenter@/secretaria@. Duas defesas GERAIS novas: (1) e-mail presente em ≥85%% das páginas do PDF (mín. 2) = rodapé corrente institucional, fora da coleta; (2) no LOTE, e-mail SEM NOME repetido em ≥4 arquivos (≥30%% do lote) e que nunca aparece com dono = contato do evento, fora também (quem tem nome em algum artigo continua — orientador que assina vários é gente). Infância: 78 linhas, 78 nomes (100%%). As 10 outras fontes reprocessadas idênticas; bateria dos 20 anais idêntica."],
   ["16.27","2026-08-26","Intercom Norte 100%% (61/61) e mais 2 fontes de brinde. Três consertos gerais: (1) BUG antigo — a regra «anais d» sem borda de palavra comia títulos com «canais de» (Chatbots como cANAIS De mediação…); (2) rodapé com o NÚMERO numa linha e a biografia na seguinte agora casa, e a biografia pode ter o e-mail até a 5ª linha; (3) o validador de nome aceita partícula d-apóstrofo (Giselle Xavier d’Avila Lucena) e nome TODO EM CAIXA ALTA (JULIANA LIRA DE OLIVEIRA, ≤5 palavras). Com isso o modelo «autor nº + rodapé» pegou também o I Seminário Infância (nomes 57→78 de 113) e o IX ProfEI UERN (69→87 de 88) — e-mails de matrícula pareados pelo número do rodapé, que a heurística não tinha como provar. Política Social/GESEC idênticos; bateria dos 20 anais idêntica."],
   ["16.26","2026-08-26","Rev GESEC 100%%: o modelo «autor nº + rodapé» da v16.25 já resolvia o pareamento (nomes 2→28 de 28) — e o único título sujo era o DOI com LETRAS ESPAÇADAS («DO I: h t tp://…») que escapava do filtro: agora DOI espaçado também é reconhecido como lixo de cabeçalho, em qualquer revista. Bateria dos 20 anais idêntica."],
