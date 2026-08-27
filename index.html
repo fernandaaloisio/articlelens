@@ -1000,6 +1000,7 @@ function titleFromText(text){
       // removida ("SOCIAL: DESAFIOS CONTEMPORÂNEOS", "SOCIAIS") — encadeia até achar conteúdo normal
       if(contCaps){ if(!/[a-zà-ÿ]/.test(s) && /[A-ZÀ-Ý]/.test(s) && s.length<=45 && !eventoCaps(s)) continue; if(!eventoCaps(s)) contCaps=false; }
       if(contEixo>0){ if(/^[a-zà-ÿ]/.test(s)){ contEixo--; continue; } contEixo=0; }
+      if(/^d\s*o\s*i\s*[:.]/i.test(s)){ continue; }          // DOI com letras espaçadas ("DO I: h t tp://…") (v16.26)
       if(/^\([^()]{3,90}\)$/.test(s)){ continue; }           // linha inteira entre parênteses = rótulo de eixo/categoria
       // rótulo "(Eixo …)" LONGO colado no começo da linha do título → tira o prefixo; ≥12 chars
       // preserva títulos legítimos tipo "(Des)proteção social…" / "(Re)pensando…"
@@ -6195,9 +6196,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.25";
+const VERSION = "16.26";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.26","2026-08-26","Rev GESEC 100%%: o modelo «autor nº + rodapé» da v16.25 já resolvia o pareamento (nomes 2→28 de 28) — e o único título sujo era o DOI com LETRAS ESPAÇADAS («DO I: h t tp://…») que escapava do filtro: agora DOI espaçado também é reconhecido como lixo de cabeçalho, em qualquer revista. Bateria dos 20 anais idêntica."],
   ["16.25","2026-08-26","PAREAMENTO nome↔e-mail do SOL/SBC e da Política Social (a pedido). SBC: e-mails em chave agora expandem com SUFIXO fora ({a,b}.aluno@dom), com chave ABERTA sem fechar e com o @dominio na linha seguinte; novo modelo «lista+ordem»: lista de autores separada por vírgula + e-mails na mesma ordem (se o local-part contradiz a ordem, o casamento comprovado vence). Política Social/Intercom: novo modelo «autor nº + rodapé»: autor numerado no cabeçalho pareia com o rodapé biográfico pelo NÚMERO, com fallback comprovado pelo local-part; rodapé sem espaço após o nº (1Assistente…) também vale. Rede do artigo único: @ não capturado entra no MESMO registro (mantém o título). SOL: nomes 78→139 de 143 (todos comprovados); Política Social: 69→83 de 84; Intercom Norte de brinde: 37→54. Guardas anti-sequestro (cargo/instituição não é nome; lista exige ≥2 e-mails juntos): CCSS/BJHR/Contemporânea/South Florida/BJD idênticos; bateria dos 20 anais idêntica."],
   ["16.24","2026-08-26","Títulos SOL/SBC e de congressos com eixo temático (a pedido, VI Política Social): (1) linha que é SÓ nomes de pessoas — «Nome , Nome , Nome» do SBC (sobrescritos em linha separada) ou nome pleno/nome (SIGLA) — encerra o título em vez de colar nele; (2) cabeçalho de evento em CAPS quebrado em QUALQUER ponto agora cai por inteiro (encadeia fragmentos curtos tipo «DESAFIOS CONTEMPORÂNEOS»); (3) rótulo de eixo em toda forma — «Eixo:», «Eixo Fundamentos…», «(Eixo …)» na mesma linha ou abrindo parêntese numa linha e fechando na outra — é removido; (4) título terminando em artigo solto («…: a») sempre puxa a linha seguinte, e linha com cara de instituição não é confundida com autor. SOL: 0 títulos com autor colado; Política Social: 0 resíduos de cabeçalho/eixo. BJD/BJHR/CCSS/Contemporânea/South Florida re-verificados idênticos; bateria dos 20 anais idêntica."],
   ["16.23","2026-08-26","Título PT não cola mais o COMEÇO da tradução inglesa («…aprendizado de máquina An intelligent approach to…»): o detector de tradução conhecia só the/of/and — agora tem um detector EN reforçado (an, to, on, based, using, study, approach…) que exige AUSÊNCIA de qualquer marca de português (acento, de/da/em/com), então título PT com «in vitro»/«in loco» continua juntando normal. BJD reconferido: 0 títulos com tradução colada; BJHR/South Florida/Contribuciones idênticos; bateria dos 20 anais idêntica."],
