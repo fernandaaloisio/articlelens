@@ -1094,16 +1094,27 @@ function extractEmails(text){
   text = text.replace(/[​‌‍﻿]/g,"");
   const found = [];
   // 1) e-mails em CHAVE (estilo SBC): {a,b}@dom -> a@dom, b@dom
-  let m, brace = /\{([^}]+)\}\s*@\s*([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;   // aceita "} @furg.br" com espaço (SBC/SOL) (v16.15)
+  //    v16.25: aceita SUFIXO fora da chave — {a,b}.aluno@dom -> a.aluno@dom, b.aluno@dom
+  let m, brace = /\{([^}]{1,200})\}\s*([a-zA-Z0-9._\-]*)\s*@\s*([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;   // aceita "} @furg.br" com espaço (SBC/SOL) (v16.15)
   while((m = brace.exec(text))){
-    const dom = m[2];
+    const suf = m[2]||"", dom = m[3];
     m[1].split(",").forEach(loc=>{
       loc = loc.replace(/[^a-zA-Z0-9._%+\-]/g,"");
-      if(loc) found.push((loc+"@"+dom).toLowerCase());
+      if(loc) found.push((loc+suf+"@"+dom).toLowerCase());
+    });
+  }
+  // 1b) chave com "{" PERDIDO na extração ("a,b,c}.suf@dom") — lista de locais + "}" ainda expande (v16.25)
+  let orf = /(^|[\s:;])([a-zA-Z0-9._%+\-]+(?:\s*,\s*[a-zA-Z0-9._%+\-]+)+)\}\s*([a-zA-Z0-9._\-]*)\s*@\s*([a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;
+  while((m = orf.exec(text))){
+    const suf = m[3]||"", dom = m[4];
+    m[2].split(",").forEach(loc=>{
+      loc = loc.replace(/[^a-zA-Z0-9._%+\-]/g,"");
+      if(loc) found.push((loc+suf+"@"+dom).toLowerCase());
     });
   }
   // 2) e-mails normais (ignorando os que estavam em chave)
-  const plain = text.replace(/\{[^}]+\}\s*@\s*[a-zA-Z0-9.\-]+/g," ");
+  const plain = text.replace(/\{[^}]+\}\s*[a-zA-Z0-9._\-]*\s*@\s*[a-zA-Z0-9.\-]+/g," ")
+                    .replace(/(^|[\s:;])[a-zA-Z0-9._%+\-]+(?:\s*,\s*[a-zA-Z0-9._%+\-]+)+\}\s*[a-zA-Z0-9._\-]*\s*@\s*[a-zA-Z0-9.\-]+/g," ");
   (plain.match(EMAIL_RE)||[]).forEach(e=>found.push(e.toLowerCase().replace(/[.,;)]+$/,"")));
   return [...new Set(found)].filter(_emailReal);
 }
@@ -3897,6 +3908,142 @@ function parseArtigoEmailsRotulado(text){
   try{ title=_limparTituloAnais(title)||title; }catch(_){}
   return { title, authors };
 }
+/* Artigo SBC/SOL (v16.25): lista de autores separada por vírgula no topo + e-mails (em chaves ou
+   soltos) NA MESMA ORDEM. Sobrescritos podem virar linha separada ("1 1 1"); a lista pode quebrar
+   em 2 linhas; instituição/endereço ficam entre autores e e-mails. */
+function parseArtigoListaOrdem(text){
+  const linhas=String(text||"").split(/\n/).map(l=>l.trim());
+  const N=Math.min(linhas.length,34);
+  // início do bloco de e-mails: 1ª linha com @ OU abertura de chave SBC ("{a,b,c}" com @dom na linha seguinte)
+  let iE=-1; for(let i=0;i<N;i++) if(/@/.test(linhas[i]) || /\{[a-z0-9]/i.test(linhas[i])){ iE=i; break; }
+  if(iE<3) return null;
+  const limpaNum=g=>g.trim().replace(/[\d¹²³⁴⁵⁶⁷⁸⁹*†‡]+\s*$/,"").trim();
+  const nomeOk=g=>{ g=limpaNum(g); const tk=g.split(/\s+/);
+    return tk.length>=2 && tk.length<=6 && /[a-zà-ÿ]/.test(g) && !/[@:()]/.test(g)
+      && !(typeof _DEGREE!=="undefined" && _DEGREE.test(g))          // "Estudiante de Medicina" é cargo, não gente
+      && !(typeof _INST_RE!=="undefined" && _INST_RE.test(g))
+      && tk.every(t=>/^(d[aeo]s?|e|von|van|de|la|del)$/.test(t)||/^[A-ZÀ-Ý][\p{L}'’.\-]*$/u.test(t)); };
+  const inst=/universi|institut|laborat|\blabs?\b|centro de|center|caixa postal|depart(ment|amento)|faculda|college|campus|federal d|escola|programa de|p[óo]s-?gradua|\d{5}\s*-?\s*\d{3}/i;
+  const nomes=[]; let lixo=0;
+  for(let i=iE-1;i>=1;i--){
+    const l=linhas[i]; if(!l) continue;
+    if(/^[\d\s¹²³⁴⁵⁶⁷⁸⁹.,–\-]+$/.test(l)) continue;              // linha de sobrescritos "1 1 1"
+    if(/^[\d¹²³⁴⁵⁶⁷⁸⁹]/.test(l)){ if(!nomes.length) continue; else break; }  // afiliação SBC começa com o nº ("1Universidade…", "2AI Horizon Labs")
+    if(inst.test(l)){ if(nomes.length) break; else continue; }   // instituição/endereço entre autores e e-mails
+    const gs=l.replace(/^\s*,+|,+\s*$/g,"").split(/\s*,\s*/).filter(Boolean);
+    if(gs.length && gs.every(nomeOk)){ nomes.unshift(...gs.map(limpaNum)); continue; }
+    if(nomes.length) break;                                       // fim do bloco de autores
+    if(++lixo<=3) continue;                                       // "– RS – Brasil" etc. entre autores e e-mails
+    break;
+  }
+  if(nomes.length<2 || nomes.length>30) return null;
+  // e-mails: JANELA de linhas contíguas com @/chaves a partir de iE (chave numa linha, @dom na seguinte)
+  let fim=iE; while(fim<Math.min(N,iE+6) && /[@{}]/.test(linhas[fim])) fim++;
+  const emails=[...new Set(extractEmails(linhas.slice(iE,fim).join("\n")).map(e=>e.toLowerCase()))];
+  // ≥2 e-mails JUNTOS = assinatura do formato lista (bloco-periódico traz 1 por autor, cada um isolado)
+  if(emails.length<2 || emails.length>nomes.length*3) return null;
+  const nrm=s=>String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+  const casa=(n,e)=>{ const loc=nrm(e.split("@")[0]);
+    const toks=nrm(n).split(/[^a-z]+/).filter(t=>t.length>=3);
+    return toks.some(t=>loc.includes(t)) || toks.some(t=>t.length>=4&&loc.includes(t.slice(0,4))); };
+  const porLocal=()=>{ const out=[], usados=new Set();
+    for(const n of nomes){ const hit=emails.find(e=>!usados.has(e)&&casa(n,e));
+      out.push({name:n,email:hit||""}); if(hit)usados.add(hit); }
+    for(const e of emails) if(!usados.has(e)) out.push({name:"",email:e});
+    return out; };
+  let authors;
+  if(emails.length===nomes.length){
+    // convenção SBC = mesma ordem; mas se o casamento por local-part CONTRADIZ a ordem, ele vence
+    const porOrdem=nomes.map((n,i)=>({name:n,email:emails[i]}));
+    const scoreO=porOrdem.filter(a=>casa(a.name,a.email)).length;
+    const pl=porLocal(); const scoreL=pl.filter(a=>a.name&&a.email&&casa(a.name,a.email)).length;
+    authors = (scoreL>scoreO) ? pl : porOrdem;
+  } else authors=porLocal();
+  return { authors };
+}
+/* Artigo com AUTOR NUMERADO no cabeçalho + rodapé biográfico (v16.25, ex.: VI Política Social):
+     Nome Completo (UEL – Pr) 1        ou      1        (linha só-dígito antes/depois do nome)
+     …                                          Nome Completo
+     rodapé: "1 Graduanda em … Email.: fulana@uel.br"  → pareia pelo NÚMERO. */
+function parseArtigoRodapeNumUnico(text){
+  const linhas=String(text||"").split(/\n/).map(l=>l.trim());
+  const N=Math.min(linhas.length,30);
+  const limpaTit=s=>s.replace(/^(?:(?:Prof[ªa]?\.?|Dr[ªa]?\.?|Me\.?|Esp\.?|Ma\.?|Mestre|Doutor[a]?)\s+)+/i,"").trim();
+  const ehNomeStr=g=>{ const tk=(g||"").split(/\s+/);
+    return tk.length>=2 && tk.length<=7 && /[a-zà-ÿ]/.test(g) && !/[@:]/.test(g)
+      && !(typeof _INST_RE!=="undefined" && _INST_RE.test(g))
+      && tk.every(t=>/^(d[aeo]s?|e|von|van|de|la|del)$/.test(t)||/^[A-ZÀ-Ý][\p{L}'’.\-]*$/u.test(t)); };
+  const supN=s=>String(s).split("").map(c=>{ const k="¹²³⁴⁵⁶⁷⁸⁹".indexOf(c); return k>=0?String(k+1):c; }).join("");
+  const pares=[];
+  for(let i=1;i<N;i++){
+    const l=linhas[i]; if(!l) continue;
+    // "Nome (AFIL) 2" / "Nome 2"
+    const m=l.match(/^(.{5,70}?)\s*(?:\(([^()]{2,40})\))?\s*([\d¹²³⁴⁵⁶⁷⁸⁹]{1,2})$/);
+    if(m){ const nome=limpaTit(m[1].trim());
+      if(ehNomeStr(nome)){ pares.push({nome, n:supN(m[3])}); continue; } }
+    // linha só-dígito
+    if(/^[\d¹²³⁴⁵⁶⁷⁸⁹]{1,2}$/.test(l)){
+      const antes=limpaTit(linhas[i-1]||""), depois=(linhas[i+1]||"").trim();
+      if(ehNomeStr(antes) && /^[A-ZÀ-Ý][\p{L}'’.\-]*(\s+[A-ZÀ-Ý][\p{L}'’.\-]*)?$/u.test(depois) && depois.split(/\s+/).length<=2 && !ehNomeStr(limpaTit(depois))){
+        pares.push({nome:(antes+" "+depois).trim(), n:supN(l)}); i++; continue;   // sobrescrito quebrou o nome no meio
+      }
+      if(ehNomeStr(limpaTit(depois))){ pares.push({nome:limpaTit(depois), n:supN(l)}); i++; continue; }
+      if(ehNomeStr(antes) && !pares.some(p=>p.nome===antes)) pares.push({nome:antes, n:supN(l)});
+    }
+  }
+  if(!pares.length || pares.length>20) return null;
+  // rodapés "N bio … email" (o bloco pode quebrar em 2–3 linhas)
+  const rod={};
+  const tit=/assistente|professor|doutor|mestr|gradua|estudante|docente|bolsista|pesquis|servidor|bacharel|especialista|e-?mail/i;
+  const all=String(text||"").split(/\n/);
+  const supN2=s=>String(s).split("").map(c=>{ const k="¹²³⁴⁵⁶⁷⁸⁹".indexOf(c); return k>=0?String(k+1):c; }).join("");
+  for(let i=0;i<all.length;i++){
+    const m=all[i].match(/^\s*([\d¹²³⁴⁵⁶⁷⁸⁹]{1,2})\s*([A-Za-zÀ-ÿ].{9,})/);   // aceita "1Assistente…" sem espaço
+    if(!m || +supN2(m[1])>30) continue;
+    m[1]=supN2(m[1]);
+    let bloco=m[2];
+    for(let j=i+1;j<Math.min(all.length,i+4);j++){ if(/^\s*[\d¹²³⁴⁵⁶⁷⁸⁹]{1,2}\s*[A-Za-zÀ-ÿ]/.test(all[j])||!all[j].trim()) break; bloco+=" "+all[j]; }
+    if(!tit.test(bloco)) continue;
+    const es=extractEmails(bloco);
+    if(es.length && !rod[m[1]]) rod[m[1]]=es[0].toLowerCase();
+  }
+  if(!Object.keys(rod).length) return null;
+  const authors=[]; const usados=new Set();
+  for(const p of pares){ const e=rod[p.n]||""; if(e)usados.add(e); authors.push({name:p.nome,email:e}); }
+  if(!authors.some(a=>a.email)) return null;
+  // fallback: nome sem e-mail × sobra do rodapé que o local-part comprova (número bagunçado no PDF)
+  const nrmR=s=>String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
+  for(const a of authors){
+    if(a.email || !a.name) continue;
+    const toks=nrmR(a.name).split(/[^a-z]+/).filter(t=>t.length>=3);
+    const hit=Object.values(rod).find(e=>!usados.has(e)&&toks.some(t=>nrmR(e.split("@")[0]).includes(t)));
+    if(hit){ a.email=hit; usados.add(hit); }
+  }
+  // último recurso COMPROVADO: nome ainda sem e-mail × qualquer @ do documento cujo local-part
+  // contém um token (≥4 letras) do nome — só com prova, nunca por chute
+  try{
+    const alvoDoc=[...new Set(extractEmails(text).map(e=>e.toLowerCase()))].filter(e=>!usados.has(e));
+    for(const a of authors){
+      if(a.email || !a.name) continue;
+      const toks=nrmR(a.name).split(/[^a-z]+/).filter(t=>t.length>=4);
+      const hit=alvoDoc.find(e=>toks.some(t=>nrmR(e.split("@")[0]).includes(t)));
+      if(hit){ a.email=hit; usados.add(hit); alvoDoc.splice(alvoDoc.indexOf(hit),1); }
+    }
+  }catch(_){}
+  for(const n in rod) if(!usados.has(rod[n])) authors.push({name:"",email:rod[n]});
+  return { authors };
+}
+/* Esteira ESTRUTURADA do artigo único (v16.25): tenta os 3 formatos exatos; null → caminho geral. */
+function _parseArtigoEstruturado(text){
+  let r=null;
+  try{ r=parseArtigoEmailsRotulado(text); }catch(_){}
+  if(r && r.authors.some(a=>a.email)) return { title:r.title, authors:r.authors, modelo:"Artigo · rótulo E-mails:" };
+  try{ r=parseArtigoListaOrdem(text); }catch(_){ r=null; }
+  if(r && r.authors.some(a=>a.email)) return { title:null, authors:r.authors, modelo:"Artigo · lista+ordem (SBC)" };
+  try{ r=parseArtigoRodapeNumUnico(text); }catch(_){ r=null; }
+  if(r && r.authors.some(a=>a.email)) return { title:null, authors:r.authors, modelo:"Artigo · autor nº + rodapé" };
+  return null;
+}
 async function buildAuthors(text, html, title){
   // 1) Sem metadados HTML, tenta o bloco de periódico (nome+e-mail juntos = exato)
   if(!html){
@@ -3945,9 +4092,9 @@ async function extractFromPDF(file){
     return { title:"⚠️ ANAIS com ~"+p.n+" trabalhos — separe com o coletor.py (Python)",
              authors:[], source_file:file.name };
   }
-  let cab=null; try{ cab=parseArtigoEmailsRotulado(text); }catch(_){}
-  if(cab && cab.authors.some(a=>a.email))
-    return { title:cab.title, authors:cab.authors, source_file:file.name };
+  let cab=null; try{ cab=_parseArtigoEstruturado(text); }catch(_){}
+  if(cab)
+    return { title:(cab.title!=null?cab.title:extractTitle(text,null)), authors:cab.authors, source_file:file.name };
   const title = extractTitle(text, null);
   return { title, authors: await buildAuthors(text, null, title), source_file: file.name };
 }
@@ -4447,11 +4594,17 @@ async function collectFromPDF(file, mode){
     }
   }
   if(!recs){
-    let cab=null; try{ cab=parseArtigoEmailsRotulado(text); }catch(_){}
-    if(cab && cab.authors.some(a=>a.email)){
-      recs = [{ title:cab.title, authors:cab.authors,
+    let cab=null; try{ cab=_parseArtigoEstruturado(text); }catch(_){}
+    if(cab){
+      // rede do artigo único: @ do PDF que o parser estruturado não capturou entra NO MESMO registro
+      // (mantém o título; nome em branco → revisão) — nada se perde em silêncio
+      try{ const capE=new Set(cab.authors.filter(a=>a.email).map(a=>a.email.toLowerCase()));
+        for(const e of [...new Set(extractEmails(text).map(x=>x.toLowerCase()))])
+          if(!_emailInstitucional(e) && !capE.has(e)) cab.authors.push({name:"",email:e});
+      }catch(_){}
+      recs = [{ title:(cab.title!=null?cab.title:extractTitle(text,null)), authors:cab.authors,
                 _raw: text.slice(0, 4500), source_file:file.name }];
-      nomeModelo = "Artigo · rótulo E-mails:";
+      nomeModelo = cab.modelo;
       modelosUsados[nomeModelo] = (modelosUsados[nomeModelo]||0) + 1;
     } else {
     const title = extractTitle(text, null);              // periódico/artigo: 1 PDF = 1 artigo
@@ -6042,9 +6195,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.24";
+const VERSION = "16.25";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.25","2026-08-26","PAREAMENTO nome↔e-mail do SOL/SBC e da Política Social (a pedido). SBC: e-mails em chave agora expandem com SUFIXO fora ({a,b}.aluno@dom), com chave ABERTA sem fechar e com o @dominio na linha seguinte; novo modelo «lista+ordem»: lista de autores separada por vírgula + e-mails na mesma ordem (se o local-part contradiz a ordem, o casamento comprovado vence). Política Social/Intercom: novo modelo «autor nº + rodapé»: autor numerado no cabeçalho pareia com o rodapé biográfico pelo NÚMERO, com fallback comprovado pelo local-part; rodapé sem espaço após o nº (1Assistente…) também vale. Rede do artigo único: @ não capturado entra no MESMO registro (mantém o título). SOL: nomes 78→139 de 143 (todos comprovados); Política Social: 69→83 de 84; Intercom Norte de brinde: 37→54. Guardas anti-sequestro (cargo/instituição não é nome; lista exige ≥2 e-mails juntos): CCSS/BJHR/Contemporânea/South Florida/BJD idênticos; bateria dos 20 anais idêntica."],
   ["16.24","2026-08-26","Títulos SOL/SBC e de congressos com eixo temático (a pedido, VI Política Social): (1) linha que é SÓ nomes de pessoas — «Nome , Nome , Nome» do SBC (sobrescritos em linha separada) ou nome pleno/nome (SIGLA) — encerra o título em vez de colar nele; (2) cabeçalho de evento em CAPS quebrado em QUALQUER ponto agora cai por inteiro (encadeia fragmentos curtos tipo «DESAFIOS CONTEMPORÂNEOS»); (3) rótulo de eixo em toda forma — «Eixo:», «Eixo Fundamentos…», «(Eixo …)» na mesma linha ou abrindo parêntese numa linha e fechando na outra — é removido; (4) título terminando em artigo solto («…: a») sempre puxa a linha seguinte, e linha com cara de instituição não é confundida com autor. SOL: 0 títulos com autor colado; Política Social: 0 resíduos de cabeçalho/eixo. BJD/BJHR/CCSS/Contemporânea/South Florida re-verificados idênticos; bateria dos 20 anais idêntica."],
   ["16.23","2026-08-26","Título PT não cola mais o COMEÇO da tradução inglesa («…aprendizado de máquina An intelligent approach to…»): o detector de tradução conhecia só the/of/and — agora tem um detector EN reforçado (an, to, on, based, using, study, approach…) que exige AUSÊNCIA de qualquer marca de português (acento, de/da/em/com), então título PT com «in vitro»/«in loco» continua juntando normal. BJD reconferido: 0 títulos com tradução colada; BJHR/South Florida/Contribuciones idênticos; bateria dos 20 anais idêntica."],
   ["16.22","2026-08-26","Título multilinha não corta mais em revistas com título PRINCIPAL EM INGLÊS (BJD/BJHR/South Florida): a parada de «começou a tradução» via a continuação inglesa (the/of/and) e cortava o título no meio. Agora o sistema detecta o idioma do título: se já é inglês, junta a continuação em inglês e para quando começa o português/espanhol. E título terminando em preposição solta («…Escolas Rurais de») SEMPRE puxa a linha seguinte — tradução nunca começa depois de preposição pendurada (corrige o falso-espanhol de «durante»). BJD/BJHR/South Florida: 0 títulos cortados. Bateria dos 20 anais idêntica."],
