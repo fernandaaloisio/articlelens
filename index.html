@@ -2821,7 +2821,10 @@ function _nomeRuim(s){ s=(s||"").trim(); if(!s) return false;
   if(/\b(graduand[oa]|p[óo]s[\- ]?graduand|docente|discente|orientador|coorientador|residente|mestrand[oa]|doutorand[oa]|bolsista|t[ée]cnic[oa]|enfermeir[oa]|departamento|escola paulista|\bcampus\b|unifesp|\bict\b|n[úu]cleo|setor\b|secretaria)\b/i.test(s)) return true;   // CARGO/afiliação no lugar do nome ("MENDES, Graduanda", "Departamento de Educação", "ICT Unifesp", "Campus Baixada")
   // PALAVRA de TÍTULO no meio do "nome" (substantivo/verbo que pessoa nenhuma tem no nome) = é título, não autor
   if(/\b(sa[úu]de|tratamento|crian[çc]as?|an[áa]lise|caracteriza|efeito|qualidade|educa[çc][ãa]o|ensino|estudos?|avalia[çc][ãa]o|impacto|import[âa]ncia|desenvolvimento|\bliga\b|projetos?|atividades?|perfil|adapta[çc]|doen[çc]a|pacientes?|terapia|interven[çc]|preven[çc]|assist[êe]ncia|forma[çc][ãa]o|gest[ãa]o|sistemas?|rela[çc][ãa]o|influ[êe]ncia|aplica[çc]|utiliza[çc]|implementa|constru[çc]|produ[çc][ãa]o|revis[ãa]o|pesquisa|par[âa]metros?|uso de|comportamento|predomin|crescimento|desempenho|performance)\b/i.test(s)) return true;
-  if(/\s(em|para|com|sobre|no|na|nos|nas|ao|aos|durante|atrav[ée]s|pela|pelo)\s/i.test(s)) return true;   // preposição no MEIO ("DE CRIANÇAS EM TRATAMENTO") = frase/título
+  // preposição no MEIO ("DE CRIANÇAS EM TRATAMENTO") = frase/título — mas SÓ minúscula ou em texto
+  // todo CAPS: "Vinicius Durante Bagio" tem Durante como SOBRENOME (capitalizado) e é gente (v16.30)
+  if(/\s(em|para|com|sobre|no|na|nos|nas|ao|aos|durante|atrav[ée]s|pela|pelo)\s/.test(s)) return true;
+  if(!/[a-zà-ÿ]/.test(s) && /\s(EM|PARA|COM|SOBRE|NO|NA|NOS|NAS|AO|AOS|DURANTE|ATRAV[ÉE]S|PELA|PELO)\s/.test(s)) return true;
   return false; }
 /* LIMPA o título quando vem grudado com cabeçalho de página/sumário e rótulos (ex.: anais de Medicina:
    "ORTOPEDIA PÁGINA 65 … ANAIS DO ENCONTRO … issn … ACADÊMICOS DE MEDICINA  TÍTULO REAL  MODALIDADE: …
@@ -4001,8 +4004,11 @@ function parseArtigoRodapeNumUnico(text){
   const ehNomeStr=g=>{ const tk=(g||"").split(/\s+/);
     if(tk.length<2 || tk.length>7 || /[@:]/.test(g)) return false;
     if(typeof _INST_RE!=="undefined" && _INST_RE.test(g)) return false;
-    if(/[a-zà-ÿ]/.test(g))                                            // caixa mista (com "d’Avila", "von")
-      return tk.every(t=>/^(d[aeo]s?|e|von|van|de|la|del|d[’'][A-ZÀ-Ý][\p{L}'’.\-]*)$/u.test(t)||/^[A-ZÀ-Ý][\p{L}'’.\-]*$/u.test(t));
+    if(/[a-zà-ÿ]/.test(g)){                                           // caixa mista (com "d’Avila", "von")
+      let baixo=0;                                                    // tolera 1 sobrenome minúsculo ("Baldo volpato") que não seja palavra de frase
+      return tk.every(t=>/^(d[aeo]s?|e|von|van|de|la|del|d[’'][A-ZÀ-Ý][\p{L}'’.\-]*)$/u.test(t)||/^[A-ZÀ-Ý][\p{L}'’.\-]*$/u.test(t)
+        || (/^[a-zà-ÿ][\p{L}'’.\-]{2,}$/u.test(t) && !/^(em|para|com|sobre|entre|como|qual|uma?|pel[ao]s?|aos?|nas?|nos?|das?|dos?|durante)$/.test(t) && ++baixo<=1));
+    }
     // nome TODO em CAIXA ALTA (JULIANA LIRA DE OLIVEIRA) — mais restrito: ≤5 tokens
     return tk.length<=5 && tk.every(t=>/^(D[AEO]S?|E|DE|LA|DEL)$/.test(t)||/^[A-ZÀ-Ý][A-ZÀ-Ý'’.\-]+$/u.test(t)); };
   const supN=s=>String(s).split("").map(c=>{ const k="¹²³⁴⁵⁶⁷⁸⁹".indexOf(c); return k>=0?String(k+1):c; }).join("");
@@ -4023,24 +4029,35 @@ function parseArtigoRodapeNumUnico(text){
       if(ehNomeStr(antes) && !pares.some(p=>p.nome===antes)) pares.push({nome:antes, n:supN(l)});
     }
   }
-  if(!pares.length){
-    // variante SENPEX: lista inline "Nome1; Nome2; …" com o nº COLADO no nome, quebrada em 2–4 linhas
+  if(pares.length<=1){
+    // variante SENPEX: lista inline "Nome1; Nome2; …" com o nº COLADO no nome (ou sobrescrito, ou
+    // com espaço), separada por ";" OU ",", quebrada em 2–4 linhas. O scan por linha pega só o último
+    // autor quando ele fecha a lista sozinho — por isso a variante roda também com 1 par achado.
+    const paresLinha=pares.slice(); pares.length=0;
     for(let i=1;i<N;i++){
-      if(!/[A-Za-zÀ-ÿ]\d{1,2}\s*;/.test(linhas[i])) continue;
+      if(!/[A-Za-zÀ-ÿ]\s*[\d¹²³⁴⁵⁶⁷⁸⁹]{1,2}\s*[;,]/.test(linhas[i])) continue;
       let bloco=linhas[i];
+      // o nome do 1º autor numerado pode ter quebrado na linha ANTERIOR ("…; Diandra Fernandes de" ↵ "Macedo1; …")
+      if(i-1>=1 && /;/.test(linhas[i-1]) && /[A-Za-zà-ÿ]$/.test(linhas[i-1]) && !/@|^\d/.test(linhas[i-1]))
+        bloco=linhas[i-1]+" "+bloco;
       for(let j=i+1;j<Math.min(N,i+5);j++){
         const lj=linhas[j];
-        if(!lj || /^(resumo|abstract|palavras|keywords|[áa]rea|eixo)\b/i.test(lj) || /@/.test(lj) || /^\d/.test(lj)) break;
+        // "3; Maria Eduarda…" = o Nº do autor quebrou de linha — ainda é lista, não rodapé
+        if(!lj || /^(resumo|abstract|palavras|keywords|[áa]rea|eixo)\b/i.test(lj) || /@/.test(lj)
+           || (/^\d/.test(lj) && !/^[\d¹²³⁴⁵⁶⁷⁸⁹]{1,2}\s*[;,]/.test(lj))) break;
         bloco+=" "+lj;
       }
-      let m2; const re2=/([A-ZÀ-Ý][^;]{4,60}?)\s*(\d{1,2})\s*(?:;|$)/g;
+      bloco=supN(bloco);                                     // ¹²³ → 123 (lista mistura os dois)
+      bloco=bloco.replace(/;\s*(\d{1,2})\s+(?=[A-ZÀ-Ý])/g,"$1; ");   // "Esser; 6 Jhonny" → "Esser6; Jhonny" (nº deslocado)
+      bloco=bloco.replace(/(\d)\s+(?=[A-ZÀ-Ý])/g,"$1; ");           // "Zanini3 José" → "Zanini3; José" (";" faltando)
+      let m2; const re2=/([A-ZÀ-Ý][^;,]{4,60}?)\s*(\d{1,2})\s*(?:[;,.]|$)/g;   // "." fecha lista ("Pacheco4.")
       while((m2=re2.exec(bloco))){
         const nome=limpaTit(m2[1].replace(/\s+/g," ").trim());
         if(ehNomeStr(nome)) pares.push({nome, n:m2[2]});
       }
-      if(pares.length>=2) break;
-      pares.length=0;
+      if(pares.length>=1) break;   // 1 par já vale — o rodapé numerado confirma ou descarta depois
     }
+    if(!pares.length && paresLinha.length) pares.push(...paresLinha);   // variante não achou NADA → volta ao scan por linha
   }
   if(!pares.length || pares.length>20) return null;
   // rodapés "N bio … email" (o bloco pode quebrar em 2–3 linhas)
@@ -4105,10 +4122,15 @@ function _parseArtigoEstruturado(text){
   let r=null;
   try{ r=parseArtigoEmailsRotulado(text); }catch(_){}
   if(r && r.authors.some(a=>a.email)) return { title:r.title, authors:r.authors, modelo:"Artigo · rótulo E-mails:" };
-  try{ r=parseArtigoListaOrdem(text); }catch(_){ r=null; }
-  if(r && r.authors.some(a=>a.email)) return { title:null, authors:r.authors, modelo:"Artigo · lista+ordem (SBC)" };
-  try{ r=parseArtigoRodapeNumUnico(text); }catch(_){ r=null; }
-  if(r && r.authors.some(a=>a.email)) return { title:null, authors:r.authors, modelo:"Artigo · autor nº + rodapé" };
+  // lista+ordem × autor nº + rodapé: roda os DOIS e fica com o que COMPROVA mais pares nome+e-mail
+  // (a lista pode enxergar só metade dos autores quando a 1ª linha termina em «;» — v16.30)
+  let rL=null, rR=null;
+  try{ rL=parseArtigoListaOrdem(text); }catch(_){}
+  try{ rR=parseArtigoRodapeNumUnico(text); }catch(_){}
+  const sc=x=>x?x.authors.filter(a=>a.name&&a.email).length:0;
+  if(sc(rR)>0 && sc(rR)>=sc(rL)) return { title:null, authors:rR.authors, modelo:"Artigo · autor nº + rodapé" };
+  if(rL && rL.authors.some(a=>a.email)) return { title:null, authors:rL.authors, modelo:"Artigo · lista+ordem (SBC)" };
+  if(rR && rR.authors.some(a=>a.email)) return { title:null, authors:rR.authors, modelo:"Artigo · autor nº + rodapé" };
   return null;
 }
 async function buildAuthors(text, html, title){
@@ -6267,9 +6289,10 @@ if(savedRole === "admin" || savedRole === "user"){ applyRole(savedRole); hideLog
 else showLogin();
 
 /* ===== VERSÃO & NOVIDADES (pra saber se está atualizado e ver a evolução) ===== */
-const VERSION = "16.29";
+const VERSION = "16.30";
 const VERSION_DATE = "2026-06-23";
 const CHANGELOG = [
+  ["16.30","2026-08-27","SENPEX 133→199 de 201 (os 2 que faltam são erros do próprio PDF). Caça em camadas: (1) «Vinicius DURANTE Bagio» era apagado porque a regra de «preposição no meio do nome» tratava Durante como preposição — agora só condena preposição MINÚSCULA (frase) ou em texto todo CAPS; sobrenome capitalizado é gente. (2) A lista numerada aceita: nº que quebrou de linha («…Souza ↵ 3; Maria…»), separador com ponto final («Pacheco4.»), «;» faltando («Zanini3 José»), nº deslocado («Esser; 6 Jhonny»), nome que quebrou na linha anterior («…Diandra Fernandes de ↵ Macedo1»), sobrenome minúsculo no PDF («Baldo volpato2») e lista com UM só autor numerado. (3) Quando a lista+ordem e o autor nº+rodapé disparam juntos, vence quem COMPROVA mais pares — a lista via só metade dos autores e roubava a vez. De brinde: Política Social fechou 84/84 (100%%). Todas as demais fontes idênticas; bateria dos 20 anais idêntica."],
   ["16.29","2026-08-26","Últimos 3 sem título do Infância + SENPEX de brinde. (1) TIMBRE institucional em CAPS no topo (UNIVERSIDADE FEDERAL FLUMINENSE – UFF / ESCOLA DE…) não vira mais título — regra ancorada no COMEÇO da linha, então título CAPS que cita escola no meio continua intacto. Infância: 78/78 nomes E títulos. (2) O modelo «autor nº + rodapé» ganhou a variante SENPEX: lista inline «Nome1; Nome2; …» com o número COLADO no nome (quebrada em várias linhas) + rodapé «1UNIBAVE. fulano@x» (validado pelo e-mail, sem exigir palavra de titulação). SENPEX: nomes 125→133 de 201, todos completos (Nacim Miguel Francisco Junior ↔ junior@unibave). As 9 outras fontes idênticas; bateria dos 20 anais idêntica."],
   ["16.28","2026-08-26","I Seminário Infância 100%%: os 35 «sem nome» eram TODOS o mesmo e-mail — nudiss.ssn.ess@id.uff.br, o contato do evento impresso no rodapé de TODA página de TODO PDF. Não é autor: é a mesma família do callcenter@/secretaria@. Duas defesas GERAIS novas: (1) e-mail presente em ≥85%% das páginas do PDF (mín. 2) = rodapé corrente institucional, fora da coleta; (2) no LOTE, e-mail SEM NOME repetido em ≥4 arquivos (≥30%% do lote) e que nunca aparece com dono = contato do evento, fora também (quem tem nome em algum artigo continua — orientador que assina vários é gente). Infância: 78 linhas, 78 nomes (100%%). As 10 outras fontes reprocessadas idênticas; bateria dos 20 anais idêntica."],
   ["16.27","2026-08-26","Intercom Norte 100%% (61/61) e mais 2 fontes de brinde. Três consertos gerais: (1) BUG antigo — a regra «anais d» sem borda de palavra comia títulos com «canais de» (Chatbots como cANAIS De mediação…); (2) rodapé com o NÚMERO numa linha e a biografia na seguinte agora casa, e a biografia pode ter o e-mail até a 5ª linha; (3) o validador de nome aceita partícula d-apóstrofo (Giselle Xavier d’Avila Lucena) e nome TODO EM CAIXA ALTA (JULIANA LIRA DE OLIVEIRA, ≤5 palavras). Com isso o modelo «autor nº + rodapé» pegou também o I Seminário Infância (nomes 57→78 de 113) e o IX ProfEI UERN (69→87 de 88) — e-mails de matrícula pareados pelo número do rodapé, que a heurística não tinha como provar. Política Social/GESEC idênticos; bateria dos 20 anais idêntica."],
